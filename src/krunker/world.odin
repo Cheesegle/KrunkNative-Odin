@@ -61,6 +61,15 @@ Krunker_World_Player :: struct {
 }
 
 KRUNKER_LEADER_MAX_STATS :: 4
+// endStats minus sid and name; Hardpoint and Kill Confirmed use six.
+KRUNKER_END_MAX_STATS :: 6
+
+// One row of the END packet's endData.ed table, in the server's endSort order.
+Krunker_End_Entry :: struct {
+	sid: i32,
+	name: string,
+	cells: [KRUNKER_END_MAX_STATS]string,
+}
 
 Krunker_Countdown :: enum { NONE, WAITING, WARMUP, STARTING, INTERMISSION }
 
@@ -120,6 +129,11 @@ Krunker_World_State :: struct {
 	hit_revision: u64,
 	hit_lethal: bool,
 	winner_team, end_result: i32,
+	// END endIndex (0 normal, 2 match over, 3 abandoned) and its final table.
+	end_index: i32,
+	end_entries: [dynamic]Krunker_End_Entry,
+	// Server-formatted end-screen countdown from t with index 1.
+	end_timer_text: string,
 	rounds_total: u32,
 	objective_weapon: i32,
 	projectile_events: [dynamic]Krunker_Projectile_Event,
@@ -140,6 +154,8 @@ krunker_world_reset :: proc(state: ^Krunker_World_State) {
 	delete(state.local_socket_id)
 	delete(state.local_connection_uid)
 	delete(state.timer_text)
+	krunker_world_clear_end(state)
+	delete(state.end_entries)
 	state^ = {map_index = -1, mode_index = -1, event_index = -1, local_sid = -1}
 }
 
