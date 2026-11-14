@@ -50,6 +50,7 @@ Client :: struct {
 	crosshair_settings: menuui.Crosshair_Settings,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
+	scoreboard_open: bool,
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
@@ -590,6 +591,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	if state.health < player.health { shared.player_emit_presentation(player, .DAMAGE) }
 	player.health = state.health
 	player.max_health = state.max_health
+	player.score, player.kills, player.deaths = state.score, state.kills, state.deaths
 	player.input_seq = state.ack_seq
 	ownership_changed := player.mesh != nil && player.render_you != state.is_you
 	if ownership_changed {
@@ -993,6 +995,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	aim_down := client_action_down(client, .AIM)
 	scope_input := client_aim_input(client, aim_down, client.me != nil && client.me.active && client.mouse_state.locked && !client.freecam_enabled)
 	inspect_down := client_action_down(client, .INSPECT)
+	client_scoreboard_update(client)
 	inspect_cancel := false
 
 	if client.me != nil && client.me.active {

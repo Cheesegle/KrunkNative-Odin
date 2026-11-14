@@ -69,7 +69,7 @@ overlay_match_render :: proc(client: ^Client) {
 	white := shared.Vec4{1, 1, 1, 1}
 	muted := shared.Vec4{0.85, 0.85, 0.85, 1}
 	panel := shared.Vec4{0, 0, 0, 0.5}
-	colors := [2]shared.Vec4{{0.93, 0.22, 0.27, 1}, {0.25, 0.55, 1, 1}}
+	colors := MATCH_TEAM_COLORS
 	// Equal-sized totals with numerals centered in each box.
 	point_width := max(180*s, max(ui_measure_text(ui, fmt.tprintf("%d", match.team_scores[1]), 52*s), ui_measure_text(ui, fmt.tprintf("%d", match.team_scores[2]), 52*s))+116*s)
 	for color, i in colors {
@@ -305,8 +305,9 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 
 	// Normally fades out for ADS, leaving the scope's own reticle. Always show
 	// and custom opacity can explicitly keep Precision visible over the scope.
+	// The browser also hides its crosshair while the leaderboard is open.
 	crosshair := client_crosshair_values(client)
-	crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair))
+	if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair)) }
 
 	if color, visible := krunker_client_hit_color(client, glfw.GetTime()); visible {
 		// A compact confirmation ring. Damage is still owned by the server.
@@ -354,6 +355,11 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	}
 
 	overlay_match_render(client)
+	if client.scoreboard_open {
+		// Keep clear of the round/objective HUD at the top center.
+		board := client_scoreboard(client)
+		scoreboard_render(client.ui, &board, 160*client.ui.scale)
+	}
 }
 
 overlay_fini :: proc() {

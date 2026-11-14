@@ -305,8 +305,8 @@ game_tick :: proc(game: ^Game, now, delta: f32) {
 					player_kill(player, game.nuke_player, &kill_info, true)
 				}
 
-				if nuke_reward != 0 {
-					// TODO: score
+				if nuke_reward != 0 && game.nuke_player != nil {
+					game.nuke_player.score += u32(nuke_reward)
 				}
 			}
 		}
