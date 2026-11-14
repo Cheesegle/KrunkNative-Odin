@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:math"
 import "core:os"
+import "core:slice"
 import "core:encoding/json"
 import "core:strings"
 import gl "vendor:OpenGL"
@@ -50,6 +51,7 @@ Client :: struct {
 	crosshair_settings: menuui.Crosshair_Settings,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
+	scoreboard_open: bool,
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
@@ -95,6 +97,8 @@ Client :: struct {
 	menu_scroll:      clay.Vector2,
 	display_mode:      Display_Mode,
 	resolution_index:  i32,
+	// Exclusive fullscreen video mode; zero means the monitor's largest mode.
+	fullscreen_resolution: Display_Resolution,
 	sensitivity:       f32,
 	mouse_dpi:         f32,
 	ads_sensitivity:   f32,
@@ -161,13 +165,61 @@ monitor_max_video_mode :: proc(monitor: glfw.MonitorHandle) -> (width, height, r
 	return
 }
 
+client_monitor :: proc(index: i32) -> glfw.MonitorHandle {
+	monitors := glfw.GetMonitors()
+	if len(monitors) > 0 { return monitors[clamp(index, 0, i32(len(monitors))-1)] }
+	return glfw.GetPrimaryMonitor()
+}
+
+// Distinct sizes the monitor can switch to in exclusive fullscreen, largest first.
+monitor_resolutions :: proc(monitor: glfw.MonitorHandle, allocator := context.temp_allocator) -> []Display_Resolution {
+	result := make([dynamic]Display_Resolution, allocator)
+	if monitor == nil { return result[:] }
+	for mode in glfw.GetVideoModes(monitor) {
+		size := Display_Resolution{i32(mode.width), i32(mode.height)}
+		if !slice.contains(result[:], size) { append(&result, size) }
+	}
+	slice.sort_by(result[:], proc(a, b: Display_Resolution) -> bool {
+		return a.width*a.height > b.width*b.height || a.width*a.height == b.width*b.height && a.width > b.width
+	})
+	return result[:]
+}
+
+// The chosen fullscreen mode at its highest refresh rate, or the monitor's
+// largest mode when nothing was chosen or the monitor cannot show that size.
+monitor_fullscreen_mode :: proc(monitor: glfw.MonitorHandle, requested: Display_Resolution) -> (width, height, refresh_rate: i32) {
+	width, height, refresh_rate = monitor_max_video_mode(monitor)
+	if requested.width <= 0 || requested.height <= 0 { return }
+	rate: i32
+	for mode in glfw.GetVideoModes(monitor) {
+		if i32(mode.width) == requested.width && i32(mode.height) == requested.height { rate = max(rate, i32(mode.refresh_rate)) }
+	}
+	if rate > 0 { width, height, refresh_rate = requested.width, requested.height, rate }
+	return
+}
+
+// Picker index for the saved fullscreen size; unset or unsupported sizes show
+// the largest mode, which is what monitor_fullscreen_mode then applies.
+client_fullscreen_index :: proc(sizes: []Display_Resolution, requested: Display_Resolution) -> i32 {
+	index, found := slice.linear_search(sizes, requested)
+	return found ? i32(index) : 0
+}
+
+// The fullscreen size Save should apply: the picked mode of the draft's monitor
+// when the draft is Fullscreen and a resolution was picked, else the saved one.
+client_staged_fullscreen_resolution :: proc(client: ^Client, values: menuui.Settings_Values) -> Display_Resolution {
+	if values.display_mode != i32(Display_Mode.Fullscreen) || !client.menu.settings_resolution_selected || client.window == nil { return client.fullscreen_resolution }
+	sizes := monitor_resolutions(client_monitor(values.monitor_index))
+	if len(sizes) == 0 { return client.fullscreen_resolution }
+	return sizes[clamp(values.fullscreen_index, 0, i32(len(sizes))-1)]
+}
+
 client_apply_display_settings :: proc(client: ^Client) {
-	monitor := glfw.GetPrimaryMonitor()
 	monitors := glfw.GetMonitors()
 	if len(monitors) > 0 {
 		client.monitor_index = clamp(client.monitor_index, 0, i32(len(monitors))-1)
-		monitor = monitors[client.monitor_index]
 	}
+	monitor := client_monitor(client.monitor_index)
 	if monitor == nil {
 		return
 	}
@@ -190,7 +242,7 @@ client_apply_display_settings :: proc(client: ^Client) {
 		glfw.SetWindowSize(client.window, mode.width, mode.height)
 	case .Fullscreen:
 		glfw.SetWindowAttrib(client.window, glfw.DECORATED, 1)
-		full_width, full_height, full_refresh_rate := monitor_max_video_mode(monitor)
+		full_width, full_height, full_refresh_rate := monitor_fullscreen_mode(monitor, client.fullscreen_resolution)
 		glfw.SetWindowMonitor(client.window, monitor, 0, 0, full_width, full_height, full_refresh_rate)
 	}
 }
@@ -334,8 +386,38 @@ client_update_fps :: proc(client: ^Client, delta: f32) {
 	}
 }
 
+// Krunker stacks #fpsDisplay and #pingDisplay as block lines in .debugInfo.
+HUD_DEBUG_LINE_HEIGHT :: 40.0
+
+// Krunker's ping colours (z2): low below 50 ms, medium below 150 ms, else high.
+ping_color :: proc(value: i32) -> shared.Vec4 {
+	if value >= 150 { return {255.0/255, 75.0/255, 66.0/255, 1} }
+	if value >= 50 { return {255.0/255, 213.0/255, 66.0/255, 1} }
+	return {158.0/255, 235.0/255, 86.0/255, 1}
+}
+
+// #pingText starts as "0" and shows "-" when the server reports -1.
+ping_label :: proc(value: i32, received: bool) -> string {
+	if !received { return "0" }
+	if value == -1 { return "-" }
+	return fmt.tprintf("%d", value)
+}
+
+// Live sessions use the server-reported ping from SYNC_PLAYER; native
+// sessions use the PING echo round trip. Local practice has no server.
+client_ping :: proc(client: ^Client) -> (value: i32, received, available: bool) {
+	if client.krunker.connected { return client.krunker_world.ping, client.krunker_world.has_ping, true }
+	if client.net.connected { return client.net.ping.rtt_ms, client.net.ping.has_sample, true }
+	return 0, false, false
+}
+
 fps_render :: proc(client: ^Client) {
-	if !client.show_fps || !client.in_game || !client.mouse_state.locked {
+	if !client.in_game || !client.mouse_state.locked {
+		return
+	}
+	ping, ping_received, ping_available := client_ping(client)
+	show_ping := ping_available && !client.hud_settings.hide_ping
+	if !client.show_fps && !show_ping {
 		return
 	}
 
@@ -348,12 +430,20 @@ fps_render :: proc(client: ^Client) {
 	x := 20.0 * client.ui.scale + timer_holder_width + 12.0 * client.ui.scale
 	y := 20.0 * client.ui.scale
 
-	value := fmt.tprintf("%d", client.fps_value)
-	label := " FPS"
 	baseline := y + 33.0 * client.ui.scale
-	ui_fill_text(client.ui, shared.Vec4{0.35, 0.95, 0.1, 1.0}, value, x, baseline, text_size)
-	value_width := ui_measure_text(client.ui, value, text_size)
-	ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, label, x + value_width, baseline, text_size)
+	if client.show_fps {
+		value := fmt.tprintf("%d", client.fps_value)
+		ui_fill_text(client.ui, shared.Vec4{0.35, 0.95, 0.1, 1.0}, value, x, baseline, text_size)
+		value_width := ui_measure_text(client.ui, value, text_size)
+		ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, " FPS", x + value_width, baseline, text_size)
+		baseline += HUD_DEBUG_LINE_HEIGHT * client.ui.scale
+	}
+	if show_ping {
+		value := ping_label(ping, ping_received)
+		ui_fill_text(client.ui, ping_color(ping), value, x, baseline, text_size)
+		value_width := ui_measure_text(client.ui, value, text_size)
+		ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, " PING", x + value_width, baseline, text_size)
+	}
 }
 
 client_load_map :: proc(client: ^Client) {
@@ -591,6 +681,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	if state.health < player.health { shared.player_emit_presentation(player, .DAMAGE) }
 	player.health = state.health
 	player.max_health = state.max_health
+	player.score, player.kills, player.deaths = state.score, state.kills, state.deaths
 	player.input_seq = state.ack_seq
 	ownership_changed := player.mesh != nil && player.render_you != state.is_you
 	if ownership_changed {
@@ -912,7 +1003,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client.join_queued == 0 { client_join_invite(client) }
 	}
 	if client.net.connected {
-		net_client_poll(client)
+		net_client_poll(client, glfw.GetTime())
 	}
 	if client.krunker.connected {
 		krunker_ws_poll(client)
@@ -994,6 +1085,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	aim_down := client_action_down(client, .AIM)
 	scope_input := client_aim_input(client, aim_down, client.me != nil && client.me.active && client.mouse_state.locked && !client.freecam_enabled)
 	inspect_down := client_action_down(client, .INSPECT)
+	client_scoreboard_update(client)
 	inspect_cancel := false
 
 	if client.me != nil && client.me.active {
@@ -1175,6 +1267,7 @@ main :: proc() {
 	client.show_fps = options.show_fps || preferences.show_fps
 	client.display_mode = Display_Mode(preferences.display_mode)
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
+	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity

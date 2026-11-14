@@ -12,6 +12,33 @@ krunker_client_live_class_window :: proc(client: ^Client, now: f64) -> bool {
 		world.countdown_remaining > f32(max(0, now-world.countdown_received_at))
 }
 
+// Comp servers refuse `cd` team/class changes once the game is in progress and
+// say so with chi "ranked.progress" ("Game in Progress") or "ranked.switch"
+// ("Can't switch while in-game"). The roster class stays authoritative and is
+// what the next START equips, so drop the refused pick instead of waiting for it.
+krunker_client_apply_notice :: proc(client: ^Client, packet: []kproto.Krunker_Msgpack_Value) {
+	if len(packet) < 4 { return }
+	key, ok := packet[3].(string)
+	if !ok || key != "ranked.progress" && key != "ranked.switch" { return }
+	server_class: i32 = -1
+	for player in client.krunker_world.lobby_players {
+		if player.id == client.krunker_world.local_connection_uid { server_class = player.class_index }
+	}
+	if server_class < 0 {
+		for player in client.krunker_world.players {
+			if player.sid == client.krunker_world.local_sid { server_class = player.class_index }
+		}
+	}
+	if client.team_pending {
+		client.team_pending, client.requested_team = false, client.lobby_team
+	}
+	if server_class < 0 || int(server_class) >= len(client.game.classes) || server_class == client.selected_class { return }
+	client.selected_class = server_class
+	client.krunker.class_index = server_class
+	client.krunker.secondary_index = client_secondary_request(client, server_class)
+	client_selection_status(client, fmt.tprintf("%s; keeping %s.", key == "ranked.switch" ? "Can't switch while in-game" : "Game in Progress", client.game.classes[server_class].name))
+}
+
 krunker_client_respawn_remaining :: proc(client: ^Client, now: f64) -> f32 {
 	if !client.krunker.connected { return 0 }
 	return f32(max(0, client.krunker_world.respawn_available_at-now))

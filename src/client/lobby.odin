@@ -219,20 +219,22 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 	mode := "Hardpoint"
 	if client.game.mode != nil && !client.game.mode.config.teams { mode = "Free for all" }
 	capacity := int((client.game.config.max_players + 1) / 2)
-	team_names := [2]string{"Alpha", "Bravo"}
-	if client.game.config.team1_name != "Team 1" && len(client.game.config.team1_name) > 0 { team_names[0] = client.game.config.team1_name }
-	if client.game.config.team2_name != "Team 2" && len(client.game.config.team2_name) > 0 { team_names[1] = client.game.config.team2_name }
+	team_names := client_team_names(client)
 	online := client.krunker.connected || client.net.connected
 	team_selection := (client.local_practice || client.krunker.connected && client.krunker_world.lobby_select_team) && (client.game.mode == nil || client.game.mode.config.teams)
 	if client.krunker.connected {
 		capacity = int((client.krunker_world.lobby_capacity+1)/2)
 		if client.krunker_world.lobby_team_capacity > 0 { capacity = int(client.krunker_world.lobby_team_capacity) }
-		for name, i in client.krunker_world.lobby_team_names { if len(name)>0 { team_names[i]=name } }
 	}
-	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity); team_names = client.net.lobby.team_names }
+	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity) }
 	resolution_options := make([]string, len(DISPLAY_RESOLUTIONS), context.temp_allocator)
 	for resolution, i in DISPLAY_RESOLUTIONS { resolution_options[i] = fmt.tprintf("%d x %d", resolution.width, resolution.height) }
 	window_resolution := client_window_resolution(client)
+	fullscreen_sizes: []Display_Resolution
+	if client.window != nil { fullscreen_sizes = monitor_resolutions(client_monitor(client.monitor_index)) }
+	fullscreen_options := make([]string, len(fullscreen_sizes), context.temp_allocator)
+	fullscreen_index := client_fullscreen_index(fullscreen_sizes, client.fullscreen_resolution)
+	for size, i in fullscreen_sizes { fullscreen_options[i] = fmt.tprintf("%d x %d", size.width, size.height) }
 	monitor_names := make([dynamic]string, context.temp_allocator)
 	if client.window != nil {
 		for monitor, i in glfw.GetMonitors() { append(&monitor_names, fmt.tprintf("%d: %s", i+1, glfw.GetMonitorName(monitor))) }
@@ -253,6 +255,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
+		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings,
@@ -298,46 +301,63 @@ client_lobby_presentation :: proc(client: ^Client) -> menuui.Lobby_Presentation 
 	return client.net.connected ? .COMPETITIVE : .STANDARD
 }
 
+// Commits the settings draft to the client (Save and Krunker import).
+client_apply_settings_draft :: proc(client: ^Client) {
+	values := client.menu.settings_draft
+	mode := Display_Mode(clamp(values.display_mode, 0, 2))
+	resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
+	fullscreen := client_staged_fullscreen_resolution(client, values)
+	if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || fullscreen != client.fullscreen_resolution || mode == .Windowed && client.menu.settings_resolution_selected {
+		client_remember_windowed_rect(client)
+		client.display_mode, client.resolution_index = mode, resolution
+		client.fullscreen_resolution = fullscreen
+		client.monitor_index = values.monitor_index
+		client_apply_display_settings(client)
+	}
+	client.mouse_dpi = menuui.mouse_dpi_validate(values.mouse_dpi)
+	client.sensitivity = menuui.sensitivity_validate(values.sensitivity, client.mouse_dpi)
+	client.ads_sensitivity = menuui.ads_sensitivity_validate(values.ads_sensitivity, client.sensitivity, client.mouse_dpi)
+	client.advanced_sensitivity, client.invert_mouse = values.advanced_sensitivity, values.invert_mouse
+	client.camera.fov = menuui.fov_validate(values.fov) * math.PI / 180
+	client.show_fps = values.show_fps
+	client.bindings, client.hud_settings = values.bindings, values.hud
+	client.visual_settings, client.quality_settings = menuui.visual_settings_validate(values.visuals), menuui.quality_settings_validate(values.quality)
+	client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
+	client.trail_settings = values.trails
+	client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
+	client.aim_toggled = false
+	client.last_swap_key = 0
+	if client.vsync != values.vsync {
+		client.vsync = values.vsync
+		if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
+	}
+	client.settings_dirty = true
+	settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3]})
+	if client.audio_settings != settings {
+		client.audio_settings = settings
+		audio_set_settings(client.audio, settings)
+		client.audio_settings_dirty, client.audio_save_delay = true, 0.5
+	}
+}
+
 menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: proc(^Krunker_WS_State, string) -> bool = krunker_ws_send) {
 	if action.kind != .NONE && action.kind != .EDIT_INVITE && action.kind != .INSPECT_CLASS && action.kind != .AUDIO_VOLUME && action.kind != .SENSITIVITY {
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR:
-	case .SETTINGS_SAVE:
-		values := client.menu.settings_draft
-		mode := Display_Mode(clamp(values.display_mode, 0, 2))
-		resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
-		if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || mode == .Windowed && client.menu.settings_resolution_selected {
-			client_remember_windowed_rect(client)
-			client.display_mode, client.resolution_index = mode, resolution
-			client.monitor_index = values.monitor_index
-			client_apply_display_settings(client)
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN:
+	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
+		// Import applies and saves immediately, like Krunker's importSettings.
+		client_apply_settings_draft(client)
+	case .SETTINGS_EXPORT:
+		text := menuui.krunker_settings_export(client.menu.settings_draft)
+		defer delete(text)
+		if client.window != nil {
+			value := strings.clone_to_cstring(text)
+			glfw.SetClipboardString(client.window, value)
+			delete(value)
 		}
-		client.mouse_dpi = menuui.mouse_dpi_validate(values.mouse_dpi)
-		client.sensitivity = menuui.sensitivity_validate(values.sensitivity, client.mouse_dpi)
-		client.ads_sensitivity = menuui.ads_sensitivity_validate(values.ads_sensitivity, client.sensitivity, client.mouse_dpi)
-		client.advanced_sensitivity, client.invert_mouse = values.advanced_sensitivity, values.invert_mouse
-		client.camera.fov = menuui.fov_validate(values.fov) * math.PI / 180
-		client.show_fps = values.show_fps
-		client.bindings, client.hud_settings = values.bindings, values.hud
-		client.visual_settings, client.quality_settings = menuui.visual_settings_validate(values.visuals), menuui.quality_settings_validate(values.quality)
-		client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
-		client.trail_settings = values.trails
-		client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
-		client.aim_toggled = false
-		client.last_swap_key = 0
-		if client.vsync != values.vsync {
-			client.vsync = values.vsync
-			if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
-		}
-		client.settings_dirty = true
-		settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3]})
-		if client.audio_settings != settings {
-			client.audio_settings = settings
-			audio_set_settings(client.audio, settings)
-			client.audio_settings_dirty, client.audio_save_delay = true, 0.5
-		}
+		menuui.settings_set_message(&client.menu, "Krunker settings copied to the clipboard.", false)
 	case .PASTE:
 		menuui.set_invite(&client.menu, glfw.GetClipboardString(client.window))
 		client.menu.focus = clay.ID("Invite").id

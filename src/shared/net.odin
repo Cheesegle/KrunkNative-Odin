@@ -4,8 +4,8 @@ import "core:encoding/endian"
 
 PACKET_MAGIC :: 0x4B52554E // 'KRUN'
 PACKET_HEADER_SIZE :: 7
-PROTOCOL_VERSION :: 8
-PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 97
+PROTOCOL_VERSION :: 9
+PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 109
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
 MAX_PLAYERS_PER_MATCH :: 32
 // The server broadcasts one snapshot per N simulation ticks.
@@ -156,6 +156,8 @@ Packet_Player_State :: struct {
 	ack_seq:   i32,
 	spread_plus: f32,
 	projectile_shot_seq: u32,
+	// Scoreboard statistics; the server owns them, clients only display them.
+	score, kills, deaths: u32,
 }
 
 packet_serialize_disconnect :: proc(buf: []byte) -> int {
@@ -371,6 +373,10 @@ packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int 
 	offset += 4
 	endian.put_i32(buf[offset:offset + 4], .Little, state.secondary_id)
 	offset += 4
+	endian.put_u32(buf[offset:offset + 4], .Little, state.score)
+	endian.put_u32(buf[offset + 4:offset + 8], .Little, state.kills)
+	endian.put_u32(buf[offset + 8:offset + 12], .Little, state.deaths)
+	offset += 12
 
 	return offset
 }
@@ -453,6 +459,10 @@ packet_deserialize_state :: proc(buf: []byte) -> (state: Packet_Player_State, ok
 	state.projectile_shot_seq, _ = endian.get_u32(buf[offset:offset + 4], .Little)
 	offset += 4
 	state.secondary_id, _ = endian.get_i32(buf[offset:offset + 4], .Little)
+	offset += 4
+	state.score, _ = endian.get_u32(buf[offset:offset + 4], .Little)
+	state.kills, _ = endian.get_u32(buf[offset + 4:offset + 8], .Little)
+	state.deaths, _ = endian.get_u32(buf[offset + 8:offset + 12], .Little)
 
 	return state, true
 }

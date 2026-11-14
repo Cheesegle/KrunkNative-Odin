@@ -189,6 +189,11 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 							client.player.input_seq = input.seq
 							client.has_pending_input = true
 						}
+					case .PING:
+						// Echo the probe unchanged so the client can time the round trip.
+						if _, ping_ok := shared.packet_deserialize_ping(packet); ping_ok && !net_server_send(client, packet) {
+							client.active = false
+						}
 					case .DISCONNECT:
 						client.active = false
 						fmt.printf("[Net Server] Client #%d requested disconnect\n", client.id)
@@ -315,6 +320,9 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 				ack_seq = player.input_seq,
 				spread_plus = player.spread_plus,
 				projectile_shot_seq = player.projectile_shot_seq,
+				score = player.score,
+				kills = player.kills,
+				deaths = player.deaths,
 			}
 			state_size := shared.packet_serialize_state(player_buf[:], &player_state)
 			if state_size > 0 {

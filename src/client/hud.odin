@@ -172,7 +172,7 @@ hud_render :: proc(client: ^Client, delta: f32) {
 		binding_pressed = client.binding_event,
 	}
 	client.binding_event = 0
-	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
+	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0 || client.menu.import_open) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
 	client.menu_scroll = {}
 	client.menu_text_length = 0
 	view := menu_view(client)

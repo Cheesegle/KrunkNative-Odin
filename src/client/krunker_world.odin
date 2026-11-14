@@ -141,7 +141,10 @@ krunker_client_sync_world :: proc(client: ^Client) {
 		if player.mesh != nil { player_update_meshes(player, false) }
 		if is_you {
 			client.me = player
-			if !state.spawned && state.bootstrapped && client.spawn_pending && source.class_index == client.selected_class && (state.team == 0 || source.team == state.team) && kproto.krunker_world_can_render_local(world) {
+			// The browser enters on START with whatever class and team the
+			// server assigned. Comp refuses mid-game class changes, so waiting
+			// for the local pick here left a live player without input.
+			if !state.spawned && state.bootstrapped && client.spawn_pending && kproto.krunker_world_can_render_local(world) {
 				state.spawned = true
 				client.in_game = true
 				client.has_life = true

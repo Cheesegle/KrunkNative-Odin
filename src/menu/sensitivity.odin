@@ -119,6 +119,7 @@ settings_number_hint :: proc(state: ^State) -> string {
 		return fmt.tprintf("Enter a number from %g%s to %g%s.", state.number_control.slider_min*scale, unit, state.number_control.slider_max*scale, unit)
 	}
 	if state.number_edit != .NONE { return "Enter applies the value. Escape discards this edit. Save keeps changes." }
+	if state.settings_message_length > 0 { return settings_message(state) }
 	return "Click a value to type. Save keeps your changes."
 }
 

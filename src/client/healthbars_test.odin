@@ -280,9 +280,9 @@ when ODIN_TEST {
 		testing.expect(t, again.hud.hide_healthbars && !again.hud.hide_nametags, "the two toggles persist independently")
 
 		state := menuui.State{settings_active = true}
-		menuui.activate(&state, {action = {kind = .HUD_TOGGLE, index = 3}})
-		testing.expect(t, state.settings_draft.hud.hide_nametags && !state.settings_draft.hud.hide_healthbars, "Show nametags toggles only nametags")
 		menuui.activate(&state, {action = {kind = .HUD_TOGGLE, index = 4}})
+		testing.expect(t, state.settings_draft.hud.hide_nametags && !state.settings_draft.hud.hide_healthbars, "Show nametags toggles only nametags")
+		menuui.activate(&state, {action = {kind = .HUD_TOGGLE, index = 5}})
 		testing.expect(t, state.settings_draft.hud.hide_healthbars && state.settings_draft.hud.hide_nametags, "Show healthbars toggles only healthbars")
 	}
 

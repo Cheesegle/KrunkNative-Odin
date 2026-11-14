@@ -224,7 +224,7 @@ when ODIN_TEST {
 								"both binding columns must fit horizontally and remain large enough to click")
 							continue // The full action list scrolls vertically.
 						}
-						if state.settings_dropdown == .NONE && (state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
+						if state.settings_dropdown == .NONE && (state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
 							testing.expect(t, box.width > 0 && box.height > 0 && box.x >= overlay.x-1 && box.x+box.width <= overlay.x+overlay.width+1, "scrolling settings must fit horizontally")
 							continue
 						}
