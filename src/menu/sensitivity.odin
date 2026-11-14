@@ -65,7 +65,7 @@ settings_sensitivity :: proc(state: ^State) {
 	if state.number_invalid && state.number_edit != .SLIDER {
 		message = state.number_edit == .DPI ? "Enter a whole-number DPI from 100 to 100000." : "Enter a cm/360 value from 0.1 to 2000."
 	}
-	settings_note(message, state.scale)
+	settings_note(state, message)
 }
 
 settings_number_value :: proc(state: ^State, field: Settings_Number) -> f32 {
@@ -80,6 +80,7 @@ settings_number_id :: proc(field: Settings_Number) -> clay.ElementId {
 }
 
 settings_number_row :: proc(state: ^State, label, name: string, field: Settings_Number) {
+	if !settings_search_show(state, label) { return }
 	s := state.scale
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, s)

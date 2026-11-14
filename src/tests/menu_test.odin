@@ -501,7 +501,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.GAMEPLAY)))
 	menu_test_frame(&state, view, {})
-	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+2+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
+	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+3+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
 	state.focus = clay.ID("FieldOfView").id
 	menu_test_frame(&state, view, {right=true})
 	if state.settings_draft.fov != 95 { fmt.println("FOV keyboard adjustment must start from the current draft angle"); return false }

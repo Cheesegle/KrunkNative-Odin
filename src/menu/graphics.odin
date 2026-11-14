@@ -41,38 +41,41 @@ quality_settings_validate :: proc(settings: Quality_Settings) -> Quality_Setting
 }
 
 settings_visuals :: proc(state: ^State) {
-	s := state.scale
-	settings_note("Graphics preview live. Save keeps your changes; Cancel restores them.", s)
-	settings_section("Image", s)
+	settings_note(state, "Graphics preview live. Save keeps your changes; Cancel restores them.")
+	settings_section(state, "Image")
 	for control in Visual_Control {
 		if control == .FOG_DISTANCE { continue }
-		if control == .AMBIENT { settings_section("Lighting", s) }
+		if control == .AMBIENT { settings_section(state, "Lighting") }
 		settings_slider(state, VISUAL_LABELS[control], fmt.tprintf("Visual%d", int(control)), state.settings_draft.visuals.values[control],
 			VISUAL_LIMITS[control][0], VISUAL_LIMITS[control][1], {kind = .VISUAL_VALUE, index = i32(control)})
 	}
-	settings_note("Lighting strength multiplies each map's original values. 1.00 preserves the map defaults.", s)
-	settings_section("Map details", s)
+	settings_note(state, "Lighting strength multiplies each map's original values. 1.00 preserves the map defaults.")
+	settings_section(state, "Map details")
 	settings_toggle_row(state, "Hide cats", "HideCats", state.settings_draft.visuals.hide_cats, {kind=.VISUAL_TOGGLE, index=0})
 	settings_toggle_row(state, "Hide extra props", "HideExtraProps", state.settings_draft.visuals.hide_extra_props, {kind=.VISUAL_TOGGLE, index=1})
-	settings_note("Hide extra props removes loose rubble, planks, fabric and grass. Cats have their own toggle.", s)
-	settings_note("Reset restores the original appearance of every map.", s)
-	settings_button(state, "Reset visuals", "ResetVisuals", {kind = .VISUAL_RESET})
+	settings_note(state, "Hide extra props removes loose rubble, planks, fabric and grass. Cats have their own toggle.")
+	settings_note(state, "Reset restores the original appearance of every map.")
+	if settings_search_show(state, "Reset visuals") { settings_button(state, "Reset visuals", "ResetVisuals", {kind = .VISUAL_RESET}) }
 }
 
 settings_quality :: proc(state: ^State, view: View) {
-	settings_section("Quality", state.scale)
-	if clay.UI(clay.ID("TextureFilteringRow"))(settings_row(state)) {
-		settings_label("Texture filtering", state.scale)
-		spacer()
-		settings_dropdown_field(state, state.settings_draft.quality.smooth_textures ? "Smooth" : "Sharp", "TextureFiltering", .TEXTURE_FILTER)
+	settings_section(state, "Quality")
+	if settings_search_show(state, "Texture filtering") {
+		if clay.UI(clay.ID("TextureFilteringRow"))(settings_row(state)) {
+			settings_label("Texture filtering", state.scale)
+			spacer()
+			settings_dropdown_field(state, state.settings_draft.quality.smooth_textures ? "Smooth" : "Sharp", "TextureFiltering", .TEXTURE_FILTER)
+		}
 	}
-	if clay.UI(clay.ID("AnisotropyRow"))(settings_row(state)) {
-		settings_label("Anisotropic filtering", state.scale)
-		spacer()
-		label := view.max_anisotropy < 2 ? "Unavailable" : state.settings_draft.quality.anisotropy < 2 ? "Off" : fmt.tprintf("%dx", state.settings_draft.quality.anisotropy)
-		settings_dropdown_field(state, label, "Anisotropy", .ANISOTROPY, view.max_anisotropy >= 2)
+	if settings_search_show(state, "Anisotropic filtering") {
+		if clay.UI(clay.ID("AnisotropyRow"))(settings_row(state)) {
+			settings_label("Anisotropic filtering", state.scale)
+			spacer()
+			label := view.max_anisotropy < 2 ? "Unavailable" : state.settings_draft.quality.anisotropy < 2 ? "Off" : fmt.tprintf("%dx", state.settings_draft.quality.anisotropy)
+			settings_dropdown_field(state, label, "Anisotropy", .ANISOTROPY, view.max_anisotropy >= 2)
+		}
 	}
-	settings_note("Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.", state.scale)
+	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
 }
 
 settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 {

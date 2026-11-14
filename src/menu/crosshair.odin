@@ -77,11 +77,13 @@ settings_crosshair_preview :: proc(state: ^State) {
 
 settings_crosshair :: proc(state: ^State) {
 	s := state.scale
-	settings_section("Crosshair", s)
-	if clay.UI(clay.ID("CrosshairTypeRow"))(settings_row(state)) {
-		settings_label("Type", s)
-		spacer()
-		settings_dropdown_field(state, "Precision", "CrosshairType", .CROSSHAIR_TYPE)
+	settings_section(state, "Crosshair")
+	if settings_search_show(state, "Crosshair type") {
+		if clay.UI(clay.ID("CrosshairTypeRow"))(settings_row(state)) {
+			settings_label("Type", s)
+			spacer()
+			settings_dropdown_field(state, "Precision", "CrosshairType", .CROSSHAIR_TYPE)
+		}
 	}
 	settings_toggle_row(state, "Use custom opacity", "CrosshairCustomOpacity", state.settings_draft.crosshair.toggles[.CUSTOM_OPACITY], {kind=.CROSSHAIR_TOGGLE, index=i32(Crosshair_Toggle.CUSTOM_OPACITY)})
 	settings_slider(state, CROSSHAIR_LABELS[.OPACITY], CROSSHAIR_IDS[.OPACITY], state.settings_draft.crosshair.values[.OPACITY], 0, 1, {kind=.CROSSHAIR_VALUE, index=i32(Crosshair_Control.OPACITY)}, step=0.1)
@@ -93,10 +95,11 @@ settings_crosshair :: proc(state: ^State) {
 		settings_slider(state, CROSSHAIR_LABELS[control], CROSSHAIR_IDS[control], state.settings_draft.crosshair.values[control], CROSSHAIR_LIMITS[control][0], CROSSHAIR_LIMITS[control][1], {kind=.CROSSHAIR_VALUE, index=i32(control)}, step=CROSSHAIR_STEPS[control])
 	}
 	settings_toggle_row(state, "Dot", "CrosshairDot", state.settings_draft.crosshair.toggles[.DOT], {kind=.CROSSHAIR_TOGGLE, index=i32(Crosshair_Toggle.DOT)})
-	settings_note(state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Always show keeps the crosshair when aiming. Custom opacity overrides its normal fade. Click a color to type or paste #RRGGBB. Image crosshairs are coming later.", s)
+	settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Always show keeps the crosshair when aiming. Custom opacity overrides its normal fade. Click a color to type or paste #RRGGBB. Image crosshairs are coming later.")
 }
 
 settings_crosshair_color :: proc(state: ^State, label: string, field: i32) {
+	if !settings_search_show(state, label) { return }
 	s := state.scale
 	id := clay.ID("CrosshairColor", u32(field))
 	value := field == 1 ? state.settings_draft.crosshair.color : state.settings_draft.crosshair.shadow_color

@@ -290,6 +290,10 @@ main :: proc() {
 		fmt.eprintln("Menu tests failed")
 		os.exit(1)
 	}
+	if !test_fuzzy_matcher() || !test_settings_search() {
+		fmt.eprintln("Settings search tests failed")
+		os.exit(1)
+	}
 	if !test_join_link_parser() {
 		os.exit(1)
 	}

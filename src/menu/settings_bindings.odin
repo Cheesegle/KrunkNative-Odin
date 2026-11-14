@@ -4,20 +4,23 @@ import clay "../third_party/clay"
 
 settings_bindings :: proc(state: ^State) {
 	s := state.scale
-	settings_note(state.binding_reserved ? "Backtick is reserved for map rotation. Choose another key." : "Select a slot, then press a key or mouse button. Escape cancels. Delete clears the slot.", s)
-	if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(36*s)}, childGap = u16(24*s)}}) {
-		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(304*s)}}}) {}
-		for label in ([]string{"Primary", "Alternate"}) {
-			if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childAlignment = {x = .Center}}}) { text(label, 16, s, SETTINGS_MUTED) }
+	settings_note(state, state.binding_reserved ? "Backtick is reserved for map rotation. Choose another key." : "Select a slot, then press a key or mouse button. Escape cancels. Delete clears the slot.")
+	if !settings_searching(state) {
+		if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(36*s)}, childGap = u16(24*s)}}) {
+			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(304*s)}}}) {}
+			for label in ([]string{"Primary", "Alternate"}) {
+				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childAlignment = {x = .Center}}}) { text(label, 16, s, SETTINGS_MUTED) }
+			}
 		}
 	}
 	// Display inspect with weapons and the leaderboard under Interface, as in
 	// Krunker's controls list, while preserving saved enum values.
 	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .MENU, .FULLSCREEN}) {
-		if action == .FORWARD { settings_section("Move", s) }
-		if action == .AIM { settings_section("Weapon", s) }
-		if action == .LEADERBOARD { settings_section("Interface", s) }
-		if action == .MENU { settings_section("System", s) }
+		if action == .FORWARD { settings_section(state, "Move") }
+		if action == .AIM { settings_section(state, "Weapon") }
+		if action == .LEADERBOARD { settings_section(state, "Interface") }
+		if action == .MENU { settings_section(state, "System") }
+		if !settings_search_show(state, BINDING_NAMES[action]) { continue }
 		if clay.UI(clay.ID("BindingRow", u32(action)))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(60*s)}, childGap = u16(24*s), childAlignment = {y = .Center}}}) {
 			settings_label(BINDING_NAMES[action], s)
 			for slot in 0..<2 {
@@ -28,7 +31,7 @@ settings_bindings :: proc(state: ^State) {
 			}
 		}
 	}
-	settings_note("Escape always remains available for opening and closing menus.", s)
+	settings_note(state, "Escape always remains available for opening and closing menus.")
 }
 
 settings_dropdown_field :: proc(state: ^State, label, name: string, dropdown: Settings_Dropdown, enabled: bool = true) {
