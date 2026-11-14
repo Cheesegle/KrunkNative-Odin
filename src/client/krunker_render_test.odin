@@ -287,6 +287,29 @@ when ODIN_TEST {
 			testing.expect(t, client.me.class_index == 0 && client.me.secondary_id == secondary && client.me.loadout[1] == secondary && client.me.mesh != nil,
 				"same-class secondary changes must rebuild the equipped sidearm and its mesh")
 		}
+		// Changing class while the entry request is in flight must not softlock.
+		// The server STARTs us with the class the sent en carried; the browser
+		// enters on START regardless, and the new pick waits for the next spawn.
+		defer {
+			delete(client.selection_status)
+			for _, texture in menu_portraits { texture_release(texture) }
+			delete(menu_portraits); menu_portraits = nil
+		}
+		gameplay_packet(&client.krunker_world, "3", i64(7), i64(1))
+		krunker_client_sync_world(&client)
+		client.krunker_world.respawn_available_at = 0
+		client.menu.page = .HOME
+		client.selected_class, client.spawn_pending, client.krunker.bootstrapped = 3, true, true
+		menu_apply_action(&client, {kind = .SELECT_CLASS, index = 0}, proc(state: ^Krunker_WS_State, opcode: string) -> bool { return opcode == "class" })
+		testing.expect(t, client.selected_class == 0 && client.krunker.class_index == 0 && client.spawn_pending, "the new class must be requested for the next spawn")
+		client.menu.page = .HOME // Loadout Done
+		gameplay_packet(&client.krunker_world, "start", "2:00", i64(2), false, kproto.Krunker_Msgpack_Nil{}, i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(3))
+		roster[1], roster[6], roster[9], roster[2] = i64(7), i64(3), i64(2), i64(-110)
+		gameplay_packet(&client.krunker_world, i64(0), roster[:])
+		krunker_client_sync_world(&client)
+		testing.expect(t, client.krunker.spawned && client.in_game && !client.spawn_pending && client.mouse_state.locked && client.me.active,
+			"a server spawn with the previously requested class must still enter the game")
+		testing.expect(t, client.me.class_index == 3 && client.selected_class == 0, "the server class is equipped and the new pick waits for the next spawn")
 		// Render the map and player view model once to catch GL/resource issues.
 		client.camera.position = client.me.position
 		client.camera.position.y += client.me.height - shared.GAME_CONSTANTS.camera_height
