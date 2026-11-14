@@ -51,6 +51,8 @@ Client :: struct {
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
 	scoreboard_open: bool,
+	end_screen_active, end_screen_dismissed: bool,
+	end_screen_started: f64,
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
@@ -981,6 +983,15 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.menu.previous.down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
 	}
 
+	// The end screen replaces the menu until dismissed or the next match.
+	end_screen_was_visible := client.end_screen_active && !client.end_screen_dismissed
+	end_screen_visible := client_end_screen_update(client, glfw.GetTime(), escape_key && !client.last_escape_key && !client.mouse_state.locked)
+	if end_screen_was_visible && !end_screen_visible && client.end_screen_dismissed {
+		client.menu.page = .HOME
+		client.menu.pressed = 0
+		client.menu.previous.escape = true
+	}
+
 	client.last_escape_key = escape_key
 
 	if client.mouse_state.locked && (client.me == nil || !client.me.active) {
@@ -1130,7 +1141,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 
-	if !client.mouse_state.locked {
+	if end_screen_visible {
+		end_screen_render(client, glfw.GetTime())
+	} else if !client.mouse_state.locked {
 		hud_render(client, delta)
 	} else {
 		overlay_render(client, delta)

@@ -1,5 +1,6 @@
 package krunker
 
+import "core:fmt"
 import "core:math"
 import "core:strings"
 import shared "../shared"
@@ -78,6 +79,8 @@ krunker_world_init_match :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.winner_team, state.end_result = -1, -1
 	// A new match starts with an empty board until the next UPDATE_LEADERS.
 	state.has_leaders = false
+	state.end_index = 0
+	krunker_world_clear_end(state)
 	for &player in state.players { player.leader_rank = 0 }
 	state.timer_received_at, state.objective_received_at, state.lockout_received_at = state.received_at, state.received_at, state.received_at
 	delete(state.timer_text); state.timer_text = ""
@@ -167,6 +170,72 @@ krunker_mode_leader_stats :: proc(mode_index: i32) -> ([]string, bool) {
 	return nil, false
 }
 
+// Browser mode.endStats for the same modes; FFA-style modes use the default
+// list. The END table's stride is the full list, including sid and name.
+KRUNKER_END_STATS_DEFAULT := [?]string{"sid", "name", "score", "kills", "deaths", "reward"}
+KRUNKER_END_STATS_TDM := [?]string{"sid", "name", "score", "kills", "deaths", "assists", "reward"}
+KRUNKER_END_STATS_POINT := [?]string{"sid", "name", "score", "kills", "deaths", "obj", "dmg", "reward"}
+KRUNKER_END_STATS_CTF := [?]string{"sid", "name", "score", "kills", "deaths", "caps", "reward"}
+KRUNKER_END_STATS_GUN := [?]string{"sid", "name", "weapon", "kills", "melees", "setbacks", "reward"}
+KRUNKER_END_STATS_CONFIRM := [?]string{"sid", "name", "score", "kills", "deaths", "confirms", "denies", "reward"}
+KRUNKER_END_STATS_OBJECTIVE := [?]string{"sid", "name", "score", "kills", "deaths", "obj", "reward"}
+
+krunker_mode_end_stats :: proc(mode_index: i32) -> ([]string, bool) {
+	switch mode_index {
+	case 0, 13, 21, 33, 36: return KRUNKER_END_STATS_DEFAULT[:], true
+	case 1: return KRUNKER_END_STATS_TDM[:], true
+	case 2: return KRUNKER_END_STATS_POINT[:], true
+	case 3: return KRUNKER_END_STATS_CTF[:], true
+	case 10: return KRUNKER_END_STATS_GUN[:], true
+	case 19: return KRUNKER_END_STATS_CONFIRM[:], true
+	case 28, 30: return KRUNKER_END_STATS_OBJECTIVE[:], true
+	}
+	return nil, false
+}
+
+krunker_world_clear_end :: proc(state: ^Krunker_World_State) {
+	for entry in state.end_entries {
+		delete(entry.name)
+		for cell in entry.cells { delete(cell) }
+	}
+	clear(&state.end_entries)
+	delete(state.end_timer_text)
+	state.end_timer_text = ""
+}
+
+// The browser renders `ed` cells as-is (`|| 0`). Names are [name, displayName]
+// pairs and skin rewards [amount, skin]; both use the first useful element.
+krunker_world_end_cell :: proc(value: Krunker_Msgpack_Value, prefer_second := false) -> string {
+	#partial switch typed in value {
+	case string: return strings.clone(typed[:min(len(typed), 64)])
+	case i64: return strings.clone(fmt.tprintf("%d", typed))
+	case f64:
+		if math.is_nan(typed) || math.is_inf(typed) { return strings.clone("0") }
+		if typed == math.trunc(typed) && abs(typed) < 1e15 { return strings.clone(fmt.tprintf("%d", i64(typed))) }
+		return strings.clone(fmt.tprintf("%.2f", typed))
+	case bool: return strings.clone(typed ? "1" : "0")
+	case []Krunker_Msgpack_Value:
+		if prefer_second && len(typed) > 1 { if text, ok := typed[1].(string); ok && len(text) > 0 { return krunker_world_end_cell(typed[1]) } }
+		if len(typed) > 0 { return krunker_world_end_cell(typed[0]) }
+	}
+	return strings.clone("0")
+}
+
+// Replaces the end table with END's endData.ed. Unknown schemas are ignored.
+krunker_world_apply_end_table :: proc(state: ^Krunker_World_State, value: Krunker_Msgpack_Value) -> bool {
+	stats, known := krunker_mode_end_stats(state.mode_index); if !known { return false }
+	values, ok := krunker_world_array(value); if !ok || len(values)%len(stats) != 0 { return false }
+	for offset := 0; offset < len(values); offset += len(stats) {
+		if _, valid := krunker_world_bounded_number(values[offset], 0, 2147483647); !valid { return false }
+	}
+	for offset := 0; offset < len(values); offset += len(stats) {
+		entry := Krunker_End_Entry{sid = krunker_world_i32(values[offset]), name = krunker_world_end_cell(values[offset+1], true)}
+		for i in 2..<min(len(stats), KRUNKER_END_MAX_STATS+2) { entry.cells[i-2] = krunker_world_end_cell(values[offset+i]) }
+		append(&state.end_entries, entry)
+	}
+	return true
+}
+
 krunker_world_apply_leaders :: proc(state: ^Krunker_World_State, value: Krunker_Msgpack_Value) -> bool {
 	stats, known := krunker_mode_leader_stats(state.mode_index); if !known { return false }
 	stride := len(stats) + 1
@@ -235,6 +304,11 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		if kind == 0 {
 			if !krunker_world_set_timer_text(state, packet[1]) { return false }
 			if len(packet) > 3 { if ms, ok := krunker_world_bounded_number(packet[3], 0, 604800000); ok { state.match.time_remaining = f32(ms)/1000 } }
+		} else if kind == 1 {
+			// "Next Round in {0}" on the end screen; it never replaces the game clock.
+			text, ok := packet[1].(string); if !ok || len(text) > 64 { return false }
+			delete(state.end_timer_text)
+			state.end_timer_text = strings.clone(text)
 		}
 		state.timer_kind = kind
 		return true
@@ -261,6 +335,7 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		// authoritative; abnormal endings (forfeit/abandon) award no extra win.
 		normal_end := len(packet) <= 5
 		if len(packet) > 5 { _, absent := packet[5].(Krunker_Msgpack_Nil); normal_end = absent || krunker_world_i32(packet[5], -1) == 0 }
+		state.end_index = len(packet) > 5 ? krunker_world_i32(packet[5], 0) : 0
 		if !state.final_round_counted && normal_end && state.rounds_total > 1 && winner >= 1 && winner <= 2 {
 			state.match.round_wins[int(winner)] += 1
 		}
@@ -269,8 +344,13 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		state.match.phase = .ENDED
 		state.move_lock = true
 		krunker_world_end_lives(state)
+		krunker_world_clear_end(state)
 		if entries, mapped := packet[3].([]Krunker_Msgpack_Map_Entry); mapped {
-			for entry in entries { if key, textual := entry.key.(string); textual && key == "tms" { krunker_world_team_scores(&state.match.team_scores, entry.value) } }
+			for entry in entries {
+				key, textual := entry.key.(string); if !textual { continue }
+				if key == "tms" { krunker_world_team_scores(&state.match.team_scores, entry.value) }
+				if key == "ed" { krunker_world_apply_end_table(state, entry.value) }
+			}
 		}
 		return true
 	case "obj": return krunker_world_set_objective(state, packet[1:])

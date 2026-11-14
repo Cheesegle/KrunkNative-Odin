@@ -32,6 +32,8 @@ Scoreboard :: struct {
 	team_names: [2]string,
 	team_scores: [3]u32,
 	rows: []Scoreboard_Row,
+	// Header above the rank counters: none in-game, "#" on the end table.
+	rank_label: string,
 }
 
 // Krunker abbreviates leaderboard numbers with k/m/b and two decimals.
@@ -170,7 +172,7 @@ scoreboard_group_size :: proc(board: ^Scoreboard, team: i32, s: f32) -> (width, 
 	return
 }
 
-scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32) {
+scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32, centered := true) {
 	s := ui.scale
 	white := shared.Vec4{1, 1, 1, 1}
 	muted := shared.Vec4{1, 1, 1, 0.55}
@@ -196,7 +198,7 @@ scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32) {
 		visible += 1
 	}
 	x := (ui.width-total)*0.5
-	top := max(min_top, (ui.height-tallest)*0.5)
+	top := centered ? max(min_top, (ui.height-tallest)*0.5) : min_top
 	for team in groups {
 		if team < 0 { continue }
 		width, height, count := scoreboard_group_size(board, team, s)
@@ -215,6 +217,7 @@ scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32) {
 		stats_x := name_x + SCOREBOARD_NAME_WIDTH*s
 		column_size := 24*s
 		ui_fill_text(ui, muted, "Name", name_x, overlay_numeric_baseline(y, SCOREBOARD_COLUMN_HEIGHT*s, column_size), column_size)
+		if len(board.rank_label) > 0 { ui_fill_text(ui, muted, board.rank_label, name_x-12*s-ui_measure_text(ui, board.rank_label, column_size), overlay_numeric_baseline(y, SCOREBOARD_COLUMN_HEIGHT*s, column_size), column_size) }
 		for column, i in board.columns[:board.column_count] {
 			cx := stats_x + (f32(i)+0.5)*SCOREBOARD_STAT_WIDTH*s
 			ui_fill_text(ui, muted, column, cx-ui_measure_text(ui, column, column_size)*0.5, overlay_numeric_baseline(y, SCOREBOARD_COLUMN_HEIGHT*s, column_size), column_size)
