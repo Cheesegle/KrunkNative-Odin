@@ -14,6 +14,7 @@ Net_Client_State :: struct {
 	lobby_received: bool,
 	lobby: shared.Lobby_State,
 	send_queue: shared.Net_Send_Queue,
+	ping: shared.Net_Ping_State,
 }
 
 net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
@@ -100,10 +101,17 @@ net_client_send_spawn :: proc(nc: ^Net_Client_State, class_id: i32, secondary_id
 	}
 }
 
-net_client_poll :: proc(client: ^Client) {
+net_client_poll :: proc(client: ^Client, now: f64) {
 	nc := &client.net
 	if !nc.connected {
 		return
+	}
+	if seq, due := shared.net_ping_due(&nc.ping, now); due {
+		buf: [shared.NET_PING_PACKET_SIZE]byte
+		if size := shared.packet_serialize_ping(buf[:], seq); size > 0 && !net_client_send(nc, buf[:size]) {
+			nc.connected = false
+			return
+		}
 	}
 	if !net_client_flush(nc) {
 		fmt.printf("[Net Client] Send error\n")
@@ -153,6 +161,10 @@ net_client_poll :: proc(client: ^Client) {
 					client_apply_match_state(client, &state)
 					nc.match_state_received = true
 				}
+			case .PING:
+				if seq, ping_ok := shared.packet_deserialize_ping(packet); ping_ok {
+					shared.net_ping_receive(&nc.ping, seq, now)
+				}
 			case .BULLET_IMPACT:
 				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
 					if len(client.game.impacts) >= 256 {
@@ -186,6 +198,7 @@ net_client_disconnect :: proc(nc: ^Net_Client_State) {
 	for name in nc.lobby.team_names { delete(name) }
 	nc.lobby = {}
 	nc.lobby_received = false
+	nc.ping = {}
 	if nc.connected {
 		buf: [shared.PACKET_HEADER_SIZE]byte
 		if size := shared.packet_serialize_disconnect(buf[:]); size > 0 {

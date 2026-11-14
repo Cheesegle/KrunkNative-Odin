@@ -115,6 +115,10 @@ Krunker_World_State :: struct {
 	rounds_total: u32,
 	objective_weapon: i32,
 	projectile_events: [dynamic]Krunker_Projectile_Event,
+	// Most recent ping reported by SYNC_PLAYER (l) value 1. The browser keeps
+	// the last truthy value (K2, initially -1) and renders -1 as "-".
+	ping: i32,
+	has_ping: bool,
 }
 
 krunker_world_reset :: proc(state: ^Krunker_World_State) {
@@ -338,6 +342,8 @@ krunker_world_apply_sync_player :: proc(state: ^Krunker_World_State, packet: []K
 	values, ok := krunker_world_array(packet[1]); if !ok || len(values) < 18 { return false }
 	if state.local_sid < 0 { return false }
 	player := krunker_world_upsert_player(state, state.local_sid)
+	// R3e only refreshes pingText when e[1] is truthy, so zero keeps the old value.
+	if ping := krunker_world_i32(values[1], 0); ping != 0 { state.ping, state.has_ping = ping, true }
 	if player.life_ended { return false }
 	player.position = {krunker_world_f32(values[2]), krunker_world_f32(values[3]), krunker_world_f32(values[4])}
 	player.ping = krunker_world_i32(values[1], player.ping)

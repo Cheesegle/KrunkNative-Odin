@@ -77,6 +77,8 @@ settings_window :: proc(state: ^State, view: View) {
 						settings_toggle_row(state, "Team game score", "HudGameScore", !values.hud.hide_game_score, {kind = .HUD_TOGGLE, index = 2})
 						settings_note("Round score: objective points this round. Game score: rounds won.", s)
 						settings_section("Performance", s)
+						// Krunker showPing: "Show Ping", interface category, on by default.
+						settings_toggle_row(state, "Show Ping", "HudPing", !values.hud.hide_ping, {kind = .HUD_TOGGLE, index = 3})
 						settings_fps_row(state)
 					}
 				}
