@@ -89,6 +89,7 @@ test_menu :: proc() -> bool {
 	view.audio_volumes = {0.8, 1, 0.5, 0}
 	view.bindings = menuui.default_bindings()
 	view.resolution_options = []string{"1280 x 720", "1920 x 1080", "2560 x 1440"}
+	view.fullscreen_options = []string{"2560 x 1600", "1920 x 1200", "1920 x 1080"}
 	view.monitor_names = []string{"Primary monitor", "Second monitor"}
 	menu_test_click(&state, view, clay.ID("Settings",u32(menuui.Page.SETTINGS)))
 	menu_test_frame(&state, view, {})
@@ -228,7 +229,7 @@ test_menu :: proc() -> bool {
 	menu_test_click(&state, view, clay.ID("HudGameScore", 2))
 	menu_test_frame(&state, view, {})
 	value = menu_test_click(&state, view, clay.ID("SettingsSave"))
-	if value.kind != .SETTINGS_SAVE || state.page != .HOME || state.settings_draft.display_mode != 2 || state.settings_draft.resolution_index != 1 || !state.settings_draft.show_fps { fmt.println("Settings Save failed"); return false }
+	if value.kind != .SETTINGS_SAVE || state.page != .HOME || state.settings_draft.display_mode != 2 || state.settings_draft.fullscreen_index != 1 || state.settings_draft.resolution_index != 0 || !state.settings_draft.show_fps { fmt.println("Settings Save failed"); return false }
 	if !state.settings_draft.vsync || state.settings_draft.monitor_index != 1 || state.settings_draft.hud != (menuui.HUD_Settings{true, true, true}) { fmt.println("Video and HUD settings were not staged"); return false }
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("Settings",u32(menuui.Page.SETTINGS)))

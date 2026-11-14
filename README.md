@@ -376,7 +376,8 @@ Cancel discards the edits.
 Save applies all edited categories; Cancel or Escape discards the draft. Key
 bindings, sensitivity, graphics and HUD preferences persist in the ignored
 `client-settings.json` in the working directory. Video supports mode, monitor,
-window resolution, V-Sync, sharp/smooth texture filtering and supported anisotropic
+resolution (window presets in Windowed, the monitor's video modes in Fullscreen;
+Borderless always matches the monitor), V-Sync, sharp/smooth texture filtering and supported anisotropic
 filtering levels. Visuals provides brightness, gamma, contrast, saturation
 and ambient/sunlight strength, plus independent Hide cats and Hide extra props
 toggles. Extra props covers loose rubble, planks, fabric and grass. Both toggles

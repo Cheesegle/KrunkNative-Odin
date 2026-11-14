@@ -58,7 +58,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .NONE: return
 	case .DISPLAY_MODE: labels, anchor, action = mode_labels[:], "DisplayMode", .DISPLAY_MODE
 	case .MONITOR: labels, anchor, action = view.monitor_names, "Monitor", .MONITOR
-	case .RESOLUTION: labels, anchor, action = view.resolution_options, "Resolution", .RESOLUTION_SELECT
+	case .RESOLUTION: labels, anchor, action = settings_resolution_options(state, view), "Resolution", .RESOLUTION_SELECT
 	case .TEXTURE_FILTER: labels, anchor, action = filter_labels[:], "TextureFiltering", .TEXTURE_FILTER
 	case .CROSSHAIR_TYPE: labels, anchor, action = crosshair_labels[:], "CrosshairType", .CROSSHAIR_TYPE
 	case .ANISOTROPY:

@@ -233,6 +233,11 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 	resolution_options := make([]string, len(DISPLAY_RESOLUTIONS), context.temp_allocator)
 	for resolution, i in DISPLAY_RESOLUTIONS { resolution_options[i] = fmt.tprintf("%d x %d", resolution.width, resolution.height) }
 	window_resolution := client_window_resolution(client)
+	fullscreen_sizes: []Display_Resolution
+	if client.window != nil { fullscreen_sizes = monitor_resolutions(client_monitor(client.monitor_index)) }
+	fullscreen_options := make([]string, len(fullscreen_sizes), context.temp_allocator)
+	fullscreen_index := client_fullscreen_index(fullscreen_sizes, client.fullscreen_resolution)
+	for size, i in fullscreen_sizes { fullscreen_options[i] = fmt.tprintf("%d x %d", size.width, size.height) }
 	monitor_names := make([dynamic]string, context.temp_allocator)
 	if client.window != nil {
 		for monitor, i in glfw.GetMonitors() { append(&monitor_names, fmt.tprintf("%d: %s", i+1, glfw.GetMonitorName(monitor))) }
@@ -253,6 +258,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
+		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings,
@@ -308,9 +314,11 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		values := client.menu.settings_draft
 		mode := Display_Mode(clamp(values.display_mode, 0, 2))
 		resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
-		if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || mode == .Windowed && client.menu.settings_resolution_selected {
+		fullscreen := client_staged_fullscreen_resolution(client, values)
+		if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || fullscreen != client.fullscreen_resolution || mode == .Windowed && client.menu.settings_resolution_selected {
 			client_remember_windowed_rect(client)
 			client.display_mode, client.resolution_index = mode, resolution
+			client.fullscreen_resolution = fullscreen
 			client.monitor_index = values.monitor_index
 			client_apply_display_settings(client)
 		}
