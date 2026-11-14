@@ -84,6 +84,9 @@ settings_window :: proc(state: ^State, view: View) {
 						// Krunker showPing: "Show Ping", interface category, on by default.
 						settings_toggle_row(state, "Show Ping", "HudPing", !values.hud.hide_ping, {kind = .HUD_TOGGLE, index = 3})
 						settings_fps_row(state)
+						settings_section("Players", s)
+						settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
+						settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
 					}
 				}
 				settings_scrollbar(state)

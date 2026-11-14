@@ -12,8 +12,9 @@ Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BR
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE }
+// Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
-HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_ping: bool }
+HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool }
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
 	fullscreen_index: i32, // Index into View.fullscreen_options.
@@ -429,6 +430,8 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 1: state.settings_draft.hud.hide_round_score = !state.settings_draft.hud.hide_round_score
 			case 2: state.settings_draft.hud.hide_game_score = !state.settings_draft.hud.hide_game_score
 			case 3: state.settings_draft.hud.hide_ping = !state.settings_draft.hud.hide_ping
+			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
+			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			}
 			return {}
 		case .RESOLUTION:
