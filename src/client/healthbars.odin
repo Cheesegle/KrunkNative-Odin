@@ -12,9 +12,36 @@ player_healthbar_project :: proc(view_projection: shared.Mat4, point: shared.Vec
 	return {(ndc.x+1)*width*0.5, (1-ndc.y)*height*0.5, ndc.z}, true
 }
 
+// Krunker refreshes nameplate visibility (`canBSeen`) at most every 200 ms
+// in its render loop, not per frame.
+HEALTHBAR_VISIBILITY_INTERVAL :: f32(0.2)
+
+// Krunker's nameplate rule. Teammates are always shown. Everyone else (all
+// players in FFA, where the local team is 0) is shown only when the enemy-tag
+// server option is off and `canSee` from the local eye to the target's feet
+// reports no blocking map geometry.
+player_healthbar_can_be_seen :: proc(client: ^Client, player: ^shared.Player) -> bool {
+	me := client.me
+	if me == nil || player == nil || !player.active { return false }
+	if me.team != 0 && player.team == me.team { return true }
+	if client.game.config.hide_nametags { return false }
+	eye := me.position + shared.Vec3{0, me.height - shared.GAME_CONSTANTS.camera_height, 0}
+	return shared.map_can_see(client.game.map_inst, eye, player.position)
+}
+
+player_healthbars_update_visibility :: proc(client: ^Client, now: f32) {
+	if now - client.healthbar_visibility_checked_at < HEALTHBAR_VISIBILITY_INTERVAL { return }
+	client.healthbar_visibility_checked_at = now
+	live := client.me != nil && client.me.active
+	for player in client.game.players {
+		if player == nil || player == client.me { continue }
+		player.can_be_seen = live && player_healthbar_can_be_seen(client, player)
+	}
+}
+
 player_healthbars_render :: proc(client: ^Client) {
 	if !client.in_game || !client.mouse_state.locked || client.me == nil || !client.me.active ||
-		client.ui == nil || len(client.game.players) < 2 || client.game.config.hide_nametags ||
+		client.ui == nil || len(client.game.players) < 2 ||
 		client.viewport_width <= 0 || client.viewport_height <= 0 { return }
 
 	ui := client.ui
@@ -35,7 +62,7 @@ player_healthbars_render :: proc(client: ^Client) {
 	}
 	view_projection := client.camera.projection_matrix * client.camera.world_inverse_matrix
 	for player in client.game.players {
-		if player == nil || player == client.me || player.is_you || !player.active || player.health <= 0 || player.max_health <= 0 { continue }
+		if player == nil || player == client.me || player.is_you || !player.active || player.health <= 0 || player.max_health <= 0 || !player.can_be_seen { continue }
 		point := player.position + shared.Vec3{0, player.height + 1.8, 0}
 		screen, visible := player_healthbar_project(view_projection, point, ui.width, ui.height)
 		if !visible { continue }

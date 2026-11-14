@@ -123,6 +123,7 @@ Client :: struct {
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
+	healthbar_visibility_checked_at: f32,
 	viewport_width: i32,
 	viewport_height: i32,
 }
@@ -1122,6 +1123,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	client.camera.fov = saved_fov
+	player_healthbars_update_visibility(client, now)
 	player_healthbars_render(client)
 
 	gl.Clear(gl.DEPTH_BUFFER_BIT)

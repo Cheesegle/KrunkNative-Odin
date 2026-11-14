@@ -40,6 +40,8 @@ when ODIN_TEST {
 
 	healthbar_test_colors :: proc(client: ^Client, pixels: []u8) -> (red, green: int) {
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		client.healthbar_visibility_checked_at = -1
+		player_healthbars_update_visibility(client, 0)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
@@ -99,6 +101,14 @@ when ODIN_TEST {
 		occluded_red, occluded_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, occluded_red == 0 && occluded_green == 0, "map walls must occlude overhead bars using the world depth buffer")
 		scene_remove_mesh(client.scene, wall)
+		los_wall := shared.Object{active = true, collision_type = .BOX, position = {-10, 0, -80}, scale = {2, 40, 12}}
+		los_map := shared.Map{}
+		append(&los_map.objects, &los_wall)
+		defer delete(los_map.objects)
+		client.game.map_inst = &los_map
+		hidden_red, wall_green := healthbar_test_colors(&client, pixels)
+		testing.expect(t, hidden_red == 0 && wall_green == green, "an enemy behind map geometry must get no bar (ESP) while the teammate keeps one")
+		client.game.map_inst = nil
 		client.mouse_state.locked = false
 		menu_red, menu_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, menu_red == 0 && menu_green == 0, "bars must disappear while the menu is open")
@@ -115,5 +125,77 @@ when ODIN_TEST {
 		dead_red, dead_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, dead_red == 0 && dead_green == 0, "inactive/dead players and the local player must not get overhead bars")
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "health bar and world rendering must preserve valid OpenGL state")
+	}
+
+	@(test)
+	healthbars_follow_krunker_nameplate_visibility :: proc(t: ^testing.T) {
+		local := shared.Player{active = true, is_you = true, team = 1, position = {0, 0, 0}, height = 11, health = 100, max_health = 100}
+		enemy := shared.Player{active = true, team = 2, position = {0, 0, -80}, height = 11, health = 100, max_health = 100}
+		ally := shared.Player{active = true, team = 1, position = {6, 0, -80}, height = 11, health = 100, max_health = 100}
+		floor := shared.Object{active = true, collision_type = .BOX, position = {0, -10, -40}, scale = {400, 10, 400}}
+		wall := shared.Object{active = true, collision_type = .BOX, position = {0, 0, -40}, scale = {200, 30, 2}}
+		world := shared.Map{}
+		append(&world.objects, &floor, &wall)
+		defer delete(world.objects)
+		client := Client{me = &local}
+		client.game.map_inst = &world
+		append(&client.game.players, &local, &enemy, &ally)
+		defer delete(client.game.players)
+		refresh :: proc(client: ^Client) {
+			client.healthbar_visibility_checked_at = -1
+			player_healthbars_update_visibility(client, 0)
+		}
+
+		refresh(&client)
+		testing.expect(t, !enemy.can_be_seen, "an enemy behind a wall must not get a nameplate")
+		testing.expect(t, ally.can_be_seen, "teammates are always shown, even through walls")
+
+		wall.active = false
+		refresh(&client)
+		testing.expect(t, enemy.can_be_seen, "an enemy in clear sight gets a nameplate; standing on the floor must not block it")
+
+		wall.active = true
+		client.healthbar_visibility_checked_at = 5
+		player_healthbars_update_visibility(&client, 5.1)
+		testing.expect(t, enemy.can_be_seen, "visibility only refreshes every 200 ms like Krunker")
+		player_healthbars_update_visibility(&client, 5.25)
+		testing.expect(t, !enemy.can_be_seen, "the next 200 ms refresh must pick up the blocking wall")
+
+		// canSee aims at the target's feet: a waist-high wall hides the tag.
+		wall.scale.y = 6
+		refresh(&client)
+		testing.expect(t, !enemy.can_be_seen, "Krunker tests line of sight to the player's feet")
+		wall.scale.y = 30
+
+		see_through := []shared.Prefab{.WINDOW, .GRASS, .LIGHT_CONE, .RAMP}
+		for prefab in see_through {
+			wall.prefab = prefab
+			refresh(&client)
+			testing.expectf(t, enemy.can_be_seen, "%v is transparent/noShoot and must not block nameplates", prefab)
+		}
+		wall.prefab = .CUBE
+		wall.no_shoot = true
+		refresh(&client)
+		testing.expect(t, enemy.can_be_seen, "noShoot objects must not block nameplates")
+		wall.no_shoot, wall.collision_type = false, .NONE
+		refresh(&client)
+		testing.expect(t, enemy.can_be_seen, "no-collision objects must not block nameplates")
+		wall.collision_type = .BOX
+
+		wall.active = false
+		client.game.config.hide_nametags = true
+		refresh(&client)
+		testing.expect(t, !enemy.can_be_seen && ally.can_be_seen, "Hide Nametags (Enemies) hides only enemy nameplates")
+		client.game.config.hide_nametags = false
+		wall.active = true
+
+		local.team, ally.team, enemy.team = 0, 0, 0
+		refresh(&client)
+		testing.expect(t, !ally.can_be_seen && !enemy.can_be_seen, "in FFA nobody is a teammate, so walls hide every nameplate")
+
+		local.active = false
+		local.team, ally.team = 1, 1
+		refresh(&client)
+		testing.expect(t, !ally.can_be_seen, "a dead local player must not keep stale nameplate visibility")
 	}
 }
