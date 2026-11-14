@@ -10,6 +10,7 @@ CLIENT_SETTINGS_PATH :: "client-settings.json"
 Client_Settings :: struct {
 	version: i32,
 	display_mode, resolution_index, monitor_index: i32,
+	fullscreen_width, fullscreen_height: i32, // 0 = the monitor's largest mode.
 	sensitivity, mouse_dpi: f32,
 	ads_sensitivity: f32,
 	advanced_sensitivity, invert_mouse: bool,
@@ -37,6 +38,7 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.display_mode = clamp(result.display_mode, 0, 2)
 	result.resolution_index = clamp(result.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
 	result.monitor_index = max(0, result.monitor_index)
+	if result.fullscreen_width <= 0 || result.fullscreen_height <= 0 { result.fullscreen_width, result.fullscreen_height = 0, 0 }
 	result.visuals = menuui.visual_settings_validate(result.visuals)
 	result.quality = menuui.quality_settings_validate(result.quality)
 	result.viewmodel = menuui.viewmodel_settings_validate(result.viewmodel)
@@ -65,6 +67,7 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 	return {version = 1, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
+		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
 		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, vsync = client.vsync, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings}

@@ -15,6 +15,7 @@ Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FIL
 HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score: bool }
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
+	fullscreen_index: i32, // Index into View.fullscreen_options.
 	fov: f32,
 	sensitivity, mouse_dpi: f32,
 	ads_sensitivity: f32,
@@ -60,6 +61,9 @@ View :: struct {
 	display_mode: i32,
 	resolution_index: i32,
 	resolution_options: []string,
+	// Exclusive fullscreen sizes for the selected monitor, largest first.
+	fullscreen_index: i32,
+	fullscreen_options: []string,
 	monitor_index: i32,
 	monitor_names: []string,
 	vsync: bool,
@@ -108,7 +112,7 @@ State :: struct {
 	scrollbar_dragging: bool,
 	scrollbar_grab: f32,
 	settings_draft: Settings_Values,
-	settings_resolution_count: i32,
+	settings_resolution_count, settings_fullscreen_count: i32,
 	settings_resolution_selected: bool,
 	binding_capture: i32, // action*2 + slot + 1; zero when not listening.
 	binding_reserved: bool,
@@ -137,7 +141,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 	}
 	if !state.settings_active {
 		state.settings_resolution_selected = false
-		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index,
+		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
 			monitor_index = view.monitor_index, vsync = view.vsync, bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
@@ -145,6 +149,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.settings_active = true
 	}
 	state.settings_resolution_count = i32(len(view.resolution_options))
+	state.settings_fullscreen_count = i32(len(view.fullscreen_options))
 	if state.page == .CONTROLS { state.settings_tab = .INPUT }
 }
 
@@ -326,7 +331,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .NONE:
 		case .DISPLAY_MODE: index = state.settings_draft.display_mode
 		case .MONITOR: index = state.settings_draft.monitor_index
-		case .RESOLUTION: index = state.settings_draft.resolution_index
+		case .RESOLUTION: index = state.settings_draft.display_mode == 2 ? state.settings_draft.fullscreen_index : state.settings_draft.resolution_index
 		case .TEXTURE_FILTER: index = state.settings_draft.quality.smooth_textures ? 1 : 0
 		case .CROSSHAIR_TYPE: index = 0
 		case .ANISOTROPY:
@@ -378,7 +383,11 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .ANISOTROPY: state.settings_draft.quality.anisotropy = ANISOTROPY_LEVELS[clamp(control.action.index, 0, 4)]; return {}
 		case .MONITOR: state.settings_draft.monitor_index = control.action.index; return {}
 		case .RESOLUTION_SELECT:
-			state.settings_draft.resolution_index = control.action.index
+			if state.settings_draft.display_mode == 2 {
+				state.settings_draft.fullscreen_index = control.action.index
+			} else {
+				state.settings_draft.resolution_index = control.action.index
+			}
 			state.settings_resolution_selected = true
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
@@ -390,9 +399,11 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			}
 			return {}
 		case .RESOLUTION:
-			count := state.settings_resolution_count
+			fullscreen := state.settings_draft.display_mode == 2
+			count := fullscreen ? state.settings_fullscreen_count : state.settings_resolution_count
+			index := fullscreen ? &state.settings_draft.fullscreen_index : &state.settings_draft.resolution_index
 			if count > 0 {
-				state.settings_draft.resolution_index = (state.settings_draft.resolution_index + control.action.index + count) % count
+				index^ = (index^ + control.action.index + count) % count
 				state.settings_resolution_selected = true
 			}
 			return {}
