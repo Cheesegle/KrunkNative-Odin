@@ -310,6 +310,37 @@ when ODIN_TEST {
 		testing.expect(t, client.krunker.spawned && client.in_game && !client.spawn_pending && client.mouse_state.locked && client.me.active,
 			"a server spawn with the previously requested class must still enter the game")
 		testing.expect(t, client.me.class_index == 3 && client.selected_class == 0, "the server class is equipped and the new pick waits for the next spawn")
+		// Comp game time: the server refuses a class change while the game is in
+		// progress. The player must stay controllable and respawn as the roster class.
+		world := &client.krunker_world
+		world.is_comp, world.has_match, world.match.phase, world.countdown = true, true, .LIVE, .NONE
+		gameplay_packet(world, "uid", "our-uid")
+		gameplay_packet(world, "cda", "our-uid", []kproto.Krunker_Msgpack_Map_Entry{{key="t",value=i64(2)}, {key="c",value=i64(3)}})
+		client.lobby_team, client.selected_class, client.krunker.class_index = 2, 3, 3
+		client.krunker.connected, client.krunker.got_load, client.krunker.ready_received = true, true, true
+		testing.expect(t, !krunker_client_live_class_window(&client, glfw.GetTime()), "game time is not a live class-change window")
+		menu_apply_action(&client, {kind = .SELECT_CLASS, index = 0}, proc(state: ^Krunker_WS_State, opcode: string) -> bool { return opcode == "class" })
+		testing.expect(t, client.selected_class == 0, "the pick is sent to the server like the browser's selectClass")
+		krunker_client_apply_notice(&client, []kproto.Krunker_Msgpack_Value{"chi", i64(-1), kproto.Krunker_Msgpack_Nil{}, "ranked.progress", i64(2)})
+		testing.expect(t, client.selected_class == 3 && client.krunker.class_index == 3 && len(client.selection_status) > 0,
+			"a refused mid-game change must fall back to the server's class")
+		testing.expect(t, client.krunker.spawned && client.in_game && client.me.active, "a refused change must not interrupt the current life")
+		// A change the server ignores silently must not block the next spawn either.
+		menu_apply_action(&client, {kind = .SELECT_CLASS, index = 0}, proc(state: ^Krunker_WS_State, opcode: string) -> bool { return opcode == "class" })
+		client.menu.page = .HOME
+		gameplay_packet(world, "3", i64(7), i64(1))
+		krunker_client_sync_world(&client)
+		world.respawn_available_at = 0
+		testing.expect(t, !client.krunker.spawned && !client.me.active)
+		client_enter_game(&client)
+		krunker_ws_bootstrap_tick(&client, proc(state: ^Krunker_WS_State, opcode: string) -> bool { return true })
+		testing.expect(t, client.spawn_pending && client.krunker.bootstrapped && client.krunker.class_index == 0, "respawn must request the newest pick")
+		gameplay_packet(world, "start", "2:00", i64(2), false, kproto.Krunker_Msgpack_Nil{}, i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(3))
+		roster[2] = i64(-120)
+		gameplay_packet(world, i64(0), roster[:])
+		krunker_client_sync_world(&client)
+		testing.expect(t, client.krunker.spawned && client.krunker.bootstrapped && client.in_game && !client.spawn_pending && client.mouse_state.locked && client.me.class_index == 3,
+			"respawning as the server's roster class during game time must restore control")
 		// Render the map and player view model once to catch GL/resource issues.
 		client.camera.position = client.me.position
 		client.camera.position.y += client.me.height - shared.GAME_CONSTANTS.camera_height
