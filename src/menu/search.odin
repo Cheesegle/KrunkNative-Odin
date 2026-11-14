@@ -72,6 +72,45 @@ fuzzy_match :: proc(query, label: string) -> bool {
 	return ok && score >= 2*n-1
 }
 
+// Words that mean the same thing in setting labels, so "disable cats" finds
+// "Hide cats" and "enable ping" finds "Show Ping". Labels keep their wording.
+@(private="file")
+SEARCH_SYNONYMS := [][]string{
+	{"hide", "disable", "remove"},
+	{"show", "enable", "display"},
+}
+
+@(private="file")
+search_word_equal :: proc(a, b: string) -> bool {
+	if len(a) != len(b) { return false }
+	for i in 0..<len(a) { if search_lower(a[i]) != search_lower(b[i]) { return false } }
+	return true
+}
+
+// fuzzy_match on the label, or on the label with one synonym word swapped for
+// another in its group (whole words only).
+search_label_match :: proc(query, label: string) -> bool {
+	if fuzzy_match(query, label) { return true }
+	start := 0
+	for start < len(label) {
+		for start < len(label) && !search_alnum(label[start]) { start += 1 }
+		end := start
+		for end < len(label) && search_alnum(label[end]) { end += 1 }
+		word := label[start:end]
+		for group in SEARCH_SYNONYMS {
+			in_group := false
+			for w in group { if search_word_equal(w, word) { in_group = true; break } }
+			if !in_group { continue }
+			for w in group {
+				if search_word_equal(w, word) { continue }
+				if fuzzy_match(query, fmt.tprintf("%s%s%s", label[:start], w, label[end:])) { return true }
+			}
+		}
+		start = end
+	}
+	return false
+}
+
 settings_search_query :: proc(state: ^State) -> string { return string(state.search_buffer[:state.search_length]) }
 
 settings_searching :: proc(state: ^State) -> bool {
@@ -106,7 +145,7 @@ settings_search_show :: proc(state: ^State, label: string) -> bool {
 	if !settings_searching(state) { return true }
 	query := settings_search_query(state)
 	// "crosshair size" finds Size under Crosshair, as well as the label alone.
-	if !state.search_section_match && !fuzzy_match(query, label) && (len(state.search_section) == 0 || !fuzzy_match(query, fmt.tprintf("%s %s", state.search_section, label))) { return false }
+	if !state.search_section_match && !search_label_match(query, label) && (len(state.search_section) == 0 || !search_label_match(query, fmt.tprintf("%s %s", state.search_section, label))) { return false }
 	s := state.scale
 	if state.search_tab_pending {
 		state.search_tab_pending = false

@@ -33,6 +33,21 @@ test_fuzzy_matcher :: proc() -> bool {
 		if menuui.fuzzy_match(pair[0], pair[1]) { fmt.println("Fuzzy search should not match:", pair); return false }
 	}
 	if !menuui.fuzzy_match("", "Anything") || !menuui.fuzzy_match("  ", "Anything") { fmt.println("An empty query matches every row"); return false }
+	// Synonyms: "disable" finds Hide rows and "enable" finds Show rows.
+	synonyms := [?][2]string{
+		{"disable", "Hide cats"}, {"disable cats", "Hide cats"}, {"Disable", "Hide extra props"},
+		{"disable extra props", "Hide extra props"}, {"remove props", "Hide extra props"},
+		{"enable ping", "Show Ping"}, {"display fps", "Show FPS"}, {"hide cats", "Hide cats"},
+	}
+	for pair in synonyms {
+		if !menuui.search_label_match(pair[0], pair[1]) { fmt.println("Synonym search should match:", pair); return false }
+	}
+	synonym_misses := [?][2]string{
+		{"disable", "Master volume"}, {"disable ping", "Show Ping"}, {"enable cats", "Hide cats"}, {"disable", "Hideout"},
+	}
+	for pair in synonym_misses {
+		if menuui.search_label_match(pair[0], pair[1]) { fmt.println("Synonym search should not match:", pair); return false }
+	}
 	ranked := [?][3]string{
 		// Query, better label, worse label: prefixes and contiguous runs beat
 		// word-start abbreviations, which beat matches in the middle of words.
@@ -79,6 +94,14 @@ test_settings_search :: proc() -> bool {
 		fmt.println("Search must hide rows that do not match"); return false
 	}
 	if state.errors != 0 { fmt.println("Search results reported a layout error"); return false }
+
+	// "Disable" finds the Hide cats / Hide extra props rows through synonyms.
+	search_test_type(&state, view, "Disable")
+	if !search_test_shown(&state, clay.ID("HideCats")) || !search_test_shown(&state, clay.ID("HideExtraProps", 1)) {
+		fmt.println("Searching Disable must list Hide cats and Hide extra props"); return false
+	}
+	if search_test_shown(&state, clay.ID("VSync")) { fmt.println("Searching Disable must hide unrelated rows"); return false }
+	search_test_type(&state, view, "reload")
 
 	// Fuzzy abbreviations, and toggling a result in place.
 	search_test_type(&state, view, "hbar")
