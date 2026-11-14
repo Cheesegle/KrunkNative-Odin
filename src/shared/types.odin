@@ -429,6 +429,9 @@ Player :: struct {
 	ramp_fix:                        ^f32,
 	idle_anim:                       f32,
 	hp_chase:                        f32,
+	// Krunker `canBSeen`: client-side nameplate visibility, refreshed every
+	// 200 ms from teams and a line-of-sight test (see healthbars.odin).
+	can_be_seen:                     bool,
 	position:                        Vec3,
 	last_position:                   Vec3,
 	velocity:                        Vec3,
