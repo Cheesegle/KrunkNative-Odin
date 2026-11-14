@@ -366,6 +366,10 @@ match leaderboard: rank, name and the mode's Krunker columns (Score, Kills,
 Deaths in FFA/TDM and native sessions), grouped by team with team scores. Menus
 keep Tab for keyboard navigation; the board only opens while the cursor is
 captured for play.
+When a match ends, the end screen shows VICTORY, DEFEAT or DRAW, then after
+five seconds the team totals (with the winner's trophy), the next-round
+countdown and the final standings with the mode's end-of-game columns. Press
+Escape to dismiss it and reach the menu until the next match starts.
 
 Main uses a manually entered Mouse DPI and sensitivity in cm/360. Click either
 value to type, then press Enter or Tab to confirm. DPI changes preserve the
