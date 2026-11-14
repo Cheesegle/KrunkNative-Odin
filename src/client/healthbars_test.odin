@@ -53,7 +53,7 @@ when ODIN_TEST {
 	}
 
 	@(test)
-	healthbars_render_above_players_and_respect_world_depth :: proc(t: ^testing.T) {
+	healthbars_render_above_players_as_unclipped_overlay :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
 		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
@@ -98,8 +98,15 @@ when ODIN_TEST {
 		wall.transform.position, wall.transform.scale = {0, -100, -40}, {200, 200, 1}
 		scene_add_mesh(client.scene, wall)
 		defer mesh_fini(wall)
-		occluded_red, occluded_green := healthbar_test_colors(&client, pixels)
-		testing.expect(t, occluded_red == 0 && occluded_green == 0, "map walls must occlude overhead bars using the world depth buffer")
+		// A surface between the camera and the bars (a wall-mounted prop, or
+		// a wall the line-of-sight gate does not count as blocking) must not
+		// cut the bars: Krunker draws them on a 2D overlay canvas.
+		covered_red, covered_green := healthbar_test_colors(&client, pixels)
+		testing.expectf(t, covered_red == half_red && covered_green == green, "geometry in front of a shown bar must never clip it, even partially (%d/%d red, %d/%d green)", covered_red, half_red, covered_green, green)
+		testing.expect(t, !gl.IsEnabled(gl.DEPTH_TEST), "overlay bars must be drawn without depth testing")
+		wall.transform.position, wall.transform.scale = {-10, -100, -40}, {3, 200, 1}
+		half_covered_red, half_covered_green := healthbar_test_colors(&client, pixels)
+		testing.expectf(t, half_covered_red == half_red && half_covered_green == green, "a surface covering half a bar must not cut that bar in half (%d/%d red)", half_covered_red, half_red)
 		scene_remove_mesh(client.scene, wall)
 		los_wall := shared.Object{active = true, collision_type = .BOX, position = {-10, 0, -80}, scale = {2, 40, 12}}
 		los_map := shared.Map{}

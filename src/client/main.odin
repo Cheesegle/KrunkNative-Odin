@@ -1120,12 +1120,14 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	client.camera.fov = saved_fov
-	player_healthbars_update_visibility(client, now)
-	player_healthbars_render(client)
 
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+
+	// Overlay pass: bars use the world camera for projection only.
+	player_healthbars_update_visibility(client, now)
+	player_healthbars_render(client)
 
 	ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 

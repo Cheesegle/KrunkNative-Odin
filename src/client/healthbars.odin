@@ -46,20 +46,11 @@ player_healthbars_render :: proc(client: ^Client) {
 
 	ui := client.ui
 	ui_update(ui, f32(client.viewport_width), f32(client.viewport_height))
-	// This pass runs against the world's depth buffer before it is cleared
-	// for the view model. The GPU hides bars behind actual map geometry, with
-	// no per-player collision scans or depth-buffer readbacks on the CPU.
-	gl.Enable(gl.DEPTH_TEST)
-	gl.DepthMask(gl.FALSE)
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-	defer {
-		gl.Uniform1f(u_quad.depth, 0)
-		gl.DepthMask(gl.TRUE)
-		gl.Disable(gl.DEPTH_TEST)
-	}
+	// Krunker draws nameplates on its 2D overlay canvas, projected from 3D:
+	// geometry never cuts a bar. Whether a bar exists at all is decided by
+	// the line-of-sight gate (`can_be_seen`), so draw it whole, untested
+	// against the world depth buffer and on top of the view model.
+	gl.Disable(gl.DEPTH_TEST)
 	view_projection := client.camera.projection_matrix * client.camera.world_inverse_matrix
 	for player in client.game.players {
 		if player == nil || player == client.me || player.is_you || !player.active || player.health <= 0 || player.max_health <= 0 || !player.can_be_seen { continue }
@@ -74,7 +65,6 @@ player_healthbars_render :: proc(client: ^Client) {
 		progress := clamp(player.health/f32(player.max_health), 0, 1)
 		friendly := client.me.team != 0 && player.team == client.me.team
 		color := shared.hex_to_vec(friendly ? 0x9eeb56 : 0xff4444)
-		gl.Uniform1f(u_quad.depth, screen.z)
 		ui_fill_rect(ui, {0, 0, 0, 0.85}, left-border, top-border, width+2*border, height+2*border)
 		ui_fill_rect(ui, {0.15, 0.15, 0.15, 1}, left, top, width, height)
 		ui_fill_rect(ui, color, left, top, width*progress, height)
