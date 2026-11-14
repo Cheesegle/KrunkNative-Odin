@@ -78,6 +78,9 @@ settings_window :: proc(state: ^State, view: View) {
 						settings_note("Round score: objective points this round. Game score: rounds won.", s)
 						settings_section("Performance", s)
 						settings_fps_row(state)
+						settings_section("Players", s)
+						settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 3})
+						settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 4})
 					}
 				}
 				settings_scrollbar(state)

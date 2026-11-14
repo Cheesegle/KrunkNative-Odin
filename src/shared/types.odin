@@ -514,7 +514,9 @@ Game_Config :: struct {
 	select_team:        bool,
 	allow_spectate:     bool,
 	third_person:       bool,
-	hide_nametags:      bool,
+	// Lobby rule `config.nameTags`, "Hide Nametags (Enemies)": hides enemy
+	// nameplates (bar and name) for everyone in the match.
+	hide_enemy_nametags: bool,
 	team1_name:         string,
 	team2_name:         string,
 	team1_damage:       f32,
@@ -691,7 +693,7 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	select_team     = false,
 	allow_spectate  = true,
 	third_person    = false,
-	hide_nametags   = false,
+	hide_enemy_nametags = false,
 	team1_name      = "Team 1",
 	team2_name      = "Team 2",
 	team1_damage    = 1.0,

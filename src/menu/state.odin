@@ -12,7 +12,8 @@ Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BR
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE }
-HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score: bool }
+// Stored as "hide" flags so settings files without a key keep the item shown.
+HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_nametags, hide_healthbars: bool }
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
 	fov: f32,
@@ -387,6 +388,8 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 0: state.settings_draft.hud.hide_timer = !state.settings_draft.hud.hide_timer
 			case 1: state.settings_draft.hud.hide_round_score = !state.settings_draft.hud.hide_round_score
 			case 2: state.settings_draft.hud.hide_game_score = !state.settings_draft.hud.hide_game_score
+			case 3: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
+			case 4: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			}
 			return {}
 		case .RESOLUTION:
