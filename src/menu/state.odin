@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE }
@@ -16,6 +16,7 @@ Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FIL
 HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_ping: bool }
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
+	fullscreen_index: i32, // Index into View.fullscreen_options.
 	fov: f32,
 	sensitivity, mouse_dpi: f32,
 	ads_sensitivity: f32,
@@ -61,6 +62,9 @@ View :: struct {
 	display_mode: i32,
 	resolution_index: i32,
 	resolution_options: []string,
+	// Exclusive fullscreen sizes for the selected monitor, largest first.
+	fullscreen_index: i32,
+	fullscreen_options: []string,
 	monitor_index: i32,
 	monitor_names: []string,
 	vsync: bool,
@@ -109,7 +113,7 @@ State :: struct {
 	scrollbar_dragging: bool,
 	scrollbar_grab: f32,
 	settings_draft: Settings_Values,
-	settings_resolution_count: i32,
+	settings_resolution_count, settings_fullscreen_count: i32,
 	settings_resolution_selected: bool,
 	binding_capture: i32, // action*2 + slot + 1; zero when not listening.
 	binding_reserved: bool,
@@ -125,6 +129,14 @@ State :: struct {
 	color_length: int,
 	color_replace, color_invalid: bool,
 	crosshair_preview: Crosshair_Preview,
+	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
+	// can make it several kilobytes, so the field holds up to 64 KiB.
+	import_open, import_overflow: bool,
+	import_buffer: [65536]u8,
+	import_length: int,
+	settings_message: [160]u8,
+	settings_message_length: int,
+	settings_message_error: bool,
 }
 
 prepare_settings :: proc(state: ^State, view: View) {
@@ -134,11 +146,13 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.binding_capture, state.settings_dropdown = 0, .NONE
 		state.number_edit = .NONE
 		state.color_edit = 0
+		settings_import_close(state)
+		state.settings_message_length = 0
 		return
 	}
 	if !state.settings_active {
 		state.settings_resolution_selected = false
-		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index,
+		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
 			monitor_index = view.monitor_index, vsync = view.vsync, bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
@@ -146,6 +160,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.settings_active = true
 	}
 	state.settings_resolution_count = i32(len(view.resolution_options))
+	state.settings_fullscreen_count = i32(len(view.fullscreen_options))
 	if state.page == .CONTROLS { state.settings_tab = .INPUT }
 }
 
@@ -190,6 +205,9 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	clay.SetPointerState(input.pointer, input.down)
 	defer state.previous = input
 	if state.color_edit != 0 && settings_color_interact(state, input) { return {} }
+	if state.import_open {
+		if action, handled := settings_import_interact(state, input); handled { return action }
+	}
 	if state.number_edit != .NONE && settings_number_interact(state, input) { return {} }
 	// Capture runs before menu shortcuts: Enter, Tab, arrows and mouse buttons
 	// can all be rebound without activating another control behind the listener.
@@ -327,7 +345,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .NONE:
 		case .DISPLAY_MODE: index = state.settings_draft.display_mode
 		case .MONITOR: index = state.settings_draft.monitor_index
-		case .RESOLUTION: index = state.settings_draft.resolution_index
+		case .RESOLUTION: index = state.settings_draft.display_mode == 2 ? state.settings_draft.fullscreen_index : state.settings_draft.resolution_index
 		case .TEXTURE_FILTER: index = state.settings_draft.quality.smooth_textures ? 1 : 0
 		case .CROSSHAIR_TYPE: index = 0
 		case .ANISOTROPY:
@@ -335,6 +353,22 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
 		return {}
+	}
+	if control.action.kind == .SETTINGS_IMPORT_OPEN {
+		state.import_open, state.import_length, state.import_overflow = true, 0, false
+		state.settings_message_length, state.pressed = 0, 0
+		state.focus = clay.ID("ImportConfirm").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_IMPORT {
+		state.pressed = 0
+		if state.import_overflow { settings_set_message(state, "Settings text is too long.", true); return {} }
+		result, error := krunker_settings_import(&state.settings_draft, string(state.import_buffer[:state.import_length]))
+		if len(error) > 0 { settings_set_message(state, error, true); return {} }
+		settings_import_close(state)
+		state.focus = clay.ID("SettingsImport").id
+		settings_set_message(state, fmt.tprintf("Imported %d Krunker settings. Ignored %d unsupported.", result.imported, result.ignored), false)
+		return {kind = .SETTINGS_IMPORT} // The client applies and saves the draft, as Save does.
 	}
 	if control.action.kind == .SETTINGS_TAB {
 		state.settings_tab = Settings_Tab(control.action.index)
@@ -353,6 +387,8 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.number_edit = .NONE
 		state.color_edit, state.color_invalid = 0, false
 		state.binding_reserved = false
+		settings_import_close(state)
+		state.settings_message_length = 0
 		return control.action if control.action.kind == .SETTINGS_SAVE else Action{}
 	}
 	if state.settings_active {
@@ -379,7 +415,11 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .ANISOTROPY: state.settings_draft.quality.anisotropy = ANISOTROPY_LEVELS[clamp(control.action.index, 0, 4)]; return {}
 		case .MONITOR: state.settings_draft.monitor_index = control.action.index; return {}
 		case .RESOLUTION_SELECT:
-			state.settings_draft.resolution_index = control.action.index
+			if state.settings_draft.display_mode == 2 {
+				state.settings_draft.fullscreen_index = control.action.index
+			} else {
+				state.settings_draft.resolution_index = control.action.index
+			}
 			state.settings_resolution_selected = true
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
@@ -392,9 +432,11 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			}
 			return {}
 		case .RESOLUTION:
-			count := state.settings_resolution_count
+			fullscreen := state.settings_draft.display_mode == 2
+			count := fullscreen ? state.settings_fullscreen_count : state.settings_resolution_count
+			index := fullscreen ? &state.settings_draft.fullscreen_index : &state.settings_draft.resolution_index
 			if count > 0 {
-				state.settings_draft.resolution_index = (state.settings_draft.resolution_index + control.action.index + count) % count
+				index^ = (index^ + control.action.index + count) % count
 				state.settings_resolution_selected = true
 			}
 			return {}

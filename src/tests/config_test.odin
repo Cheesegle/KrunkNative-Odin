@@ -766,6 +766,9 @@ test_objective_combat_state :: proc() -> bool {
 		spread_plus = 123.5,
 		projectile_shot_seq = 23,
 		secondary_id = 15,
+		score = 1250,
+		kills = 11,
+		deaths = 4,
 	}
 	player_packet_size := shared.packet_serialize_state(buf[:], &player_state)
 	header_payload_size, _ := endian.get_u16(buf[5:7], .Little)
@@ -774,7 +777,9 @@ test_objective_combat_state :: proc() -> bool {
 	wire_ack, _ := endian.get_i32(buf[88:92], .Little)
 	wire_spread_plus, _ := endian.get_f32(buf[92:96], .Little)
 	wire_projectile_seq, _ := endian.get_u32(buf[96:100], .Little)
-	if player_packet_size != 104 || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
+	wire_score, _ := endian.get_u32(buf[104:108], .Little)
+	wire_deaths, _ := endian.get_u32(buf[112:116], .Little)
+	if player_packet_size != 116 || wire_score != player_state.score || wire_deaths != player_state.deaths || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
 		fmt.eprintln("Player-state fixed wire layout test failed")
 		return false
 	}
