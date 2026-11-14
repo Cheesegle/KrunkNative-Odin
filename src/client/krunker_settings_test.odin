@@ -1,0 +1,143 @@
+package main
+
+import "core:math"
+import "core:strings"
+import "core:testing"
+import menuui "../menu"
+
+when ODIN_TEST {
+	// A Krunker export: non-default list values with real key names, "controls"
+	// with JS keyCodes (sparse moveKeys -> null), and "customize".
+	KRUNKER_SAMPLE_EXPORT :: `{"showTrails":false,"showFPS":true,"crosshairSho":5,"crosshairOpacity":0.6,"crosshairUseOpacity":true,"crosshairAlways":true,"crosshairColor":"#00ff00","crosshairShadow":"#202020","crosshairShadowThickess":1.5,"crosshairThick":3,"crosshairLen":10.5,"crosshairGap":4,"crosshairDot":false,"sensitivityX":1.6,"sensitivityY":1.6,"aimSensitivityX":1.6,"aimSensitivityY":1.6,"invertY":true,"sound":0.5,"playerVolume":0.7,"uiVolume":0.3,"fov":110,"fpsFOV":110,"weaponBob":0.2,"weaponLean":0,"weaponOffX":1.5,"adsFovMlt":0.5,"toggleADS":true,"showHands":false,"leftHand":true,"saturationn":1.4,"resolution":1,"scaleUI":0.8,"hitColor":"#ff0000","customize":{"favorites":[]},"controls":{"moveKeys":[90,null,81],"moveKeys_alt":[38,40,37,39],"crouchKey":67,"shoot1Key_alt":-1,"aim1Key":10002,"reloadKey":70,"inspKey":71,"swapKey":10004,"meleeKey":20000,"sprayKey":84,"toggleSets":["","","","","",""]}}`
+
+	krunker_test_values :: proc() -> menuui.Settings_Values {
+		return {fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 0.5, advanced_sensitivity = true, mouse_dpi = 1600, audio_volumes = {0.8, 1, 0.8, 0.6},
+			bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
+	}
+
+	@(test)
+	krunker_import_full_sample :: proc(t: ^testing.T) {
+		values := krunker_test_values()
+		result, error := menuui.krunker_settings_import(&values, KRUNKER_SAMPLE_EXPORT)
+		testing.expect_value(t, error, "")
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 43, ignored = 7})
+		testing.expect(t, abs(values.sensitivity-1.6) < 0.0001 && !values.advanced_sensitivity && values.invert_mouse && values.mouse_dpi == 1600, "sensitivity, inversion and DPI")
+		testing.expect(t, values.fov == 110 && values.show_fps && values.trails == menuui.Trail_Settings{hide_others = true, hide_yours = false}, "fov, FPS and trails")
+		testing.expect(t, values.audio_volumes == [4]f32{0.5, 1, 0.7, 0.3}, "master, footsteps and UI volume; effects untouched")
+		testing.expect(t, abs(values.visuals.values[.SATURATION]-1.4) < 0.0001, "saturation")
+		vm := values.viewmodel
+		testing.expect(t, vm.values[.WEAPON_FOV] == 110 && abs(vm.values[.BOBBING]-0.2) < 0.0001 && vm.values[.LEANING] == 0 && vm.values[.OFFSET_X] == 1.5 && vm.values[.ADS_FOV_POWER] == 0.5, "viewmodel values")
+		testing.expect(t, abs(vm.values[.OFFSET_Y]-1.3) < 0.0001 && vm.toggles[.TOGGLE_ADS] && !vm.toggles[.SHOW_HANDS] && vm.toggles[.LEFT_HANDED] && vm.toggles[.AIM_ANIMATION], "absent viewmodel keys use Krunker defaults")
+		ch := values.crosshair
+		testing.expect(t, ch.color == 0x00ff00 && ch.shadow_color == 0x202020 && ch.toggles == {.CUSTOM_OPACITY = true, .ALWAYS_SHOW = true, .DOT = false}, "crosshair colors and toggles")
+		testing.expect(t, abs(ch.values[.OPACITY]-0.6) < 0.0001 && ch.values[.SHADOW] == 1.5 && ch.values[.THICKNESS] == 3 && ch.values[.SIZE] == 10.5 && ch.values[.GAP] == 4, "crosshair values")
+		b := values.bindings
+		testing.expect(t, b[.FORWARD] == {'Z', 265} && b[.BACKWARD] == {'S', 264} && b[.LEFT] == {'Q', 263} && b[.RIGHT] == {'D', 262}, "moveKeys and sparse nulls")
+		testing.expect(t, b[.CROUCH] == {'C', 0} && b[.FIRE] == {-1, 0} && b[.AIM] == {-3, 0} && b[.RELOAD] == {'F', 0} && b[.INSPECT] == {'G', 0} && b[.SECONDARY] == {-4, 0}, "named binds")
+		testing.expect(t, b[.MELEE] == {'Q', 0} && b[.JUMP] == {32, 0} && b[.MENU] == {256, 0}, "scroll-wheel melee is skipped; absent binds stay unchanged")
+	}
+
+	@(test)
+	krunker_import_partial_and_unknown :: proc(t: ^testing.T) {
+		values := krunker_test_values()
+		values.fov = 80
+		values.bindings[.JUMP] = {'V', 0}
+		values.audio_volumes[1] = 0.4
+		result, error := menuui.krunker_settings_import(&values, `{"fov":120,"someFutureKey":1,"sensitivityX_3":2,"crosshairColor":"red","weaponBob":null,"aimSensitivityX":3}`)
+		testing.expect_value(t, error, "")
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 1, ignored = 4})
+		testing.expect(t, values.fov == 120 && values.mouse_dpi == 1600 && values.bindings[.JUMP] == {'V', 0} && values.audio_volumes[1] == 0.4, "known value applied; DPI, binds and effects volume preserved")
+		testing.expect(t, abs(values.viewmodel.values[.BOBBING]-0.7) < 0.0001 && abs(values.audio_volumes[0]-0.8) < 0.0001 && values.crosshair.color == 0xffffff && values.sensitivity == 1,
+			"absent, null and invalid values reset to Krunker defaults, as Krunker's import does")
+	}
+
+	@(test)
+	krunker_import_rejects_bad_input :: proc(t: ^testing.T) {
+		for text in ([?]string{"", "   ", "not json", "[1,2]", "5", `{"fov":`, `{"fov":100} x`, `{'fov':100}`, `{"fov":100`}) {
+			values := krunker_test_values()
+			values.fov = 77
+			before := values
+			result, error := menuui.krunker_settings_import(&values, text)
+			testing.expectf(t, len(error) > 0 && result == {} && values == before, "bad input %q must be rejected without changes", text)
+		}
+	}
+
+	@(test)
+	krunker_import_clamps :: proc(t: ^testing.T) {
+		values := krunker_test_values()
+		values.mouse_dpi = 800
+		result, error := menuui.krunker_settings_import(&values, `{"fov":500,"crosshairGap":-1000,"crosshairThick":"250","sensitivityX":100,"saturationn":3,"weaponRot":-9,"sound":2,"showFPS":"false","crosshairDot":0}`)
+		testing.expect_value(t, error, "")
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 9, ignored = 0})
+		testing.expect(t, values.fov == menuui.MAX_FOV && values.crosshair.values[.GAP] == -100 && values.crosshair.values[.THICKNESS] == 100, "Krunker ranges")
+		testing.expect(t, values.sensitivity == menuui.sensitivity_validate(15, 800) && values.visuals.values[.SATURATION] == 2 && values.viewmodel.values[.ROTATION] == -2 && values.audio_volumes[0] == 1, "Krodin validators")
+		testing.expect(t, !values.show_fps && !values.crosshair.toggles[.DOT], "switch coercion")
+	}
+
+	@(test)
+	krunker_keycode_mapping :: proc(t: ^testing.T) {
+		pairs := [?][2]i64{{87, 'W'}, {48, '0'}, {32, 32}, {13, 257}, {9, 258}, {8, 259}, {16, 340}, {17, 341}, {18, 342}, {20, 280},
+			{37, 263}, {38, 265}, {39, 262}, {40, 264}, {46, 261}, {96, 320}, {105, 329}, {107, 334}, {112, 290}, {123, 301},
+			{186, 59}, {187, 61}, {188, 44}, {189, 45}, {190, 46}, {191, 47}, {219, 91}, {220, 92}, {221, 93}, {222, 39},
+			{-1, 0}, {10001, -1}, {10002, -3}, {10003, -2}, {10004, -4}, {10005, -5}}
+		for pair in pairs {
+			code, ok := menuui.krunker_key_to_binding(pair[0])
+			testing.expectf(t, ok && i64(code) == pair[1], "Krunker %d -> %d, got %d", pair[0], pair[1], code)
+			js, back := menuui.binding_to_krunker_key(code)
+			testing.expectf(t, back && js == pair[0], "GLFW %d -> Krunker %d, got %d", code, pair[0], js)
+		}
+		for rejected in ([?]i64{20000, 27, 192, 0, 255, 99999}) {
+			_, ok := menuui.krunker_key_to_binding(rejected)
+			testing.expectf(t, !ok, "Krunker code %d has no Krodin binding", rejected)
+		}
+		js, ok := menuui.binding_to_krunker_key(344)
+		testing.expect(t, ok && js == 16, "right shift exports as Shift")
+	}
+
+	@(test)
+	krunker_export_round_trip :: proc(t: ^testing.T) {
+		source := krunker_test_values()
+		_, error := menuui.krunker_settings_import(&source, KRUNKER_SAMPLE_EXPORT)
+		testing.expect_value(t, error, "")
+		text := menuui.krunker_settings_export(source)
+		defer delete(text)
+		testing.expect(t, strings.has_prefix(text, `{"showTrails":false,"showFPS":true,"crosshairSho":5,`) && strings.contains(text, `"crosshairColor":"#00ff00"`) &&
+			strings.contains(text, `"fov":110,`) && strings.contains(text, `"moveKeys":[90,null,81]`) && strings.contains(text, `"aim1Key":10002`), "export uses Krunker's keys and value encodings")
+		target := krunker_test_values()
+		target.fov, target.bindings[.MELEE] = 60, {'M', 0}
+		result, import_error := menuui.krunker_settings_import(&target, text)
+		testing.expect_value(t, import_error, "")
+		testing.expect(t, result.ignored == 0 && result.imported > 0, "a Krodin export imports without ignored keys")
+		testing.expect(t, target.fov == source.fov && target.sensitivity == source.sensitivity && target.invert_mouse == source.invert_mouse && target.show_fps == source.show_fps && target.trails == source.trails, "general settings round trip")
+		testing.expect(t, target.audio_volumes == source.audio_volumes && target.viewmodel == source.viewmodel && target.crosshair == source.crosshair && target.visuals == source.visuals, "audio, viewmodel, crosshair and saturation round trip")
+		expected := source.bindings
+		expected[.MELEE] = {'M', 0}
+		testing.expect(t, target.bindings == expected, "changed binds round trip; Q melee equals Krunker's default, is not exported, and the target's bind stays (Krunker semantics)")
+		target.bindings[.MELEE] = source.bindings[.MELEE]
+		again := menuui.krunker_settings_export(target)
+		defer delete(again)
+		testing.expect_value(t, again, text)
+		defaults := menuui.krunker_settings_export({fov = 100, sensitivity = 1, mouse_dpi = 800, audio_volumes = {0.8, 1, 1, 1}, bindings = #partial {.FORWARD = {'W', 0}, .BACKWARD = {'S', 0}, .LEFT = {'A', 0}, .RIGHT = {'D', 0}, .FIRE = {-1, 220}, .AIM = {-2, 221}},
+			visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = {values = #partial {.WEAPON_FOV = 95, .BOBBING = 0.7, .LEANING = 0.6, .OFFSET_X = 1, .OFFSET_Y = 1.3, .OFFSET_Z = 1, .ADS_OFFSET_Y = 1, .SWAP_Y = 1, .RELOAD_Y = 1, .ADS_FOV_POWER = 1},
+			toggles = #partial {.AIM_ANIMATION = true, .SHOW_HANDS = true, .SHOW_PRIMARY = true, .SHOW_SECONDARY = true, .SHOW_MELEE = true}}, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS})
+		defer delete(defaults)
+		testing.expect_value(t, defaults, `{"crosshairSho":5,"controls":{"jumpKey":-1,"crouchKey":-1,"reloadKey":-1,"swapKey":-1,"meleeKey":-1,"inspKey":-1}}`)
+	}
+
+	@(test)
+	krunker_import_applies_like_save :: proc(t: ^testing.T) {
+		client := Client{sensitivity = 1, audio_settings = DEFAULT_AUDIO_SETTINGS, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS}
+		client.menu.page = .SETTINGS
+		client.menu.settings_draft = krunker_test_values()
+		client.menu.settings_active = true
+		client.menu.import_open = true
+		client.menu.import_length = copy(client.menu.import_buffer[:], KRUNKER_SAMPLE_EXPORT)
+		action := menuui.activate(&client.menu, {action = {kind = .SETTINGS_IMPORT}})
+		testing.expect(t, action.kind == .SETTINGS_IMPORT && !client.menu.import_open && client.menu.page == .SETTINGS, "a successful import closes the popup and keeps Settings open")
+		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 43 Krunker settings. Ignored 7 unsupported.")
+		menu_apply_action(&client, action)
+		testing.expect(t, abs(client.camera.fov-110*math.PI/180) < 0.000001 && abs(client.sensitivity-1.6) < 0.0001 && client.invert_mouse && client.show_fps && client.settings_dirty, "import commits the draft like Save")
+		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && client.audio_settings == Audio_Settings{0.5, 1, 0.7, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
+		testing.expect(t, client_settings_snapshot(&client).viewmodel == client.viewmodel_settings, "imported viewmodel persists with the client settings")
+	}
+}

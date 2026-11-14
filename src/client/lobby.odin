@@ -301,48 +301,63 @@ client_lobby_presentation :: proc(client: ^Client) -> menuui.Lobby_Presentation 
 	return client.net.connected ? .COMPETITIVE : .STANDARD
 }
 
+// Commits the settings draft to the client (Save and Krunker import).
+client_apply_settings_draft :: proc(client: ^Client) {
+	values := client.menu.settings_draft
+	mode := Display_Mode(clamp(values.display_mode, 0, 2))
+	resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
+	fullscreen := client_staged_fullscreen_resolution(client, values)
+	if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || fullscreen != client.fullscreen_resolution || mode == .Windowed && client.menu.settings_resolution_selected {
+		client_remember_windowed_rect(client)
+		client.display_mode, client.resolution_index = mode, resolution
+		client.fullscreen_resolution = fullscreen
+		client.monitor_index = values.monitor_index
+		client_apply_display_settings(client)
+	}
+	client.mouse_dpi = menuui.mouse_dpi_validate(values.mouse_dpi)
+	client.sensitivity = menuui.sensitivity_validate(values.sensitivity, client.mouse_dpi)
+	client.ads_sensitivity = menuui.ads_sensitivity_validate(values.ads_sensitivity, client.sensitivity, client.mouse_dpi)
+	client.advanced_sensitivity, client.invert_mouse = values.advanced_sensitivity, values.invert_mouse
+	client.camera.fov = menuui.fov_validate(values.fov) * math.PI / 180
+	client.show_fps = values.show_fps
+	client.bindings, client.hud_settings = values.bindings, values.hud
+	client.visual_settings, client.quality_settings = menuui.visual_settings_validate(values.visuals), menuui.quality_settings_validate(values.quality)
+	client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
+	client.trail_settings = values.trails
+	client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
+	client.aim_toggled = false
+	client.last_swap_key = 0
+	if client.vsync != values.vsync {
+		client.vsync = values.vsync
+		if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
+	}
+	client.settings_dirty = true
+	settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3]})
+	if client.audio_settings != settings {
+		client.audio_settings = settings
+		audio_set_settings(client.audio, settings)
+		client.audio_settings_dirty, client.audio_save_delay = true, 0.5
+	}
+}
+
 menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: proc(^Krunker_WS_State, string) -> bool = krunker_ws_send) {
 	if action.kind != .NONE && action.kind != .EDIT_INVITE && action.kind != .INSPECT_CLASS && action.kind != .AUDIO_VOLUME && action.kind != .SENSITIVITY {
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR:
-	case .SETTINGS_SAVE:
-		values := client.menu.settings_draft
-		mode := Display_Mode(clamp(values.display_mode, 0, 2))
-		resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
-		fullscreen := client_staged_fullscreen_resolution(client, values)
-		if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || fullscreen != client.fullscreen_resolution || mode == .Windowed && client.menu.settings_resolution_selected {
-			client_remember_windowed_rect(client)
-			client.display_mode, client.resolution_index = mode, resolution
-			client.fullscreen_resolution = fullscreen
-			client.monitor_index = values.monitor_index
-			client_apply_display_settings(client)
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN:
+	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
+		// Import applies and saves immediately, like Krunker's importSettings.
+		client_apply_settings_draft(client)
+	case .SETTINGS_EXPORT:
+		text := menuui.krunker_settings_export(client.menu.settings_draft)
+		defer delete(text)
+		if client.window != nil {
+			value := strings.clone_to_cstring(text)
+			glfw.SetClipboardString(client.window, value)
+			delete(value)
 		}
-		client.mouse_dpi = menuui.mouse_dpi_validate(values.mouse_dpi)
-		client.sensitivity = menuui.sensitivity_validate(values.sensitivity, client.mouse_dpi)
-		client.ads_sensitivity = menuui.ads_sensitivity_validate(values.ads_sensitivity, client.sensitivity, client.mouse_dpi)
-		client.advanced_sensitivity, client.invert_mouse = values.advanced_sensitivity, values.invert_mouse
-		client.camera.fov = menuui.fov_validate(values.fov) * math.PI / 180
-		client.show_fps = values.show_fps
-		client.bindings, client.hud_settings = values.bindings, values.hud
-		client.visual_settings, client.quality_settings = menuui.visual_settings_validate(values.visuals), menuui.quality_settings_validate(values.quality)
-		client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
-		client.trail_settings = values.trails
-		client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
-		client.aim_toggled = false
-		client.last_swap_key = 0
-		if client.vsync != values.vsync {
-			client.vsync = values.vsync
-			if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
-		}
-		client.settings_dirty = true
-		settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3]})
-		if client.audio_settings != settings {
-			client.audio_settings = settings
-			audio_set_settings(client.audio, settings)
-			client.audio_settings_dirty, client.audio_save_delay = true, 0.5
-		}
+		menuui.settings_set_message(&client.menu, "Krunker settings copied to the clipboard.", false)
 	case .PASTE:
 		menuui.set_invite(&client.menu, glfw.GetClipboardString(client.window))
 		client.menu.focus = clay.ID("Invite").id

@@ -236,6 +236,31 @@ test_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("SettingsCancel")).kind != .NONE || state.page != .HOME { fmt.println("Settings Cancel failed"); return false }
 	menu_test_frame(&state, view, {})
+	// Krunker's Import Settings popup: bad text is rejected, valid text applies.
+	menu_test_click(&state, view, clay.ID("Settings",u32(menuui.Page.SETTINGS)))
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("SettingsImport")).kind != .NONE || !state.import_open { fmt.println("Import popup did not open"); return false }
+	menu_test_frame(&state, view, {})
+	if !clay.GetElementData(clay.ID("ImportPopup")).found || state.control_count != 1 { fmt.println("Import popup must cover the settings controls"); return false }
+	menu_test_frame(&state, view, {text = "not krunker settings"})
+	draft_before_import := state.settings_draft
+	if menu_test_click(&state, view, clay.ID("ImportConfirm")).kind != .NONE || !state.import_open || !state.settings_message_error || state.settings_draft != draft_before_import { fmt.println("Invalid import text must leave settings untouched"); return false }
+	menu_test_frame(&state, view, {escape = true})
+	if state.import_open || state.page != .SETTINGS { fmt.println("Escape must close only the import popup"); return false }
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsImport"))
+	menu_test_frame(&state, view, {text = `{"fov":110,"sensitivityX":2,"customize":{},"controls":{"jumpKey":70,"sprayKey":71}}`})
+	value = menu_test_frame(&state, view, {enter = true})
+	if value.kind != .SETTINGS_IMPORT || state.import_open || state.page != .SETTINGS || state.settings_draft.fov != 110 || state.settings_draft.sensitivity != 2 || state.settings_draft.bindings[.JUMP] != ([2]i32{'F', 0}) {
+		fmt.println("Valid Krunker settings must import into the draft and be applied", value, state.settings_draft.fov); return false
+	}
+	if menuui.settings_message(&state) != "Imported 3 Krunker settings. Ignored 2 unsupported." { fmt.println("Import result message:", menuui.settings_message(&state)); return false }
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("SettingsExport")).kind != .SETTINGS_EXPORT { fmt.println("Export must request a clipboard copy"); return false }
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsCancel"))
+	menu_test_frame(&state, view, {})
+	if state.page != .HOME || state.settings_message_length != 0 { fmt.println("Closing settings must clear the import message"); return false }
 	if menu_test_frame(&state, view, {escape=true}).kind != .PLAY { return false }
 	// Offline connection screen: editable invite, paste, join, and errors.
 	view.online=false; view.active=false; view.local_practice=false
@@ -474,7 +499,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.GAMEPLAY)))
 	menu_test_frame(&state, view, {})
-	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
+	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+2+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
 	state.focus = clay.ID("FieldOfView").id
 	menu_test_frame(&state, view, {right=true})
 	if state.settings_draft.fov != 95 { fmt.println("FOV keyboard adjustment must start from the current draft angle"); return false }

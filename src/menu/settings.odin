@@ -38,6 +38,10 @@ settings_window :: proc(state: ^State, view: View) {
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
 				if clay.UI(clay.ID("SettingsHeading"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(80*s)}, padding = {left = u16(32*s), right = u16(32*s)}, childAlignment = {y = .Center}}, backgroundColor = SETTINGS_DARK}) {
 					text(SETTINGS_TABS[state.settings_tab], 28, s)
+					spacer()
+					// Krunker's settings header places Export, then Import (settings.export/settings.import).
+					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s)}}}) { settings_button(state, "Export", "SettingsExport", {kind = .SETTINGS_EXPORT}) }
+					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s), height = clay.SizingFixed(48*s)}, padding = {left = u16(12*s)}}}) { settings_button(state, "Import", "SettingsImport", {kind = .SETTINGS_IMPORT_OPEN}) }
 				}
 				if clay.UI(clay.ID("SettingsPanel"))({
 					layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s))},
@@ -89,12 +93,80 @@ settings_window :: proc(state: ^State, view: View) {
 		}) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(184*s)}}}) { settings_button(state, "Cancel", "SettingsCancel", {kind = .SETTINGS_CANCEL}) }
 			spacer()
-			text(settings_number_hint(state), 16, s, state.number_invalid ? clay.Color{255,100,100,255} : SETTINGS_MUTED)
+			message_error := state.number_edit == .NONE && state.settings_message_length > 0 && state.settings_message_error
+			text(settings_number_hint(state), 16, s, state.number_invalid || message_error ? clay.Color{255,100,100,255} : SETTINGS_MUTED)
 			spacer()
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(184*s)}}}) { settings_button(state, "Save", "SettingsSave", {kind = .SETTINGS_SAVE}, selected = true) }
 		}
 	}
 	settings_dropdown_menu(state, view)
+	settings_import_popup(state)
+}
+
+settings_set_message :: proc(state: ^State, message: string, is_error: bool) {
+	state.settings_message_length = copy(state.settings_message[:], message)
+	state.settings_message_error = is_error
+}
+
+settings_message :: proc(state: ^State) -> string { return string(state.settings_message[:state.settings_message_length]) }
+
+settings_import_close :: proc(state: ^State) {
+	state.import_open, state.import_length, state.import_overflow = false, 0, false
+}
+
+// Mirrors Krunker's importSettingsPopup: a header, a paste field and one
+// Import button. Enter imports; Escape or a click outside closes the popup.
+settings_import_popup :: proc(state: ^State) {
+	if !state.import_open { return }
+	s := state.scale
+	state.control_count = 0 // Settings behind the popup ignore Tab and the mouse.
+	if clay.UI(clay.ID("ImportPopup"))({
+		layout = {sizing = {width = clay.SizingFixed(640*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(28*s)), childGap = u16(16*s), childAlignment = {x = .Center}},
+		backgroundColor = SETTINGS_DARK, cornerRadius = clay.CornerRadiusAll(8*s), border = {color = SETTINGS_LINE, width = clay.BorderOutside(1)},
+		floating = {attachTo = .ElementWithId, parentId = clay.ID("Overlay").id, zIndex = 20, attachment = {element = .CenterCenter, parent = .CenterCenter}},
+	}) {
+		text("Import Settings", 28, s)
+		text("Copy Paste Settings Text Here", 19, s, SETTINGS_MUTED)
+		value := string(state.import_buffer[:state.import_length])
+		if clay.UI(clay.ID("ImportText"))({
+			layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(96*s)}, padding = clay.PaddingAll(u16(12*s))},
+			backgroundColor = {231, 229, 235, 255}, cornerRadius = clay.CornerRadiusAll(4*s), border = {color = WHITE, width = clay.BorderOutside(2)},
+			clip = {horizontal = true, vertical = true},
+		}) {
+			label := len(value) == 0 ? "Press Ctrl+V to paste, or type here." : fmt.tprintf("%s|", shorten(value, 48))
+			text(label, 18, s, len(value) == 0 ? SETTINGS_LINE : SETTINGS_DARK)
+		}
+		if state.settings_message_length > 0 && state.settings_message_error { text(settings_message(state), 16, s, {255, 100, 100, 255}) }
+		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Import", "ImportConfirm", {kind = .SETTINGS_IMPORT}, selected = true) }
+	}
+}
+
+settings_import_interact :: proc(state: ^State, input: Input) -> (action: Action, handled: bool) {
+	if input.escape && !state.previous.escape {
+		settings_import_close(state)
+		state.settings_message_length, state.pressed, state.focus = 0, 0, clay.ID("SettingsImport").id
+		return {}, true
+	}
+	if input.clear_text { state.import_length, state.import_overflow = 0, false }
+	if input.backspace && !state.previous.backspace && state.import_length > 0 {
+		state.import_length -= 1
+		state.import_overflow = false
+	}
+	if len(input.text) > 0 { state.settings_message_length = 0 }
+	for i in 0..<len(input.text) {
+		c := input.text[i]
+		if c < 32 { c = ' ' } // Pasted line breaks and tabs are JSON whitespace.
+		if state.import_length >= len(state.import_buffer) { state.import_overflow = true; break }
+		state.import_buffer[state.import_length] = c
+		state.import_length += 1
+	}
+	if input.enter && !state.previous.enter { return activate(state, {action = {kind = .SETTINGS_IMPORT}}), true }
+	if input.down && !state.previous.down && !clay.PointerOver(clay.ID("ImportPopup")) {
+		settings_import_close(state)
+		state.settings_message_length, state.pressed = 0, 0
+		return {}, true
+	}
+	return {}, false // The Import button uses the normal press/release handling.
 }
 
 settings_button :: proc(state: ^State, label, name: string, action: Action, selected: bool = false, align_left: bool = false, enabled: bool = true) {
