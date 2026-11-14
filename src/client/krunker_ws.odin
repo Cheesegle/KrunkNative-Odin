@@ -509,6 +509,7 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 			case "chi":
 				// Localized server chat can explain a subsequent argumentless fe.
 				kproto.network_log("server-notice", fmt.tprintf("localized_args=%v", packet[1:]))
+				krunker_client_apply_notice(client, packet)
 			case "gmsg":
 				if len(packet) > 1 {
 					if message, ok := packet[1].(string); ok && message != state.last_server_message {
