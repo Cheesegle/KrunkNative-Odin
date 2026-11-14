@@ -228,9 +228,11 @@ test_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("HudGameScore", 2))
 	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("HudPing", 3))
+	menu_test_frame(&state, view, {})
 	value = menu_test_click(&state, view, clay.ID("SettingsSave"))
 	if value.kind != .SETTINGS_SAVE || state.page != .HOME || state.settings_draft.display_mode != 2 || state.settings_draft.fullscreen_index != 1 || state.settings_draft.resolution_index != 0 || !state.settings_draft.show_fps { fmt.println("Settings Save failed"); return false }
-	if !state.settings_draft.vsync || state.settings_draft.monitor_index != 1 || state.settings_draft.hud != (menuui.HUD_Settings{true, true, true}) { fmt.println("Video and HUD settings were not staged"); return false }
+	if !state.settings_draft.vsync || state.settings_draft.monitor_index != 1 || state.settings_draft.hud != (menuui.HUD_Settings{true, true, true, true}) { fmt.println("Video and HUD settings were not staged"); return false }
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("Settings",u32(menuui.Page.SETTINGS)))
 	menu_test_frame(&state, view, {})

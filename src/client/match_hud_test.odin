@@ -107,7 +107,21 @@ when ODIN_TEST {
 					"HUD toggle %d must hide its own element independently (timer=%d points=%d wins=%d)", option, timer_delta, points_delta, wins_delta)
 			}
 			client.hud_settings = {}
+			// Krunker stacks the ping line under FPS in the top-left debug info.
+			client.in_game, client.mouse_state.locked, client.show_fps = true, true, true
+			client.krunker_world.ping, client.krunker_world.has_ping = 72, true
+			client.hud_settings.hide_ping = true
+			match_hud_snapshot(&client, before)
+			fps_render(&client)
+			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(before))
+			client.hud_settings.hide_ping = false
 			match_hud_snapshot(&client, after)
+			fps_render(&client)
+			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(after))
+			fps_line := match_hud_region_delta(&client, before, after, 0, 0, client.ui.width/client.ui.scale*0.5-240, 60)
+			ping_line := match_hud_region_delta(&client, before, after, 0, 60, client.ui.width/client.ui.scale*0.5-240, 104)
+			testing.expectf(t, fps_line == 0 && ping_line > 0, "Show Ping must add only the line under FPS (fps=%d ping=%d)", fps_line, ping_line)
+			client.in_game, client.mouse_state.locked, client.show_fps = false, false, false
 			when #config(HUD_PREVIEW, false) {
 				file := make([dynamic]u8)
 				defer delete(file)

@@ -386,8 +386,38 @@ client_update_fps :: proc(client: ^Client, delta: f32) {
 	}
 }
 
+// Krunker stacks #fpsDisplay and #pingDisplay as block lines in .debugInfo.
+HUD_DEBUG_LINE_HEIGHT :: 40.0
+
+// Krunker's ping colours (z2): low below 50 ms, medium below 150 ms, else high.
+ping_color :: proc(value: i32) -> shared.Vec4 {
+	if value >= 150 { return {255.0/255, 75.0/255, 66.0/255, 1} }
+	if value >= 50 { return {255.0/255, 213.0/255, 66.0/255, 1} }
+	return {158.0/255, 235.0/255, 86.0/255, 1}
+}
+
+// #pingText starts as "0" and shows "-" when the server reports -1.
+ping_label :: proc(value: i32, received: bool) -> string {
+	if !received { return "0" }
+	if value == -1 { return "-" }
+	return fmt.tprintf("%d", value)
+}
+
+// Live sessions use the server-reported ping from SYNC_PLAYER; native
+// sessions use the PING echo round trip. Local practice has no server.
+client_ping :: proc(client: ^Client) -> (value: i32, received, available: bool) {
+	if client.krunker.connected { return client.krunker_world.ping, client.krunker_world.has_ping, true }
+	if client.net.connected { return client.net.ping.rtt_ms, client.net.ping.has_sample, true }
+	return 0, false, false
+}
+
 fps_render :: proc(client: ^Client) {
-	if !client.show_fps || !client.in_game || !client.mouse_state.locked {
+	if !client.in_game || !client.mouse_state.locked {
+		return
+	}
+	ping, ping_received, ping_available := client_ping(client)
+	show_ping := ping_available && !client.hud_settings.hide_ping
+	if !client.show_fps && !show_ping {
 		return
 	}
 
@@ -400,12 +430,20 @@ fps_render :: proc(client: ^Client) {
 	x := 20.0 * client.ui.scale + timer_holder_width + 12.0 * client.ui.scale
 	y := 20.0 * client.ui.scale
 
-	value := fmt.tprintf("%d", client.fps_value)
-	label := " FPS"
 	baseline := y + 33.0 * client.ui.scale
-	ui_fill_text(client.ui, shared.Vec4{0.35, 0.95, 0.1, 1.0}, value, x, baseline, text_size)
-	value_width := ui_measure_text(client.ui, value, text_size)
-	ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, label, x + value_width, baseline, text_size)
+	if client.show_fps {
+		value := fmt.tprintf("%d", client.fps_value)
+		ui_fill_text(client.ui, shared.Vec4{0.35, 0.95, 0.1, 1.0}, value, x, baseline, text_size)
+		value_width := ui_measure_text(client.ui, value, text_size)
+		ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, " FPS", x + value_width, baseline, text_size)
+		baseline += HUD_DEBUG_LINE_HEIGHT * client.ui.scale
+	}
+	if show_ping {
+		value := ping_label(ping, ping_received)
+		ui_fill_text(client.ui, ping_color(ping), value, x, baseline, text_size)
+		value_width := ui_measure_text(client.ui, value, text_size)
+		ui_fill_text(client.ui, shared.Vec4{1.0, 1.0, 1.0, 0.95}, " PING", x + value_width, baseline, text_size)
+	}
 }
 
 client_load_map :: proc(client: ^Client) {
@@ -965,7 +1003,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client.join_queued == 0 { client_join_invite(client) }
 	}
 	if client.net.connected {
-		net_client_poll(client)
+		net_client_poll(client, glfw.GetTime())
 	}
 	if client.krunker.connected {
 		krunker_ws_poll(client)
