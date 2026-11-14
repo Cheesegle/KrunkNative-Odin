@@ -60,7 +60,7 @@ settings_window :: proc(state: ^State, view: View) {
 						settings_section("Display", s)
 						settings_display_rows(state, view)
 						settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
-						settings_note("Resolution applies in windowed mode. Borderless and fullscreen use the selected monitor's resolution.", s)
+						settings_note("Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.", s)
 						settings_quality(state, view)
 					case .VISUALS:
 						settings_visuals(state)
@@ -254,9 +254,22 @@ settings_label :: proc(label: string, s: f32) {
 	if clay.UI()({layout = {sizing = {width = clay.SizingFixed(304*s)}, childAlignment = {y = .Center}}}) { text(label, 21, s) }
 }
 
+// Windowed uses the fixed presets; exclusive fullscreen uses the selected
+// monitor's video modes. Borderless always covers the monitor at its own size.
+settings_resolution_options :: proc(state: ^State, view: View) -> []string {
+	switch state.settings_draft.display_mode {
+	case 0: return view.resolution_options
+	case 2: return view.fullscreen_options
+	}
+	return nil
+}
+
 settings_resolution_label :: proc(state: ^State, view: View) -> string {
+	if state.settings_draft.display_mode == 2 && len(view.fullscreen_options) > 0 {
+		return view.fullscreen_options[clamp(int(state.settings_draft.fullscreen_index), 0, len(view.fullscreen_options)-1)]
+	}
 	// Follow the live window until the user explicitly stages a windowed size.
-	// The saved preset can differ from a resized, borderless or fullscreen window.
+	// The saved preset can differ from a resized or borderless window.
 	if len(view.resolution_options) > 0 && (len(view.resolution) == 0 || state.settings_resolution_selected && state.settings_draft.display_mode == 0) {
 		return view.resolution_options[clamp(int(state.settings_draft.resolution_index), 0, len(view.resolution_options)-1)]
 	}
@@ -284,7 +297,7 @@ settings_display_rows :: proc(state: ^State, view: View) {
 		settings_label("Window resolution", s)
 		spacer()
 		label := settings_resolution_label(state, view)
-		settings_dropdown_field(state, label, "Resolution", .RESOLUTION, len(view.resolution_options) > 0)
+		settings_dropdown_field(state, label, "Resolution", .RESOLUTION, len(settings_resolution_options(state, view)) > 0)
 	}
 }
 

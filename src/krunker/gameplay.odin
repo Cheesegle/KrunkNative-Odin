@@ -76,6 +76,9 @@ krunker_world_init_match :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.lives = 0
 	state.hit_revision, state.last_hit_at = 0, 0
 	state.winner_team, state.end_result = -1, -1
+	// A new match starts with an empty board until the next UPDATE_LEADERS.
+	state.has_leaders = false
+	for &player in state.players { player.leader_rank = 0 }
 	state.timer_received_at, state.objective_received_at, state.lockout_received_at = state.received_at, state.received_at, state.received_at
 	delete(state.timer_text); state.timer_text = ""
 	if len(packet) > 4 { krunker_world_team_scores(&state.match.round_wins, packet[4]) }
@@ -139,27 +142,55 @@ krunker_world_end_lives :: proc(state: ^Krunker_World_State) {
 	}
 }
 
-// Leader records depend on mode, unlike k's fixed stride. Only schemas checked
-// against the browser registry are accepted; an unknown mode is not guessed.
+// Browser mode.leaderStats, indexed by the server mode ID. UPDATE_LEADERS ('7')
+// records are [sid, stat...] in this order, already sorted and capped at 16
+// by the server's syncLeaders. Only schemas checked against the browser
+// registry are listed; an unknown mode is not guessed.
+KRUNKER_LEADER_STATS_FFA := [?]string{"score", "kills", "deaths"}
+KRUNKER_LEADER_STATS_POINT := [?]string{"score", "objective", "kills"}
+KRUNKER_LEADER_STATS_CTF := [?]string{"caps", "score"}
+KRUNKER_LEADER_STATS_GUN := [?]string{"weaponTier", "kills"}
+KRUNKER_LEADER_STATS_CONFIRM := [?]string{"confirms", "score", "denies"}
+KRUNKER_LEADER_STATS_OBJECTIVE := [?]string{"objective", "score"}
+KRUNKER_LEADER_STATS_SCORE_KILLS := [?]string{"score", "kills"}
+
+krunker_mode_leader_stats :: proc(mode_index: i32) -> ([]string, bool) {
+	switch mode_index {
+	case 0, 1, 13, 21: return KRUNKER_LEADER_STATS_FFA[:], true // FFA, TDM, Classic FFA, Sharp Shooter
+	case 2: return KRUNKER_LEADER_STATS_POINT[:], true // Hardpoint
+	case 3: return KRUNKER_LEADER_STATS_CTF[:], true
+	case 10: return KRUNKER_LEADER_STATS_GUN[:], true // Gun Game
+	case 19: return KRUNKER_LEADER_STATS_CONFIRM[:], true // Kill Confirmed
+	case 28, 30: return KRUNKER_LEADER_STATS_OBJECTIVE[:], true // Team Defender, Carrier
+	case 33, 36: return KRUNKER_LEADER_STATS_SCORE_KILLS[:], true // Chaos Snipers, Impulsed
+	}
+	return nil, false
+}
+
 krunker_world_apply_leaders :: proc(state: ^Krunker_World_State, value: Krunker_Msgpack_Value) -> bool {
-	stride, score_offset, kills_offset, deaths_offset := 0, -1, -1, -1
-	switch state.mode_index {
-	case 0, 1, 13, 21: stride, score_offset, kills_offset, deaths_offset = 4, 1, 2, 3
-	case 2: stride, score_offset, kills_offset = 4, 1, 3 // Hardpoint: score, objective, kills
-	case 3: stride, score_offset = 3, 2 // CTF: caps, score
-	case 10: stride, kills_offset = 3, 2 // Gun Game: weaponTier, kills
-	case 19: stride, score_offset = 4, 2 // Kill Confirmed: confirms, score, denies
-	case 28, 30: stride, score_offset = 3, 2 // objective, score
-	case 33, 36: stride, score_offset, kills_offset = 3, 1, 2
-	case: return false
+	stats, known := krunker_mode_leader_stats(state.mode_index); if !known { return false }
+	stride := len(stats) + 1
+	score_offset, kills_offset, deaths_offset := -1, -1, -1
+	for stat, i in stats {
+		switch stat {
+		case "score": score_offset = i + 1
+		case "kills": kills_offset = i + 1
+		case "deaths": deaths_offset = i + 1
+		}
 	}
 	values, ok := krunker_world_array(value); if !ok || len(values)%stride != 0 { return false }
 	// Validate the complete batch before making any changes.
 	for offset := 0; offset < len(values); offset += stride {
 		for i in 0..<stride { if _, valid := krunker_world_bounded_number(values[offset+i], 0, 2147483647); !valid { return false } }
 	}
+	// Each batch replaces the whole board: players absent from it are unranked.
+	for &player in state.players { player.leader_rank = 0 }
+	state.leader_stat_count = len(stats)
+	state.has_leaders = true
 	for offset := 0; offset < len(values); offset += stride {
 		player := krunker_world_upsert_player(state, krunker_world_i32(values[offset]))
+		player.leader_rank = i32(offset/stride) + 1
+		for i in 0..<len(stats) { player.leader_stats[i] = krunker_world_i32(values[offset+1+i]) }
 		if score_offset > 0 { player.score = u32(krunker_world_i32(values[offset+score_offset])) }
 		if kills_offset > 0 { player.kills = u32(krunker_world_i32(values[offset+kills_offset])) }
 		if deaths_offset > 0 { player.deaths = u32(krunker_world_i32(values[offset+deaths_offset])) }

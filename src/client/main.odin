@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:math"
 import "core:os"
+import "core:slice"
 import "core:encoding/json"
 import "core:strings"
 import gl "vendor:OpenGL"
@@ -50,6 +51,7 @@ Client :: struct {
 	crosshair_settings: menuui.Crosshair_Settings,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
+	scoreboard_open: bool,
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
@@ -95,6 +97,8 @@ Client :: struct {
 	menu_scroll:      clay.Vector2,
 	display_mode:      Display_Mode,
 	resolution_index:  i32,
+	// Exclusive fullscreen video mode; zero means the monitor's largest mode.
+	fullscreen_resolution: Display_Resolution,
 	sensitivity:       f32,
 	mouse_dpi:         f32,
 	ads_sensitivity:   f32,
@@ -122,6 +126,7 @@ Client :: struct {
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
+	healthbar_visibility_checked_at: f32,
 	viewport_width: i32,
 	viewport_height: i32,
 }
@@ -160,13 +165,61 @@ monitor_max_video_mode :: proc(monitor: glfw.MonitorHandle) -> (width, height, r
 	return
 }
 
+client_monitor :: proc(index: i32) -> glfw.MonitorHandle {
+	monitors := glfw.GetMonitors()
+	if len(monitors) > 0 { return monitors[clamp(index, 0, i32(len(monitors))-1)] }
+	return glfw.GetPrimaryMonitor()
+}
+
+// Distinct sizes the monitor can switch to in exclusive fullscreen, largest first.
+monitor_resolutions :: proc(monitor: glfw.MonitorHandle, allocator := context.temp_allocator) -> []Display_Resolution {
+	result := make([dynamic]Display_Resolution, allocator)
+	if monitor == nil { return result[:] }
+	for mode in glfw.GetVideoModes(monitor) {
+		size := Display_Resolution{i32(mode.width), i32(mode.height)}
+		if !slice.contains(result[:], size) { append(&result, size) }
+	}
+	slice.sort_by(result[:], proc(a, b: Display_Resolution) -> bool {
+		return a.width*a.height > b.width*b.height || a.width*a.height == b.width*b.height && a.width > b.width
+	})
+	return result[:]
+}
+
+// The chosen fullscreen mode at its highest refresh rate, or the monitor's
+// largest mode when nothing was chosen or the monitor cannot show that size.
+monitor_fullscreen_mode :: proc(monitor: glfw.MonitorHandle, requested: Display_Resolution) -> (width, height, refresh_rate: i32) {
+	width, height, refresh_rate = monitor_max_video_mode(monitor)
+	if requested.width <= 0 || requested.height <= 0 { return }
+	rate: i32
+	for mode in glfw.GetVideoModes(monitor) {
+		if i32(mode.width) == requested.width && i32(mode.height) == requested.height { rate = max(rate, i32(mode.refresh_rate)) }
+	}
+	if rate > 0 { width, height, refresh_rate = requested.width, requested.height, rate }
+	return
+}
+
+// Picker index for the saved fullscreen size; unset or unsupported sizes show
+// the largest mode, which is what monitor_fullscreen_mode then applies.
+client_fullscreen_index :: proc(sizes: []Display_Resolution, requested: Display_Resolution) -> i32 {
+	index, found := slice.linear_search(sizes, requested)
+	return found ? i32(index) : 0
+}
+
+// The fullscreen size Save should apply: the picked mode of the draft's monitor
+// when the draft is Fullscreen and a resolution was picked, else the saved one.
+client_staged_fullscreen_resolution :: proc(client: ^Client, values: menuui.Settings_Values) -> Display_Resolution {
+	if values.display_mode != i32(Display_Mode.Fullscreen) || !client.menu.settings_resolution_selected || client.window == nil { return client.fullscreen_resolution }
+	sizes := monitor_resolutions(client_monitor(values.monitor_index))
+	if len(sizes) == 0 { return client.fullscreen_resolution }
+	return sizes[clamp(values.fullscreen_index, 0, i32(len(sizes))-1)]
+}
+
 client_apply_display_settings :: proc(client: ^Client) {
-	monitor := glfw.GetPrimaryMonitor()
 	monitors := glfw.GetMonitors()
 	if len(monitors) > 0 {
 		client.monitor_index = clamp(client.monitor_index, 0, i32(len(monitors))-1)
-		monitor = monitors[client.monitor_index]
 	}
+	monitor := client_monitor(client.monitor_index)
 	if monitor == nil {
 		return
 	}
@@ -189,7 +242,7 @@ client_apply_display_settings :: proc(client: ^Client) {
 		glfw.SetWindowSize(client.window, mode.width, mode.height)
 	case .Fullscreen:
 		glfw.SetWindowAttrib(client.window, glfw.DECORATED, 1)
-		full_width, full_height, full_refresh_rate := monitor_max_video_mode(monitor)
+		full_width, full_height, full_refresh_rate := monitor_fullscreen_mode(monitor, client.fullscreen_resolution)
 		glfw.SetWindowMonitor(client.window, monitor, 0, 0, full_width, full_height, full_refresh_rate)
 	}
 }
@@ -590,6 +643,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	if state.health < player.health { shared.player_emit_presentation(player, .DAMAGE) }
 	player.health = state.health
 	player.max_health = state.max_health
+	player.score, player.kills, player.deaths = state.score, state.kills, state.deaths
 	player.input_seq = state.ack_seq
 	ownership_changed := player.mesh != nil && player.render_you != state.is_you
 	if ownership_changed {
@@ -993,6 +1047,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	aim_down := client_action_down(client, .AIM)
 	scope_input := client_aim_input(client, aim_down, client.me != nil && client.me.active && client.mouse_state.locked && !client.freecam_enabled)
 	inspect_down := client_action_down(client, .INSPECT)
+	client_scoreboard_update(client)
 	inspect_cancel := false
 
 	if client.me != nil && client.me.active {
@@ -1119,6 +1174,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	client.camera.fov = saved_fov
+	player_healthbars_update_visibility(client, now)
 	player_healthbars_render(client)
 
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
@@ -1171,6 +1227,7 @@ main :: proc() {
 	client.show_fps = options.show_fps || preferences.show_fps
 	client.display_mode = Display_Mode(preferences.display_mode)
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
+	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity

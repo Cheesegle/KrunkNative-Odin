@@ -219,20 +219,22 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 	mode := "Hardpoint"
 	if client.game.mode != nil && !client.game.mode.config.teams { mode = "Free for all" }
 	capacity := int((client.game.config.max_players + 1) / 2)
-	team_names := [2]string{"Alpha", "Bravo"}
-	if client.game.config.team1_name != "Team 1" && len(client.game.config.team1_name) > 0 { team_names[0] = client.game.config.team1_name }
-	if client.game.config.team2_name != "Team 2" && len(client.game.config.team2_name) > 0 { team_names[1] = client.game.config.team2_name }
+	team_names := client_team_names(client)
 	online := client.krunker.connected || client.net.connected
 	team_selection := (client.local_practice || client.krunker.connected && client.krunker_world.lobby_select_team) && (client.game.mode == nil || client.game.mode.config.teams)
 	if client.krunker.connected {
 		capacity = int((client.krunker_world.lobby_capacity+1)/2)
 		if client.krunker_world.lobby_team_capacity > 0 { capacity = int(client.krunker_world.lobby_team_capacity) }
-		for name, i in client.krunker_world.lobby_team_names { if len(name)>0 { team_names[i]=name } }
 	}
-	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity); team_names = client.net.lobby.team_names }
+	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity) }
 	resolution_options := make([]string, len(DISPLAY_RESOLUTIONS), context.temp_allocator)
 	for resolution, i in DISPLAY_RESOLUTIONS { resolution_options[i] = fmt.tprintf("%d x %d", resolution.width, resolution.height) }
 	window_resolution := client_window_resolution(client)
+	fullscreen_sizes: []Display_Resolution
+	if client.window != nil { fullscreen_sizes = monitor_resolutions(client_monitor(client.monitor_index)) }
+	fullscreen_options := make([]string, len(fullscreen_sizes), context.temp_allocator)
+	fullscreen_index := client_fullscreen_index(fullscreen_sizes, client.fullscreen_resolution)
+	for size, i in fullscreen_sizes { fullscreen_options[i] = fmt.tprintf("%d x %d", size.width, size.height) }
 	monitor_names := make([dynamic]string, context.temp_allocator)
 	if client.window != nil {
 		for monitor, i in glfw.GetMonitors() { append(&monitor_names, fmt.tprintf("%d: %s", i+1, glfw.GetMonitorName(monitor))) }
@@ -253,6 +255,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
+		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings,
@@ -303,9 +306,11 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	values := client.menu.settings_draft
 	mode := Display_Mode(clamp(values.display_mode, 0, 2))
 	resolution := clamp(values.resolution_index, 0, i32(len(DISPLAY_RESOLUTIONS))-1)
-	if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || mode == .Windowed && client.menu.settings_resolution_selected {
+	fullscreen := client_staged_fullscreen_resolution(client, values)
+	if client.display_mode != mode || client.resolution_index != resolution || client.monitor_index != values.monitor_index || fullscreen != client.fullscreen_resolution || mode == .Windowed && client.menu.settings_resolution_selected {
 		client_remember_windowed_rect(client)
 		client.display_mode, client.resolution_index = mode, resolution
+		client.fullscreen_resolution = fullscreen
 		client.monitor_index = values.monitor_index
 		client_apply_display_settings(client)
 	}

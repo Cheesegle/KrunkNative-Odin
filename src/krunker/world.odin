@@ -18,6 +18,10 @@ Krunker_World_Player :: struct {
 	secondary_revision: u64,
 	loadout_revision: u64,
 	score, kills, deaths: u32,
+	// Raw UPDATE_LEADERS values in krunker_mode_leader_stats order; rank is
+	// the 1-based server leaderboard position, 0 when absent from the board.
+	leader_stats: [KRUNKER_LEADER_MAX_STATS]i32,
+	leader_rank: i32,
 	noclip, frozen, unlimited_ammo: bool,
 	speed_boost: f32,
 	controls_revision: u64,
@@ -56,6 +60,8 @@ Krunker_World_Player :: struct {
 	send_rate: f32,
 }
 
+KRUNKER_LEADER_MAX_STATS :: 4
+
 Krunker_Countdown :: enum { NONE, WAITING, WARMUP, STARTING, INTERMISSION }
 
 Krunker_World_State :: struct {
@@ -92,6 +98,8 @@ Krunker_World_State :: struct {
 	class_limits: [len(shared.CLASSES_LIST)]i32,
 	lobby_team_names: [2]string,
 	shots:       [dynamic]Krunker_World_Shot,
+	has_leaders: bool,
+	leader_stat_count: int,
 	match: shared.Match_State,
 	has_match: bool,
 	game_state: i32,

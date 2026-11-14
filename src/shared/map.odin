@@ -596,3 +596,29 @@ is_nullish :: proc(val: json.Value) -> bool {
 
 	return false
 }
+
+// Krunker's `canSee` (Game.canSee) as used for nameplates: a segment from the
+// viewer's eye to a target point, tested against every active map box. Objects
+// flagged noShoot (no-collision volumes, zones, triggers, pickups, ramps) and
+// see-through prefabs (`transparent` in the prefab table: grass, windows,
+// light cones) never block it. A box only blocks when the segment enters it
+// strictly before the end point, so a player standing on a floor stays visible.
+map_object_blocks_sight :: proc(object: ^Object) -> bool {
+	if object == nil || !object.active || object.no_shoot || object.collision_type == .NONE || object.ramp != nil { return false }
+	if object.score_zone || object.objective || object.team_zone || object.bomb_site || object.flag || object.trigger ||
+		object.premium || object.verified || object.teleporter || object.checkpoint || object.pickup || object.kill { return false }
+	#partial switch object.prefab {
+	case .RAMP, .GRASS, .WINDOW, .LIGHT_CONE: return false
+	}
+	return true
+}
+
+map_can_see :: proc(map_inst: ^Map, from, to: Vec3) -> bool {
+	if map_inst == nil { return true }
+	segment := to - from
+	for object in map_inst.objects {
+		if !map_object_blocks_sight(object) { continue }
+		if t, _, hit := ray_box_hit(from, segment, object.position, object.scale); hit && t < 1 { return false }
+	}
+	return true
+}

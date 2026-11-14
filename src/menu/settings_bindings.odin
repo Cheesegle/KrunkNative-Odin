@@ -11,10 +11,12 @@ settings_bindings :: proc(state: ^State) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childAlignment = {x = .Center}}}) { text(label, 16, s, SETTINGS_MUTED) }
 		}
 	}
-	// Display inspect with weapons while preserving saved enum values.
-	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .MENU, .FULLSCREEN}) {
+	// Display inspect with weapons and the leaderboard under Interface, as in
+	// Krunker's controls list, while preserving saved enum values.
+	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .MENU, .FULLSCREEN}) {
 		if action == .FORWARD { settings_section("Move", s) }
 		if action == .AIM { settings_section("Weapon", s) }
+		if action == .LEADERBOARD { settings_section("Interface", s) }
 		if action == .MENU { settings_section("System", s) }
 		if clay.UI(clay.ID("BindingRow", u32(action)))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(60*s)}, childGap = u16(24*s), childAlignment = {y = .Center}}}) {
 			settings_label(BINDING_NAMES[action], s)
@@ -58,7 +60,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .NONE: return
 	case .DISPLAY_MODE: labels, anchor, action = mode_labels[:], "DisplayMode", .DISPLAY_MODE
 	case .MONITOR: labels, anchor, action = view.monitor_names, "Monitor", .MONITOR
-	case .RESOLUTION: labels, anchor, action = view.resolution_options, "Resolution", .RESOLUTION_SELECT
+	case .RESOLUTION: labels, anchor, action = settings_resolution_options(state, view), "Resolution", .RESOLUTION_SELECT
 	case .TEXTURE_FILTER: labels, anchor, action = filter_labels[:], "TextureFiltering", .TEXTURE_FILTER
 	case .CROSSHAIR_TYPE: labels, anchor, action = crosshair_labels[:], "CrosshairType", .CROSSHAIR_TYPE
 	case .ANISOTROPY:
