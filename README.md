@@ -361,6 +361,11 @@ practice map rotation. Escape always remains available for menus.
 Inspect weapon defaults to F and can be rebound in the Weapon section. Press it
 to inspect your gun or knife; press again to stop. Firing, aiming, reloading,
 swapping weapons or opening the menu cancels the animation.
+Hold Leaderboard (default Tab, Interface section) during gameplay to show the
+match leaderboard: rank, name and the mode's Krunker columns (Score, Kills,
+Deaths in FFA/TDM and native sessions), grouped by team with team scores. Menus
+keep Tab for keyboard navigation; the board only opens while the cursor is
+captured for play.
 
 Main uses a manually entered Mouse DPI and sensitivity in cm/360. Click either
 value to type, then press Enter or Tab to confirm. DPI changes preserve the
@@ -417,6 +422,7 @@ The default bindings are:
 | Left `Shift` | Crouch or slide |
 | `R` | Reload |
 | `E` / `Q` | Switch to the secondary / melee weapon |
+| `Tab` (hold) | Show the leaderboard |
 | `Esc` | Release the mouse cursor |
 | `F11` | Toggle fullscreen |
 

@@ -219,17 +219,14 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 	mode := "Hardpoint"
 	if client.game.mode != nil && !client.game.mode.config.teams { mode = "Free for all" }
 	capacity := int((client.game.config.max_players + 1) / 2)
-	team_names := [2]string{"Alpha", "Bravo"}
-	if client.game.config.team1_name != "Team 1" && len(client.game.config.team1_name) > 0 { team_names[0] = client.game.config.team1_name }
-	if client.game.config.team2_name != "Team 2" && len(client.game.config.team2_name) > 0 { team_names[1] = client.game.config.team2_name }
+	team_names := client_team_names(client)
 	online := client.krunker.connected || client.net.connected
 	team_selection := (client.local_practice || client.krunker.connected && client.krunker_world.lobby_select_team) && (client.game.mode == nil || client.game.mode.config.teams)
 	if client.krunker.connected {
 		capacity = int((client.krunker_world.lobby_capacity+1)/2)
 		if client.krunker_world.lobby_team_capacity > 0 { capacity = int(client.krunker_world.lobby_team_capacity) }
-		for name, i in client.krunker_world.lobby_team_names { if len(name)>0 { team_names[i]=name } }
 	}
-	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity); team_names = client.net.lobby.team_names }
+	if client.net.connected { team_selection = client.net.lobby_received && client.net.lobby.select_team; capacity = int(client.net.lobby.capacity) }
 	resolution_options := make([]string, len(DISPLAY_RESOLUTIONS), context.temp_allocator)
 	for resolution, i in DISPLAY_RESOLUTIONS { resolution_options[i] = fmt.tprintf("%d x %d", resolution.width, resolution.height) }
 	window_resolution := client_window_resolution(client)
