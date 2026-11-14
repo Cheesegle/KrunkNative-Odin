@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE }
@@ -124,6 +124,14 @@ State :: struct {
 	color_length: int,
 	color_replace, color_invalid: bool,
 	crosshair_preview: Crosshair_Preview,
+	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
+	// can make it several kilobytes, so the field holds up to 64 KiB.
+	import_open, import_overflow: bool,
+	import_buffer: [65536]u8,
+	import_length: int,
+	settings_message: [160]u8,
+	settings_message_length: int,
+	settings_message_error: bool,
 }
 
 prepare_settings :: proc(state: ^State, view: View) {
@@ -133,6 +141,8 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.binding_capture, state.settings_dropdown = 0, .NONE
 		state.number_edit = .NONE
 		state.color_edit = 0
+		settings_import_close(state)
+		state.settings_message_length = 0
 		return
 	}
 	if !state.settings_active {
@@ -189,6 +199,9 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	clay.SetPointerState(input.pointer, input.down)
 	defer state.previous = input
 	if state.color_edit != 0 && settings_color_interact(state, input) { return {} }
+	if state.import_open {
+		if action, handled := settings_import_interact(state, input); handled { return action }
+	}
 	if state.number_edit != .NONE && settings_number_interact(state, input) { return {} }
 	// Capture runs before menu shortcuts: Enter, Tab, arrows and mouse buttons
 	// can all be rebound without activating another control behind the listener.
@@ -335,6 +348,22 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.focus = clay.ID("SettingsOption", u32(index)).id
 		return {}
 	}
+	if control.action.kind == .SETTINGS_IMPORT_OPEN {
+		state.import_open, state.import_length, state.import_overflow = true, 0, false
+		state.settings_message_length, state.pressed = 0, 0
+		state.focus = clay.ID("ImportConfirm").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_IMPORT {
+		state.pressed = 0
+		if state.import_overflow { settings_set_message(state, "Settings text is too long.", true); return {} }
+		result, error := krunker_settings_import(&state.settings_draft, string(state.import_buffer[:state.import_length]))
+		if len(error) > 0 { settings_set_message(state, error, true); return {} }
+		settings_import_close(state)
+		state.focus = clay.ID("SettingsImport").id
+		settings_set_message(state, fmt.tprintf("Imported %d Krunker settings. Ignored %d unsupported.", result.imported, result.ignored), false)
+		return {kind = .SETTINGS_IMPORT} // The client applies and saves the draft, as Save does.
+	}
 	if control.action.kind == .SETTINGS_TAB {
 		state.settings_tab = Settings_Tab(control.action.index)
 		state.scrollbar_dragging = false
@@ -352,6 +381,8 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.number_edit = .NONE
 		state.color_edit, state.color_invalid = 0, false
 		state.binding_reserved = false
+		settings_import_close(state)
+		state.settings_message_length = 0
 		return control.action if control.action.kind == .SETTINGS_SAVE else Action{}
 	}
 	if state.settings_active {
