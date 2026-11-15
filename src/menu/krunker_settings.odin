@@ -104,6 +104,7 @@ Krunker_Import_Result :: struct { imported, ignored: int }
 krunker_key_to_binding :: proc(js: i64) -> (code: i32, ok: bool) {
 	switch {
 	case js == -1: return 0, true
+	case js == 20000: return BINDING_SCROLL, true // Krunker's wheel bind (wr(): 20000 -> "SCROLL").
 	case js >= 10001 && js <= 10008:
 		which := i32(js-10000)
 		button := which == 2 ? 2 : which == 3 ? 1 : which-1 // which: 1 left, 2 middle, 3 right.
@@ -162,6 +163,7 @@ krunker_key_to_binding :: proc(js: i64) -> (code: i32, ok: bool) {
 binding_to_krunker_key :: proc(code: i32) -> (js: i64, ok: bool) {
 	switch code {
 	case 0: return -1, true
+	case BINDING_SCROLL: return 20000, true
 	case 344: return 16, true // Browsers report both shifts, controls and alts alike.
 	case 345: return 17, true
 	case 346: return 18, true
@@ -342,7 +344,7 @@ krunker_import_controls :: proc(bindings: ^Bindings, controls: json.Object, resu
 			} else { result.ignored += 1 }
 			continue outer
 		}
-		result.ignored += 1 // Spray, chat, toggles, scroll-wheel and other unsupported binds.
+		result.ignored += 1 // Spray, chat, toggles and other unsupported binds.
 	}
 }
 

@@ -41,15 +41,73 @@ client_binding_mouse :: proc "c" (window: glfw.WindowHandle, button, action, mod
 	if g_client != nil && g_client.menu.binding_capture != 0 && action == glfw.PRESS && g_client.binding_event == 0 { g_client.binding_event = -button-1 }
 }
 
+// Krunker throttles wheel presses: a notch presses key 20000 only when more
+// than 50 ms passed since the last press (Date.now() - F > 50).
+SCROLL_PRESS_INTERVAL :: 0.05
+
+// GLFW scroll callback. While a bind is being captured, a notch in either
+// direction assigns Scroll instead of scrolling the menu. In the menu the
+// offsets scroll the UI; while the cursor is locked they press Scroll.
+client_scroll :: proc "c" (window: glfw.WindowHandle, x, y: f64) {
+	context = runtime.default_context()
+	if g_client == nil { return }
+	client_scroll_event(g_client, x, y, glfw.GetTime())
+}
+
+client_scroll_event :: proc(client: ^Client, x, y: f64, now: f64) {
+	if client.menu.binding_capture != 0 {
+		if y != 0 && client.binding_event == 0 { client.binding_event = menuui.BINDING_SCROLL }
+		return
+	}
+	if !client.mouse_state.locked {
+		client.menu_scroll += {f32(x), f32(y)}
+		return
+	}
+	// Krunker's in-game wheel listener (c.addEventListener("wheel", ...)):
+	// J(null, 20000) presses the wheel key, at most once per 50 ms. Repeated
+	// notches before the next command collapse into one press, as keys[] is
+	// a boolean there too.
+	if y != 0 && now - client.scroll_press_time > SCROLL_PRESS_INTERVAL {
+		client.scroll_press, client.scroll_press_time = true, now
+	}
+}
+
+// Releases the Scroll press once this frame's command read it (Krunker's
+// fakeKey(20000, 1) after the input packet). pending keeps it for the next
+// frame when the live path built no command this frame.
+client_scroll_frame_end :: proc(client: ^Client, pending: bool) {
+	if !pending { client.scroll_press = false }
+}
+
 client_binding_down :: proc(window: glfw.WindowHandle, code: i32) -> bool {
-	if code == 0 { return false }
+	if code == 0 || code == menuui.BINDING_SCROLL { return false } // Scroll is never a GLFW key.
 	if code < 0 { return glfw.GetMouseButton(window, -code-1) == glfw.PRESS }
 	return glfw.GetKey(window, code) == glfw.PRESS
 }
 
-client_action_down :: proc(client: ^Client, action: menuui.Binding_Action, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down) -> bool {
-	pair := client.bindings[action]
-	return read(client.window, pair[0]) || read(client.window, pair[1])
+// scroll = false reads only keys and buttons; it gives the state a command
+// sees after the one that consumed a Scroll press.
+client_action_down :: proc(client: ^Client, action: menuui.Binding_Action, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down, scroll := true) -> bool {
+	for code in client.bindings[action] {
+		if code == menuui.BINDING_SCROLL {
+			if scroll && client.scroll_press && client.mouse_state.locked { return true }
+		} else if read(client.window, code) { return true }
+	}
+	return false
+}
+
+// The gameplay command for this frame, and the same command without the
+// Scroll press for any further command built in this frame.
+client_gameplay_bound_input :: proc(client: ^Client, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down) -> (bound, sustained: shared.Input) {
+	held, keys: [menuui.Binding_Action]bool
+	for action in menuui.Binding_Action {
+		held[action] = client_action_down(client, action, read)
+		keys[action] = client_action_down(client, action, read, false)
+	}
+	last_swap := client.last_swap_key
+	bound = client_bound_input(held, &client.last_swap_key)
+	sustained = client_bound_input(keys, &last_swap)
+	return
 }
 
 client_binding_used :: proc(client: ^Client, code: i32) -> bool {
