@@ -18,7 +18,13 @@ invariant gl_Position;
 #ifdef BATCHED
 layout (location = 2) in uint v_face_idx;
 layout (location = 3) in uint v_object;
-out flat int object_idx;
+// Per-object values, read once per vertex and passed on unchanged (flat).
+out flat vec4 b_color;
+out flat vec4 b_emissive;
+out flat vec4 b_face_scale;
+out flat vec4 b_tex_row0;
+out flat vec4 b_tex_row1;
+out flat ivec4 b_flags;
 
 struct Batch_Object {
     mat4 transform;
@@ -40,7 +46,8 @@ uniform mat4 transform;
 void main() {
     tex_coord = v_tex_coord;
 #ifdef BATCHED
-    mat4 m_transform = objects[v_object].transform;
+    Batch_Object o = objects[v_object];
+    mat4 m_transform = o.transform;
 #else
     mat4 m_transform = transform;
 #endif
@@ -49,7 +56,12 @@ void main() {
 #ifdef BATCHED
     // Computed on the CPU with the per-object rule below.
     face_idx = int(v_face_idx);
-    object_idx = int(v_object);
+    b_color = o.color;
+    b_emissive = o.emissive;
+    b_face_scale = o.face_scale;
+    b_tex_row0 = o.tex_row0;
+    b_tex_row1 = o.tex_row1;
+    b_flags = o.flags;
 #else
     if (is_ramp) {
         if (gl_VertexID < 4) face_idx = 0;

@@ -8,20 +8,13 @@ in vec3 world_pos;
 uniform float world_uv_scale;
 
 #ifdef BATCHED
-in flat int object_idx;
-
-struct Batch_Object {
-    mat4 transform;
-    vec4 color;
-    vec4 emissive;
-    vec4 face_scale; // xyz face scale, w texture scale
-    vec4 tex_row0;
-    vec4 tex_row1;
-    ivec4 flags; // x face mask, y bit flags, z float bits of alpha_test
-};
-layout (std430, binding = 0) readonly buffer Batch_Objects {
-    Batch_Object objects[];
-};
+// Batch_Object fields from basic.vert (flat: copied bit for bit).
+in flat vec4 b_color;
+in flat vec4 b_emissive;
+in flat vec4 b_face_scale; // xyz face scale, w texture scale
+in flat vec4 b_tex_row0;
+in flat vec4 b_tex_row1;
+in flat ivec4 b_flags; // x face mask, y bit flags, z float bits of alpha_test
 #else
 uniform bool is_ramp;
 uniform bool is_ladder;
@@ -56,22 +49,21 @@ uniform vec2 uVisualLighting; // ambient and sunlight multipliers
 void main() {
 #ifdef BATCHED
     // Same values the per-object path uploads as uniforms (map_batch.odin).
-    Batch_Object o = objects[object_idx];
-    bool m_is_ramp = (o.flags.y & 1) != 0;
-    bool m_is_ladder = (o.flags.y & 2) != 0;
-    bool m_use_face_tex_scaling = (o.flags.y & 4) != 0;
-    bool m_unlit = (o.flags.y & 8) != 0;
-    bool m_no_fog = (o.flags.y & 16) != 0;
-    int m_face_mask = o.flags.x;
-    float m_texture_scale = o.face_scale.w;
-    vec3 m_face_scale = o.face_scale.xyz;
-    vec4 m_color = o.color;
-    vec4 m_emissive = o.emissive;
-    float m_alpha_test = intBitsToFloat(o.flags.z);
+    bool m_is_ramp = (b_flags.y & 1) != 0;
+    bool m_is_ladder = (b_flags.y & 2) != 0;
+    bool m_use_face_tex_scaling = (b_flags.y & 4) != 0;
+    bool m_unlit = (b_flags.y & 8) != 0;
+    bool m_no_fog = (b_flags.y & 16) != 0;
+    int m_face_mask = b_flags.x;
+    float m_texture_scale = b_face_scale.w;
+    vec3 m_face_scale = b_face_scale.xyz;
+    vec4 m_color = b_color;
+    vec4 m_emissive = b_emissive;
+    float m_alpha_test = intBitsToFloat(b_flags.z);
     mat3 m_tex_transform = mat3(
-        vec3(o.tex_row0.x, o.tex_row1.x, 0.0),
-        vec3(o.tex_row0.y, o.tex_row1.y, 0.0),
-        vec3(o.tex_row0.z, o.tex_row1.z, 1.0));
+        vec3(b_tex_row0.x, b_tex_row1.x, 0.0),
+        vec3(b_tex_row0.y, b_tex_row1.y, 0.0),
+        vec3(b_tex_row0.z, b_tex_row1.z, 1.0));
 #else
     bool m_is_ramp = is_ramp;
     bool m_is_ladder = is_ladder;
