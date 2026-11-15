@@ -3,7 +3,9 @@ package main
 import "core:encoding/json"
 import "core:math"
 import "core:math/linalg"
+import "core:strings"
 import gl "vendor:OpenGL"
+import glfw "vendor:glfw"
 import menuui "../menu"
 import shared "../shared"
 
@@ -340,7 +342,9 @@ shadow_program_init :: proc() -> bool {
 	if g_shadow.program == 0 { return false }
 	g_shadow.uniforms = cache_uniforms(g_shadow.program)
 	// Optional: without it the static map is drawn object by object.
-	g_shadow.batched_program = shader_compile(vert, frag, "#define BATCHED\n#define SHADOW_DEPTH_PASS\n")
+	// The portable batch layout's slot #defines (map_batch_shader_defines).
+	batched_defines := strings.concatenate({map_batch_shader_defines(context.temp_allocator), "#define SHADOW_DEPTH_PASS\n"}, context.temp_allocator)
+	g_shadow.batched_program = shader_compile(vert, frag, batched_defines)
 	if g_shadow.batched_program != 0 { g_shadow.batched_uniforms = cache_uniforms(g_shadow.batched_program) }
 	return true
 }
@@ -766,11 +770,72 @@ shadow_render_players :: proc(scene: ^Scene, pass: ^Shadow_Pass, view: shared.Ma
 	return drawn > 0
 }
 
+// 1x1 depth textures with depth comparison, bound to units 1 and 2 whenever
+// no real shadow map is: basic.frag's shadow samplers are statically used, and
+// a shadow sampler reading texture 0 (no depth format, no comparison) is
+// undefined behaviour that drivers may warn about or mishandle even when the
+// branch that samples it is never taken. Freed by shadow_placeholders_fini
+// (resource_cache_fini) with the rest of the context's objects. They belong to
+// the context that made them: tests destroy and recreate contexts, and a name
+// from a dead context may already name another object in the new one.
+g_shadow_placeholder_array, g_shadow_placeholder_2d: u32
+g_shadow_placeholder_context: glfw.WindowHandle
+
+@(private = "file")
+shadow_placeholders_current :: proc() -> bool {
+	current := glfw.GetCurrentContext()
+	if current != g_shadow_placeholder_context {
+		// The old context (and its textures) is gone or not current: forget them.
+		g_shadow_placeholder_array, g_shadow_placeholder_2d = 0, 0
+		g_shadow_placeholder_context = current
+	}
+	return current != nil
+}
+
+@(private = "file")
+shadow_placeholder_texture :: proc(target: u32) -> u32 {
+	texture: u32
+	gl.CreateTextures(target, 1, &texture)
+	far := f32(1) // Fully lit.
+	if target == gl.TEXTURE_2D_ARRAY {
+		gl.TextureStorage3D(texture, 1, gl.DEPTH_COMPONENT24, 1, 1, 1)
+		gl.TextureSubImage3D(texture, 0, 0, 0, 0, 1, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &far)
+	} else {
+		gl.TextureStorage2D(texture, 1, gl.DEPTH_COMPONENT24, 1, 1)
+		gl.TextureSubImage2D(texture, 0, 0, 0, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &far)
+	}
+	shadow_texture_params(texture, false)
+	return texture
+}
+
+@(private = "file")
+shadow_bind_placeholders :: proc(sun, player: bool) {
+	if !(sun || player) || !shadow_placeholders_current() { return }
+	if sun {
+		if g_shadow_placeholder_array == 0 { g_shadow_placeholder_array = shadow_placeholder_texture(gl.TEXTURE_2D_ARRAY) }
+		gl.BindTextureUnit(1, g_shadow_placeholder_array)
+	}
+	if player {
+		if g_shadow_placeholder_2d == 0 { g_shadow_placeholder_2d = shadow_placeholder_texture(gl.TEXTURE_2D) }
+		gl.BindTextureUnit(2, g_shadow_placeholder_2d)
+	}
+}
+
+shadow_placeholders_fini :: proc() {
+	if !shadow_placeholders_current() { return }
+	if g_shadow_placeholder_array != 0 { gl.DeleteTextures(1, &g_shadow_placeholder_array) }
+	if g_shadow_placeholder_2d != 0 { gl.DeleteTextures(1, &g_shadow_placeholder_2d) }
+	g_shadow_placeholder_array, g_shadow_placeholder_2d = 0, 0
+}
+
 // Per-pass uniforms for basic.frag; called with the basic program bound.
 shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
 	q := g_render_quality
 	gl.Uniform1i(u.lighting_mode, i32(q.lighting))
 	gl.Uniform1i(u.shadow_enabled, i32(q.shadows))
+	sun_map := q.shadows && g_shadow.texture != 0
+	player_map := sun_map && q.player_shadows && !g_shadow_viewmodel_pass && g_shadow.player_texture != 0
+	shadow_bind_placeholders(!sun_map, !player_map)
 	if q.shadows {
 		layers := g_shadow.layers
 		matrices: [SHADOW_CASCADES]shared.Mat4
@@ -798,7 +863,7 @@ shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
 		gl.Uniform1i(u.shadow_soft, i32(q.soft_shadows))
 		gl.Uniform1i(u.shadow_soft_kernel, q.mode == .SHARP || g_shadow_soft_kernel_override ? 1 : 0)
 		gl.Uniform1f(u.shadow_normal_bias, g_lighting_config.shadow_normal_bias)
-		gl.BindTextureUnit(1, g_shadow.texture)
+		if sun_map { gl.BindTextureUnit(1, g_shadow.texture) }
 		player := q.player_shadows && !g_shadow_viewmodel_pass
 		gl.Uniform1i(u.player_shadow_enabled, i32(player))
 		if player {
@@ -806,7 +871,7 @@ shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
 			gl.UniformMatrix4fv(u.player_shadow_matrix, 1, gl.FALSE, &player_matrix[0, 0])
 			gl.Uniform1f(u.player_shadow_bias, g_shadow.player_bias)
 			gl.Uniform1f(u.player_shadow_texel, 1.0 / PLAYER_SHADOW_SIZE)
-			gl.BindTextureUnit(2, g_shadow.player_texture)
+			if player_map { gl.BindTextureUnit(2, g_shadow.player_texture) }
 		}
 	}
 	count: i32

@@ -5,8 +5,12 @@ import "core:strings"
 import gl "vendor:OpenGL"
 import shared "../shared"
 
+// Programs compiled so far this session (diagnostics and tests).
+g_shader_compiles: int
+
 // `defines` (for example a "#define BATCHED" line) is inserted after the #version line.
 shader_compile :: proc(vertex_shader_path, fragment_shader_path: string, defines := "") -> u32 {
+	g_shader_compiles += 1
 	vertex_shader, v_ok := shared.read_file(vertex_shader_path)
 	fragment_shader, f_ok := shared.read_file(fragment_shader_path)
 

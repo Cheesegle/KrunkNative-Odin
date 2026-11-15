@@ -2,19 +2,19 @@
 out vec4 frag_color;
 
 in vec2 tex_coord;
-in flat int face_idx;
+flat in int face_idx;
 in vec3 world_pos;
 
 uniform float world_uv_scale;
 
 #ifdef BATCHED
 // Batch_Object fields from basic.vert (flat: copied bit for bit).
-in flat vec4 b_color;
-in flat vec4 b_emissive;
-in flat vec4 b_face_scale; // xyz face scale, w texture scale
-in flat vec4 b_tex_row0;
-in flat vec4 b_tex_row1;
-in flat ivec4 b_flags; // x face mask, y bit flags, z float bits of alpha_test
+flat in vec4 b_color;
+flat in vec4 b_emissive;
+flat in vec4 b_face_scale; // xyz face scale, w texture scale
+flat in vec4 b_tex_row0;
+flat in vec4 b_tex_row1;
+flat in vec4 b_params; // x face mask, y BATCH_FLAG_* bits, z alpha_test (exact floats)
 #else
 uniform bool is_ramp;
 uniform bool is_ladder;
@@ -210,18 +210,19 @@ vec3 specular_brdf(vec3 light_dir, vec3 view_dir, vec3 normal, float dot_nl) {
 void main() {
 #ifdef BATCHED
     // Same values the per-object path uploads as uniforms (map_batch.odin).
-    bool m_is_ramp = (b_flags.y & 1) != 0;
-    bool m_is_ladder = (b_flags.y & 2) != 0;
-    bool m_use_face_tex_scaling = (b_flags.y & 4) != 0;
-    bool m_unlit = (b_flags.y & 8) != 0;
-    bool m_no_fog = (b_flags.y & 16) != 0;
-    bool m_receive_shadow = (b_flags.y & 32) != 0;
-    int m_face_mask = b_flags.x;
+    int flags = int(b_params.y + 0.5);
+    bool m_is_ramp = (flags & 1) != 0;
+    bool m_is_ladder = (flags & 2) != 0;
+    bool m_use_face_tex_scaling = (flags & 4) != 0;
+    bool m_unlit = (flags & 8) != 0;
+    bool m_no_fog = (flags & 16) != 0;
+    bool m_receive_shadow = (flags & BATCH_FLAG_RECEIVE_SHADOW) != 0;
+    int m_face_mask = int(b_params.x + 0.5);
     float m_texture_scale = b_face_scale.w;
     vec3 m_face_scale = b_face_scale.xyz;
     vec4 m_color = b_color;
     vec4 m_emissive = b_emissive;
-    float m_alpha_test = intBitsToFloat(b_flags.z);
+    float m_alpha_test = b_params.z;
     mat3 m_tex_transform = mat3(
         vec3(b_tex_row0.x, b_tex_row1.x, 0.0),
         vec3(b_tex_row0.y, b_tex_row1.y, 0.0),
@@ -246,7 +247,7 @@ void main() {
     vec2 scaled_tex_coord;
 
     if (m_use_face_tex_scaling) {
-        vec2 scale;
+        vec2 scale = m_face_scale.xy;
 
         if (m_is_ramp) {
             switch (face_idx) {

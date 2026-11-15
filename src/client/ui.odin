@@ -74,6 +74,9 @@ load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 
 		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 		stbtt.FreeBitmap(bitmap, nil)
+		// Glyphs load during layout, between draws: the bind above must not
+		// leave the material binding cache naming the previous texture.
+		g_active_texture = 0
 	}
 
 	glyph.size.x = f32(width)
@@ -159,6 +162,12 @@ ui_update :: proc(ui: ^UI, width, height: f32) {
 }
 
 ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
+	// A minimized window (0x0) or a NaN layout box would send NaN/Inf vertex
+	// positions to the driver for every UI quad; draw nothing instead.
+	finite :: proc(value: f32) -> bool { return !math.is_nan(value) && !math.is_inf(value) }
+	if !(ui.width > 0 && ui.height > 0) || !finite(x) || !finite(y) || !finite(width) || !finite(height) {
+		return
+	}
 	offset_x := (x + width * 0.5) / ui.width * 2.0 - 1.0
 	offset_y := 1.0 - (y + height * 0.5) / ui.height * 2.0
 

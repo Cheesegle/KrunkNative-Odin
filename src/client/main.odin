@@ -70,12 +70,16 @@ Client :: struct {
 	// Static map batching and frustum culling (map_batch.odin). On by default;
 	// `--no-batching` turns it off for A/B comparisons.
 	render_batching: bool,
+	// The startup self-test (map_batch_self_test.odin) has compared batched and
+	// per-object rendering this session.
+	batch_self_test_done: bool,
 	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
 	settings_dirty, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
+	monitor_cache_refreshes: int, // Diagnostics: glfw.GetVideoModes enumerations.
 
 	mouse_state: struct {
 		locked:  bool,
@@ -169,6 +173,15 @@ Monitor_Cache :: struct {
 }
 
 client_monitor_cache_refresh :: proc(client: ^Client) {
+	phase_mark(.MONITOR_CACHE_REFRESH)
+	client.monitor_cache_refreshes += 1
+	start := glfw.GetTime()
+	defer {
+		// Some display drivers enumerate modes slowly; Settings opening runs this.
+		if elapsed := glfw.GetTime() - start; elapsed > 0.1 {
+			fmt.printf("[Display] Listing monitor modes took %.0f ms (%d sizes)\n", elapsed * 1000, len(client.monitor_cache.sizes))
+		}
+	}
 	cache := &client.monitor_cache
 	cache^ = {valid = true, index = client.monitor_index, idle_frame_interval = 1.0 / 60}
 	monitor := client_monitor(client.monitor_index)
@@ -328,6 +341,7 @@ client_staged_fullscreen_resolution :: proc(client: ^Client, values: menuui.Sett
 }
 
 client_apply_display_settings :: proc(client: ^Client) {
+	phase_mark(.APPLY_DISPLAY)
 	monitors := glfw.GetMonitors()
 	if len(monitors) > 0 {
 		client.monitor_index = clamp(client.monitor_index, 0, i32(len(monitors))-1)
@@ -382,6 +396,7 @@ Client_Options :: struct {
 	bench_seconds: f32,
 	bench_sizes: string, // Comma-separated WxH or "native".
 	no_batching: bool,
+	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
 }
 
 print_client_help :: proc() {
@@ -407,6 +422,9 @@ print_client_help :: proc() {
 	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
 	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
 	fmt.println("      --no-batching     Draw every map object individually, without culling")
+	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
+	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
+	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -466,6 +484,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.offline = true
 		case "--no-batching":
 			options.no_batching = true
+		case "--gl-debug":
+			options.gl_debug = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -625,10 +645,7 @@ client_load_map :: proc(client: ^Client) {
 		}
 	}
 
-	map_batch_destroy(client.scene)
-	if client.render_batching {
-		map_batch_build(client.scene, client.game.map_inst)
-	}
+	client_build_map_batches(client)
 }
 
 client_find_player :: proc(client: ^Client, uid: i32) -> ^shared.Player {
@@ -995,6 +1012,7 @@ client_load_current_map :: proc(client: ^Client) {
 	if client.game.map_inst == nil {
 		return
 	}
+	phase_mark(.MAP_LOAD)
 
 	// Activate the map's current environment before creating its materials.
 	// The browser clears to `sky` and applies the same fog/lighting settings to
@@ -1404,7 +1422,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	// GPU time covers the world, view model and HUD, not the debug window.
 	when KRODIN_DEV { perf_overlay_gpu_begin(client) }
+	phase_mark(.RENDER_WORLD)
 	client_render_world(client)
+	gl_check("render world", per_phase = true)
 
 	// Overlay pass: bars use the world camera for projection only.
 	player_healthbars_update_visibility(client, now)
@@ -1424,16 +1444,19 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		overlay_render(client, delta)
 	}
 	fps_render(client)
+	gl_check("hud", per_phase = true)
 	when KRODIN_DEV {
 		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
-		if client.perf_overlay { debug_ui_render(client) }
+		if client.perf_overlay { phase_mark(.DEBUG_WINDOW); debug_ui_render(client) }
 	}
 }
 
 // World and viewmodel passes. The benchmark mode draws through this too, so its
 // numbers cover the same work as a real frame minus the HUD.
 client_render_world :: proc(client: ^Client) {
+	phase_mark(.PREVIEW_GRAPHICS)
 	client_update_graphics(client)
+	phase_mark(.RENDER_SCENE)
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	g_draw_stats = {}
 	client.scene.batching_enabled = client.render_batching
@@ -1450,6 +1473,7 @@ client_render_world :: proc(client: ^Client) {
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	client.camera.fov = saved_fov
 
+	phase_mark(.RENDER_VIEWMODEL)
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
 	// The viewmodel keeps the sun's shadows but not the player map, so your
@@ -1526,7 +1550,13 @@ main :: proc() {
 	client.camera.near = 0.1
 	client.camera.far = 10000.0
 
+	// Before the window: driver crashes during context creation are reported too.
+	phase_mark(.STARTUP)
+	crash_handler_install()
+	defer crash_handler_uninstall()
+
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+	if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
 	when ODIN_OS == .Darwin {
 		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
@@ -1568,6 +1598,15 @@ main :: proc() {
 	defer client_mouse_fini()
 
 	gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+	diagnostics_capture_gl_info()
+	if options.gl_debug {
+		if gl_debug_install() {
+			fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
+		} else {
+			fmt.eprintln("[GL] Debug output is not available on this context")
+		}
+	}
+	defer gl_debug_shutdown()
 	client_graphics_init(client)
 	defer client_graphics_fini(client)
 
@@ -1646,8 +1685,11 @@ main :: proc() {
 
 		last_tick = now
 		g_draw_calls = 0
+		phase_frame_begin()
 
+		phase_mark(.TICK)
 		client_tick(client, now, delta)
+		gl_check("frame")
 		client_audio_tick(client, delta)
 		// The debug window records the previous frame in full: its duration
 		// (start to start), CPU time (tick + render submission), and how long
@@ -1663,16 +1705,20 @@ main :: proc() {
 			client_settings_save(client_settings_snapshot(client))
 		}
 		swap_start := glfw.GetTime()
+		phase_mark(.SWAP_BUFFERS)
 		glfw.SwapBuffers(client.window)
 		swap_end := glfw.GetTime()
+		phase_mark(.POLL_EVENTS)
 		client_poll_events()
 		when KRODIN_DEV {
 			prev_swap_ms = f32((swap_end-swap_start)*1000)
 			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
 		}
+		phase_mark(.IDLE_WAIT)
 		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
 		free_all(context.temp_allocator)
 	}
+	phase_mark(.SHUTDOWN)
 
 	client_access_cancel(client)
 	delete(client.access.token)

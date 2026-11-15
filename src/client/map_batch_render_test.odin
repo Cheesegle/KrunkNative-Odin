@@ -107,6 +107,7 @@ when ODIN_TEST {
 		glfw.MakeContextCurrent(window)
 		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
 		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		fmt.printf("[batch-eq] GL_RENDERER: %s; GL_VERSION: %s\n", cstring(gl.GetString(gl.RENDERER)), cstring(gl.GetString(gl.VERSION)))
 
 		w, h := i32(1280), i32(720)
 		target := bench_target_init(w, h)
@@ -151,6 +152,7 @@ when ODIN_TEST {
 			client.game.map_inst = map_inst
 			client_load_current_map(&client)
 			set := client.scene.batches
+			testing.expect(t, client.render_batching && client.batch_self_test_done, fmt.tprintf("%s: the startup self-test must run and keep batching on", map_name))
 			if testing.expect(t, set != nil && len(set.members) > 0, fmt.tprintf("%s must build map batches", map_name)) {
 				fmt.printf("[batch-eq] %s: %d meshes, %d merged into %d slots (%d single, %d moved out for depth ties)\n", map_name, len(client.scene.meshes), set.merged, len(set.batches), set.singles, set.tie_excluded)
 			}
@@ -181,21 +183,9 @@ when ODIN_TEST {
 						// A pixel may differ by more than 1 only where both renders
 						// stored the same depth: two surfaces tied in the depth
 						// buffer and draw order picked the colour (see PR notes).
-						max_diff, max_geometry_diff, tie_pixels, geometry_pixels := 0, 0, 0, 0
-						first := -1
-						for pixel in 0 ..< int(w * h) {
-							d := 0
-							for c in 0 ..< 3 { d = max(d, abs(int(off[pixel * 3 + c]) - int(on[pixel * 3 + c]))) }
-							max_diff = max(max_diff, d)
-							if d <= 1 { continue }
-							if depth_off[pixel] == depth_on[pixel] {
-								tie_pixels += 1
-							} else {
-								geometry_pixels += 1
-								max_geometry_diff = max(max_geometry_diff, d)
-								if first < 0 { first = pixel }
-							}
-						}
+						compare := map_batch_compare(off, on, depth_off, depth_on)
+						max_diff, max_geometry_diff, tie_pixels, geometry_pixels := compare.max_diff, compare.max_geometry_diff, compare.tie_pixels, compare.geometry_pixels
+						first := compare.first_geometry
 						label := fmt.tprintf("%s_%s_%s_%s%s", map_name, view.name, toggle.name, sampler == 0 ? "nearest" : "smooth", shadows ? "_shadows" : "")
 						fmt.printf("[batch-eq] %-48s max diff %3d; depth-tie pixels %3d, other pixels %d; draws %5d -> %4d (batches %d, culled %d)\n",
 							label, max_diff, tie_pixels, geometry_pixels, stats_off.draw_calls, stats_on.draw_calls, stats_on.batch_draws, stats_on.batches_culled)
