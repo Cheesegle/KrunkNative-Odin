@@ -21,6 +21,7 @@ settings_bindings :: proc(state: ^State) {
 		if action == .AIM { settings_section(state, "Weapon") }
 		if action == .LEADERBOARD { settings_section(state, "Interface") }
 		if action == .MENU { settings_section(state, "System") }
+		if !binding_visible(action) { continue }
 		if !settings_search_show(state, BINDING_NAMES[action]) { continue }
 		if clay.UI(clay.ID("BindingRow", u32(action)))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(60*s)}, childGap = u16(24*s), childAlignment = {y = .Center}}}) {
 			settings_label(BINDING_NAMES[action], s)

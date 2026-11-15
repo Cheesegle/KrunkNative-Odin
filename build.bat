@@ -3,6 +3,9 @@ rem Build helper for Windows (requires Odin compiler in PATH).
 rem
 rem Usage:
 rem   build.bat client            build the client      -> bin\krodin_client.exe
+rem   build.bat dev               developer client with debug tools (F3 window)
+rem                                                     -> bin\krodin_client_dev.exe
+rem                               never packaged; package-windows.ps1 uses krodin_client.exe
 rem   build.bat browser           build browser helper and restore WebView2 loader
 rem   build.bat inspect           build standalone WebView2 inspector
 rem   build.bat server            build the server      -> bin\krodin_server.exe
@@ -29,7 +32,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client browser inspect server tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client dev browser inspect server tests check all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -66,6 +69,14 @@ if errorlevel 1 exit /b %errorlevel%
 %ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE%
 exit /b %errorlevel%
 
+:dev
+rem Developer build: compiles in the debug tools (KRODIN_DEV). It uses its own
+rem file name so it can never be packaged or mistaken for a tester build.
+call :browser
+if errorlevel 1 exit /b %errorlevel%
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client_dev.exe -o:%PROFILE% -define:KRODIN_DEV=true
+exit /b %errorlevel%
+
 :inspect
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\setup-webview2.ps1
 if errorlevel 1 exit /b %errorlevel%
@@ -91,6 +102,8 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client
 if errorlevel 1 exit /b %errorlevel%
+%ODIN% check src/client -define:KRODIN_DEV=true
+if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/server
 exit /b %errorlevel%
 
@@ -108,6 +121,7 @@ if exist "%BIN_DIR%\WebView2Loader.dll" del "%BIN_DIR%\WebView2Loader.dll"
 if exist "%BIN_DIR%\WebView2-LICENSE.txt" del "%BIN_DIR%\WebView2-LICENSE.txt"
 if exist "%BIN_DIR%\WebView2-NOTICE.txt" del "%BIN_DIR%\WebView2-NOTICE.txt"
 if exist "%BIN_DIR%\krodin_client.exe" del "%BIN_DIR%\krodin_client.exe"
+if exist "%BIN_DIR%\krodin_client_dev.exe" del "%BIN_DIR%\krodin_client_dev.exe"
 if exist "%BIN_DIR%\krodin_server.exe" del "%BIN_DIR%\krodin_server.exe"
 if exist "%BIN_DIR%\krodin_tests.exe" del "%BIN_DIR%\krodin_tests.exe"
 echo Cleaned %BIN_DIR%\
@@ -125,7 +139,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| browser ^| inspect ^| server ^| tests] [level]
+echo Usage: build.bat [client ^| dev ^| browser ^| inspect ^| server ^| tests] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).

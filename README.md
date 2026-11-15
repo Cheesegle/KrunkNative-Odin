@@ -43,6 +43,8 @@ make                   # client + server (Linux)
 make client            # or: server, test, check
 ```
 
+**Developer build:** `.\build.bat dev` (or `make dev`) builds `bin/krodin_client_dev.exe` with debug tools compiled in (`-define:KRODIN_DEV=true`): press `F3` (rebindable) or pass `--perf-overlay` for the debug performance window (FPS, 1% low, frame/CPU/GPU time, graph, draw calls). Normal and tester builds don't include it.
+
 An optimization level can follow the target (`none`, `minimal`, `size`, `speed`, or
 `aggressive`, the default), e.g. `.\build.bat client speed`.
 
@@ -85,7 +87,6 @@ Join problems are logged to `logs/krunker-network.log`. Supported packets are li
 | `-c, --class <name>` | Preselect a class, e.g. `hunter` |
 | `--offline` | Run the simulation locally without a server |
 | `--fps` | Show the FPS meter |
-| `--perf-overlay` | Start with the debug performance window open |
 | `-h, --help` | List every map and class |
 
 Settings are saved to `client-settings.json` and `audio-settings.json` in the working directory.
@@ -107,7 +108,6 @@ These are the default bindings. Rebind them in **Settings → Key binds**.
 | `Tab` (hold) | Leaderboard |
 | `Esc` | Menu / release the cursor |
 | `F11` | Toggle fullscreen |
-| `F3` | Debug performance window (FPS, 1% low, frame/CPU/GPU time, graph, draw calls) |
 
 ## Configuration
 

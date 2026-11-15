@@ -77,6 +77,17 @@ when ODIN_TEST {
 	}
 
 	@(test)
+	perf_overlay_is_developer_only :: proc(t: ^testing.T) {
+		// Release and tester builds compile the window out and hide its key bind;
+		// developer builds (-define:KRODIN_DEV=true) list it under Interface.
+		testing.expect(t, menuui.binding_visible(.DEBUG_OVERLAY) == KRODIN_DEV, "the debug overlay bind is listed only in developer builds")
+		testing.expect(t, menuui.KRODIN_DEV == KRODIN_DEV, "client and menu agree on the developer flag")
+		for action in menuui.Binding_Action {
+			if action != .DEBUG_OVERLAY { testing.expect(t, menuui.binding_visible(action), "every other bind stays listed") }
+		}
+	}
+
+	@(test)
 	perf_overlay_binding_defaults_to_f3_and_persists :: proc(t: ^testing.T) {
 		testing.expect(t, menuui.default_bindings()[.DEBUG_OVERLAY] == ([2]i32{glfw.KEY_F3, 0}), "the debug overlay defaults to F3")
 		testing.expect(t, menuui.binding_valid(glfw.KEY_F3) && menuui.binding_label(glfw.KEY_F3) == "F3" && menuui.BINDING_NAMES[.DEBUG_OVERLAY] == "Debug overlay")

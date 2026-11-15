@@ -3,6 +3,15 @@ package menu
 import "core:fmt"
 
 Binding_Action :: enum { FORWARD, BACKWARD, LEFT, RIGHT, JUMP, CROUCH, AIM, FIRE, RELOAD, SECONDARY, MELEE, MENU, FULLSCREEN, INSPECT, LEADERBOARD, DEBUG_OVERLAY }
+// Developer builds only (-define:KRODIN_DEV=true); must match the client's flag.
+KRODIN_DEV :: #config(KRODIN_DEV, false)
+
+// Whether an action is listed in Settings > Key binds. The debug overlay
+// toggle only exists in developer builds.
+binding_visible :: proc(action: Binding_Action) -> bool {
+	return action != .DEBUG_OVERLAY || KRODIN_DEV
+}
+
 // Positive values are portable GLFW key codes. Mouse buttons use -(button+1).
 // Zero means unbound; neither the menu nor saved preferences store OS scancodes.
 Bindings :: [Binding_Action][2]i32

@@ -8,6 +8,11 @@ import menuui "../menu"
 // here is fixed-size: recording a frame never allocates, and nothing is
 // recorded and no GPU timer query is issued while the window is closed.
 
+// Developer-only tools (this debug window). Release and tester builds leave
+// it false, so the window, its F3 toggle and --perf-overlay are compiled out
+// of the frame loop. Build with -define:KRODIN_DEV=true (build.bat dev).
+KRODIN_DEV :: #config(KRODIN_DEV, false)
+
 PERF_HISTORY :: 1024 // Frames kept for the time-windowed statistics.
 PERF_GRAPH_FRAMES :: 240 // Frames shown as bars in the graph.
 PERF_GPU_QUERIES :: 4 // GL_TIME_ELAPSED ring; results are read frames later.
