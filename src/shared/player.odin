@@ -53,6 +53,8 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 
 	player.speed = class.speed
 	player.wall_jump = class.wall_jump
+	player.wall_jump_max = i32(max(class.wall_jump_max, 0))
+	player.wall_jump_count = 0
 	player.health = f32(class.health)
 	player.max_health = class.health
 
@@ -1139,13 +1141,20 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		player_update_recoil(player, delta)
 	}
 
-	if !move_lock && player.wall_jump && !player.on_ground && !player.on_ladder && player.on_wall != 0 && player.game.config.wall_jump > 0.0 {
+	// Krunker resets the wall-jump count on landing (resetStep) and allows a
+	// wall jump only while wallJumpC < wallJumpMax (the class's wallJM).
+	if player.on_ground {
+		player.wall_jump_count = 0
+	}
+
+	if !move_lock && player.wall_jump && player.wall_jump_count < player.wall_jump_max && !player.on_ground && !player.on_ladder && player.on_wall != 0 && player.game.config.wall_jump > 0.0 {
 		if player.did_wall_jump && !input.jump {
 			player.did_wall_jump = false
 		}
 
 		if !player.did_wall_jump && input.jump {
 			player.did_wall_jump = true
+			player.wall_jump_count += 1
 			if player.render_you && (!recon || predict_effects) {
 				player_animate_jump(player, true)
 			}
