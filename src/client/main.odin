@@ -641,6 +641,7 @@ client_find_player :: proc(client: ^Client, uid: i32) -> ^shared.Player {
 }
 
 client_clear_players :: proc(client: ^Client) {
+	self_shadow_release()
 	client_clear_projectiles(client)
 	for player in client.game.players {
 		if player.mesh != nil {
@@ -1438,7 +1439,11 @@ client_render_world :: proc(client: ^Client) {
 	// After batching_enabled: the shadow pass draws the static map through the
 	// same batches. Its draw calls count towards this frame's stats.
 	_, quality := client_graphics_values(client)
-	shadow_prepare(client.scene, client.game.map_inst, menuui.quality_settings_validate(quality), client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height})
+	quality = menuui.quality_settings_validate(quality)
+	// Self shadow: your third-person rig, drawn only into the player shadow map.
+	g_shadow_extra_casters = self_shadow_update(client, quality)
+	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
+	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
@@ -1446,7 +1451,11 @@ client_render_world :: proc(client: ^Client) {
 
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
+	// The viewmodel keeps the sun's shadows but not the player map, so your
+	// own body (Self shadow) never shades your arms.
+	g_shadow_viewmodel_pass = true
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	g_shadow_viewmodel_pass = false
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
@@ -1681,6 +1690,7 @@ main :: proc() {
 	shared.game_destroy(&client.game)
 	shared.unload_default_maps()
 	if client.offline_custom_map != nil { shared.map_destroy(client.offline_custom_map) }
+	self_shadow_release()
 	shadow_fini()
 	scene_fini(client.fps_scene)
 	scene_fini(client.scene)

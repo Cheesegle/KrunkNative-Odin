@@ -60,10 +60,18 @@ Shader_Uniforms :: struct {
 	depth:                 i32,
 	lighting_mode:         i32,
 	shadow_enabled:        i32,
-	shadow_matrix:         i32,
+	shadow_layers:         i32,
+	cascade_scale_offset:  i32,
+	shadow_matrices:       i32,
+	shadow_biases:         i32,
+	shadow_texels:         i32,
 	shadow_soft:           i32,
-	shadow_texel:          i32,
-	shadow_bias:           i32,
+	shadow_soft_kernel:    i32,
+	player_shadow_enabled: i32,
+	player_shadow_matrix:  i32,
+	player_shadow_bias:    i32,
+	player_shadow_texel:   i32,
+	player_shadow_map:     i32,
 	shadow_normal_bias:    i32,
 	shadow_map:            i32,
 	receive_shadow:        i32,
@@ -122,10 +130,18 @@ cache_uniforms :: proc(program: u32) -> Shader_Uniforms {
 	u.depth = gl.GetUniformLocation(program, "depth")
 	u.lighting_mode = gl.GetUniformLocation(program, "uLightingMode")
 	u.shadow_enabled = gl.GetUniformLocation(program, "uShadowEnabled")
-	u.shadow_matrix = gl.GetUniformLocation(program, "uShadowMatrix")
+	u.shadow_layers = gl.GetUniformLocation(program, "uShadowLayers")
+	u.cascade_scale_offset = gl.GetUniformLocation(program, "uCascadeScaleOffset")
+	u.shadow_matrices = gl.GetUniformLocation(program, "uShadowMatrices")
+	u.shadow_biases = gl.GetUniformLocation(program, "uShadowBiases")
+	u.shadow_texels = gl.GetUniformLocation(program, "uShadowTexels")
 	u.shadow_soft = gl.GetUniformLocation(program, "uShadowSoft")
-	u.shadow_texel = gl.GetUniformLocation(program, "uShadowTexel")
-	u.shadow_bias = gl.GetUniformLocation(program, "uShadowBias")
+	u.shadow_soft_kernel = gl.GetUniformLocation(program, "uShadowSoftKernel")
+	u.player_shadow_enabled = gl.GetUniformLocation(program, "uPlayerShadowEnabled")
+	u.player_shadow_matrix = gl.GetUniformLocation(program, "uPlayerShadowMatrix")
+	u.player_shadow_bias = gl.GetUniformLocation(program, "uPlayerShadowBias")
+	u.player_shadow_texel = gl.GetUniformLocation(program, "uPlayerShadowTexel")
+	u.player_shadow_map = gl.GetUniformLocation(program, "uPlayerShadowMap")
 	u.shadow_normal_bias = gl.GetUniformLocation(program, "uShadowNormalBias")
 	u.shadow_map = gl.GetUniformLocation(program, "uShadowMap")
 	u.receive_shadow = gl.GetUniformLocation(program, "receive_shadow")
@@ -137,6 +153,7 @@ cache_uniforms :: proc(program: u32) -> Shader_Uniforms {
 	// The shadow sampler always reads unit 1 so it never shares unit 0 with
 	// the colour sampler (mixing sampler types on one unit is a GL error).
 	if u.shadow_map > -1 { gl.ProgramUniform1i(program, u.shadow_map, 1) }
+	if u.player_shadow_map > -1 { gl.ProgramUniform1i(program, u.player_shadow_map, 2) }
 	return u
 }
 

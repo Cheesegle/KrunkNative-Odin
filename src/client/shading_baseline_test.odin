@@ -79,7 +79,7 @@ when ODIN_TEST {
 		defer shadow_fini()
 		renders := g_shadow.renders
 		shadow_prepare(client.scene, client.game.map_inst, menuui.Quality_Settings{lighting = i32(menuui.Lighting_Quality.NORMAL)})
-		testing.expect(t, g_shadow.renders == renders && g_shadow.static_target.fbo == 0 && g_render_quality == Render_Quality{lighting = .NORMAL},
+		testing.expect(t, g_shadow.renders == renders && g_shadow.texture == 0 && g_render_quality == Render_Quality{lighting = .NORMAL},
 			"Shadows off must not allocate or render a shadow map")
 		pixels := shading_baseline_capture(&client)
 		defer delete(pixels)
@@ -107,7 +107,7 @@ when ODIN_TEST {
 			for value, i in shadowed { if abs(int(value) - int(golden[i])) > 8 { changed += 1 } }
 			testing.expect(t, changed > 1000, fmt.tprintf("Shadows on must darken parts of Burg (%d channels changed)", changed))
 			shadow_release_map()
-			testing.expect(t, g_shadow.static_target.fbo == 0 && g_shadow.static_target.texture == 0 && g_shadow.dynamic_target.texture == 0, "unloading must free the shadow map")
+			testing.expect(t, g_shadow.texture == 0 && g_shadow.fbos[0] == 0 && g_shadow.player_texture == 0, "unloading must free the shadow map")
 		}
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)
 	}

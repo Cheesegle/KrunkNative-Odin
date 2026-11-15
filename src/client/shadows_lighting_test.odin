@@ -17,6 +17,9 @@ when ODIN_TEST {
 		testing.expect(t, defaults.quality.shadows && !defaults.quality.soft_shadows && !defaults.quality.high_res_shadows && !defaults.quality.dynamic_shadows,
 			"Shadows must default on and its advanced options off, as in Krunker")
 		testing.expect(t, defaults.quality.lighting == i32(menuui.Lighting_Quality.NORMAL), "Lighting must default to Normal")
+		testing.expect(t, defaults.quality.self_shadow && defaults.quality.shadow_quality == i32(menuui.Shadow_Quality.KRUNKER),
+			"Self shadow must default on and Shadow quality to Krunker")
+		testing.expect(t, menuui.quality_settings_validate({shadow_quality = 5}).shadow_quality == 0, "Shadow quality must stay Krunker or Sharp")
 		testing.expect(t, menuui.quality_settings_validate({lighting = 7}).lighting == 1 && menuui.quality_settings_validate({lighting = -1}).lighting == 1 &&
 			menuui.quality_settings_validate({lighting = 3}).lighting == 3, "Lighting must stay within Low..Physical")
 
@@ -26,13 +29,13 @@ when ODIN_TEST {
 		// and keeps its other quality choices.
 		testing.expect(t, os.write_entire_file(path, `{"version":1,"quality":{"smooth_textures":true,"anisotropy":4}}`) == nil)
 		older := client_settings_load(path)
-		testing.expect(t, older.quality == menuui.Quality_Settings{smooth_textures = true, anisotropy = 4, shadows = true, lighting = 1},
+		testing.expect(t, older.quality == menuui.Quality_Settings{smooth_textures = true, anisotropy = 4, shadows = true, lighting = 1, self_shadow = true},
 			fmt.tprintf("older preferences must load Krunker's Shadows and Lighting defaults: %v", older.quality))
 		testing.expect(t, os.write_entire_file(path, `{"version":1}`) == nil)
 		testing.expect(t, client_settings_load(path).quality == menuui.DEFAULT_QUALITY_SETTINGS, "files without a quality block must use the defaults")
 
 		settings := client_settings_defaults()
-		settings.quality = {shadows = false, soft_shadows = true, high_res_shadows = true, dynamic_shadows = true, lighting = 3}
+		settings.quality = {shadows = false, soft_shadows = true, high_res_shadows = true, dynamic_shadows = true, lighting = 3, shadow_quality = 1, self_shadow = false}
 		testing.expect(t, client_settings_save(settings, path))
 		testing.expect(t, client_settings_load(path).quality == settings.quality, "every Shadows and Lighting choice must survive a restart")
 
@@ -44,8 +47,10 @@ when ODIN_TEST {
 		menuui.activate(&client.menu, {action = {kind = .QUALITY_TOGGLE, index = i32(menuui.Quality_Toggle.SHADOWS)}})
 		menuui.activate(&client.menu, {action = {kind = .QUALITY_TOGGLE, index = i32(menuui.Quality_Toggle.SOFT_SHADOWS)}})
 		menuui.activate(&client.menu, {action = {kind = .LIGHTING, index = 2}})
+		menuui.activate(&client.menu, {action = {kind = .SHADOW_QUALITY, index = 1}})
+		menuui.activate(&client.menu, {action = {kind = .QUALITY_TOGGLE, index = i32(menuui.Quality_Toggle.SELF_SHADOW)}})
 		_, preview := client_graphics_values(&client)
-		testing.expect(t, !preview.shadows && preview.soft_shadows && preview.lighting == 2 && client.quality_settings == menuui.DEFAULT_QUALITY_SETTINGS,
+		testing.expect(t, !preview.shadows && preview.soft_shadows && preview.lighting == 2 && preview.shadow_quality == 1 && !preview.self_shadow && client.quality_settings == menuui.DEFAULT_QUALITY_SETTINGS,
 			"Shadows and Lighting must preview from the draft without changing saved settings")
 		menu_apply_action(&client, {kind = .SETTINGS_SAVE})
 		testing.expect(t, !client.quality_settings.shadows && client.quality_settings.soft_shadows && client.quality_settings.lighting == 2 && client_settings_snapshot(&client).quality == client.quality_settings,
@@ -53,7 +58,7 @@ when ODIN_TEST {
 	}
 
 	shadow_test_pixel :: proc(scene: ^Scene, camera: ^Camera, map_inst: ^shared.Map, quality: menuui.Quality_Settings, x, y: i32) -> [4]u8 {
-		shadow_prepare(scene, map_inst, quality)
+		shadow_prepare(scene, map_inst, quality, 0, {0, 0, 64, 64}, camera.position)
 		gl.Viewport(0, 0, 64, 64)
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, camera, 64, 64)
@@ -121,7 +126,7 @@ when ODIN_TEST {
 		off := menuui.Quality_Settings{lighting = 1}
 		shaded_off := shadow_test_pixel(scene, &camera, &map_inst, off, shaded_x, 32)
 		lit_off := shadow_test_pixel(scene, &camera, &map_inst, off, lit_x, 32)
-		testing.expect(t, g_shadow.renders == renders && g_shadow.static_target.fbo == 0 && !g_render_quality.shadows, "Shadows off must not create or render a shadow map")
+		testing.expect(t, g_shadow.renders == renders && g_shadow.texture == 0 && !g_render_quality.shadows, "Shadows off must not create or render a shadow map")
 		testing.expect(t, shaded_off == lit_off && lit_off.r > 240, fmt.tprintf("without shadows the floor is evenly lit (%v, %v)", shaded_off, lit_off))
 
 		on := menuui.DEFAULT_QUALITY_SETTINGS
@@ -133,19 +138,46 @@ when ODIN_TEST {
 		soft := on
 		soft.soft_shadows = true
 		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, soft, shaded_x, 32).r < 100, "Soft Shadows must still shadow the floor")
-		testing.expect(t, g_shadow.renders == renders + 2, "changing the filter must rebuild the shadow map once")
+		testing.expect(t, g_shadow.renders == renders + 1, "switching the filter must not redraw the shadow map")
+		soft_4tap := soft
+		soft_4tap.shadow_quality = 1
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, soft_4tap, shaded_x, 32).r < 100, "the 4-tap soft filter must shadow the floor")
+
+		// Players (Dynamic Shadows) go into their own small map; the sun map is
+		// neither redrawn nor copied for them.
 		dynamic_quality := on
 		dynamic_quality.dynamic_shadows = true
-		dynamic_before := g_shadow.dynamic_renders
+		players_before := g_shadow.player_renders
 		shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32)
-		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32).r < 100, "Dynamic Shadows must keep the static map's shadows")
-		testing.expect(t, g_shadow.dynamic_renders == dynamic_before + 2 && g_shadow.renders == renders + 2,
-			"Dynamic Shadows must redraw the players every frame on a copy of the cached static map")
-		// A player-like caster only shows with Dynamic Shadows.
+		testing.expect(t, g_shadow.player_renders == players_before, "with no player caster in range the player pass must be skipped")
 		box.shadow_caster = .DYNAMIC
 		shadow_mark_dirty()
 		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, on, shaded_x, 32).r > 240, "players must not cast without Dynamic Shadows")
-		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32).r < 100, "players must cast with Dynamic Shadows")
+		testing.expect(t, g_shadow.player_renders == players_before, "without Dynamic Shadows or Self shadow there is no player pass")
+		sun_renders := g_shadow.renders
+		for _ in 0 ..< 3 {
+			testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32).r < 100, "a player must cast through the player map")
+		}
+		testing.expect(t, g_shadow.player_renders == players_before + 3 && g_shadow.renders == sun_renders && g_shadow.casters_drawn == 1,
+			"Dynamic Shadows must draw only the player each frame, never redraw or copy the sun map")
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, lit_x, 32).r > 240, "the player map must not shade lit floor")
+		box.shadow_caster = .STATIC
+		shadow_mark_dirty()
+
+		// Sharp: cascades around the camera.
+		sharp := on
+		sharp.shadow_quality = 1
+		sharp_shaded := shadow_test_pixel(scene, &camera, &map_inst, sharp, shaded_x, 32)
+		sharp_lit := shadow_test_pixel(scene, &camera, &map_inst, sharp, lit_x, 32)
+		testing.expect(t, sharp_shaded.r < 100 && sharp_lit.r > 240 && g_shadow.layers == SHADOW_CASCADES, fmt.tprintf("Sharp must shadow the floor (%v vs %v)", sharp_shaded, sharp_lit))
+		sharp_renders := g_shadow.renders
+		shadow_test_pixel(scene, &camera, &map_inst, sharp, shaded_x, 32)
+		testing.expect(t, g_shadow.renders == sharp_renders, "a still camera must reuse the cascades")
+		sharp_dynamic := sharp
+		sharp_dynamic.dynamic_shadows = true
+		box.shadow_caster = .DYNAMIC
+		shadow_mark_dirty()
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, sharp_dynamic, shaded_x, 32).r < 100, "Sharp + Dynamic must shadow through the player map")
 		box.shadow_caster = .STATIC
 		shadow_mark_dirty()
 
@@ -159,7 +191,47 @@ when ODIN_TEST {
 		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, high, shaded_x, 32).r < 100, "High lighting must keep the sun's shadow")
 
 		shadow_release_map()
-		testing.expect(t, g_shadow.static_target.fbo == 0 && g_shadow.static_target.texture == 0 && g_shadow.dynamic_target.texture == 0, "a map change must free the shadow map")
+		testing.expect(t, g_shadow.texture == 0 && g_shadow.fbos[0] == 0 && g_shadow.player_texture == 0, "a map change must free the shadow maps")
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "shadows must not generate OpenGL errors")
+	}
+
+	// Sharp cascades: wherever the camera is within the redraw thresholds of
+	// the cascades' centres, every point out to half the last radius is covered
+	// by some cascade (no gaps between or inside them).
+	@(test)
+	shadow_cascades_cover_the_view :: proc(t: ^testing.T) {
+		config := shared.DEFAULT_LIGHTING_CONFIG
+		config.sun_angle_x, config.sun_angle_y = 60, -40
+		view := shadow_view_matrix(sun_position(config))
+		lo, hi := shared.Vec3{-1000, -200, -1000}, shared.Vec3{1000, 400, 1000}
+		near, far := f32(max(f32)), -max(f32)
+		for i in 0 ..< 8 {
+			corner := shared.Vec4{(i & 1) != 0 ? hi.x : lo.x, (i & 2) != 0 ? hi.y : lo.y, (i & 4) != 0 ? hi.z : lo.z, 1}
+			d := -(view * corner).z
+			near, far = min(near, d), max(far, d)
+		}
+		radii := cascade_radii(config)
+		testing.expect(t, radii[0] < radii[1] && radii[1] < radii[2], "cascades must grow outwards")
+		gaps, checked := 0, 0
+		for trial in 0 ..< 40 {
+			fa, fb := f32(trial) * 2.39996, f32(trial) * 0.7
+			camera := shared.Vec3{math.cos(fa) * 300, 20 + 10 * math.sin(fb), math.sin(fa) * 300}
+			cascades: [SHADOW_CASCADES]Shadow_Cascade
+			for index in 0 ..< SHADOW_CASCADES {
+				// Worst case without a redraw: the centre left behind by just under
+				// half the radius (the immediate-redraw threshold).
+				offset := shared.Vec3{math.cos(fb), 0.2, math.sin(fb)} * (radii[index] * 0.49 / 1.0198)
+				cascades[index], _ = cascade_fit(view, camera - offset, radii[index], near - 1, far + 1, 0.48)
+			}
+			for sample in 0 ..< 400 {
+				a, b := f32(sample) * 2.39996, f32(sample) * 1.3
+				distance := (f32(sample % 20) + 0.5) / 20 * radii[2] * 0.45
+				direction := shared.Vec3{math.cos(a) * math.cos(b), math.sin(b) * 0.5, math.sin(a) * math.cos(b)}
+				point := camera + direction * distance
+				checked += 1
+				if cascade_covering(cascades[:], point) < 0 { gaps += 1 }
+			}
+		}
+		testing.expect(t, gaps == 0, fmt.tprintf("%d of %d points near the camera fell outside every cascade", gaps, checked))
 	}
 }

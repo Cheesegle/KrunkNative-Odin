@@ -49,17 +49,31 @@ uniform vec2 uVisualLighting; // ambient and sunlight multipliers
 // Krunker "Lighting": 0 Low (unlit), 1 Normal (Lambert), 2 High (Phong),
 // 3 Physical (standard, roughness 1, metalness 0). See shadows.odin.
 uniform int uLightingMode;
-// Krunker "Shadows": the sun's orthographic shadow map.
+// Krunker "Shadows": the sun's orthographic shadow map(s) in one depth array
+// (shadows.odin). Krunker mode: one layer, Krunker's whole-map camera. Sharp
+// mode: SHADOW_CASCADES layers around the camera, nearest first.
 uniform bool uShadowEnabled;
 #ifndef BATCHED
 uniform bool receive_shadow;
 #endif
-uniform mat4 uShadowMatrix; // world -> shadow map uv (xy) and depth (z)
-uniform sampler2DShadow uShadowMap;
+#define SHADOW_CASCADES 3
+uniform int uShadowLayers;
+uniform sampler2DArrayShadow uShadowMap;
+uniform mat4 uShadowMatrices[SHADOW_CASCADES]; // world -> uv (xy) and depth (z)
+uniform float uShadowBiases[SHADOW_CASCADES];
+// Sharp: cascade i's uv = cascade 0's uv * xy + zw (same light view and depth).
+uniform vec4 uCascadeScaleOffset[SHADOW_CASCADES];
+uniform float uShadowTexels[SHADOW_CASCADES]; // shadow.radius (1) / mapSize
 uniform bool uShadowSoft; // PCFShadowMap; otherwise BasicShadowMap
-uniform float uShadowTexel; // shadow.radius (1) / mapSize
-uniform float uShadowBias;
+uniform int uShadowSoftKernel; // 0 Krunker's 5-tap Vogel PCF, 1 4-tap bilinear PCF
 uniform float uShadowNormalBias;
+// Players (Dynamic Shadows) and your own body (Self shadow): a small map
+// fitted to them every frame. Receivers take the darker of the two.
+uniform bool uPlayerShadowEnabled;
+uniform sampler2DShadow uPlayerShadowMap;
+uniform mat4 uPlayerShadowMatrix;
+uniform float uPlayerShadowBias;
+uniform float uPlayerShadowTexel;
 // Map POINT/SPOT/DIRECTIONAL_LIGHT objects (High and Physical).
 #define MAX_MAP_LIGHTS 16
 uniform int uMapLightCount;
@@ -80,20 +94,91 @@ vec2 vogel_disk_sample(int index, int count, float phi) {
     return vec2(cos(theta), sin(theta)) * r;
 }
 
-float sun_shadow(vec3 normal) {
-    vec4 coord = uShadowMatrix * vec4(world_pos + normal * uShadowNormalBias, 1.0);
-    vec3 shadow_coord = coord.xyz / coord.w;
-    shadow_coord.z += uShadowBias;
-    // Outside the shadow camera's frustum is lit.
-    if (shadow_coord.x < 0.0 || shadow_coord.x > 1.0 || shadow_coord.y < 0.0 || shadow_coord.y > 1.0 || shadow_coord.z > 1.0) return 1.0;
-    if (!uShadowSoft) return texture(uShadowMap, shadow_coord);
-    float phi = interleaved_gradient_noise(gl_FragCoord.xy) * 6.28318530718;
+// Soft filter tap offsets, in texels. Kernel 0 is Krunker's PCFShadowFilter
+// (5 Vogel taps, rotated per pixel by noise). Kernel 1 is 4 bilinear taps on
+// a 0.5-texel square: a 3x3-texel tent with no noise and no trigonometry.
+int soft_tap_count() { return uShadowSoftKernel == 0 ? 5 : 4; }
+
+vec2 soft_tap(int i, float phi) {
+    if (uShadowSoftKernel == 0) return vogel_disk_sample(i, 5, phi);
+    return vec2((i & 1) == 0 ? -0.5 : 0.5, (i & 2) == 0 ? -0.5 : 0.5);
+}
+
+float soft_phi() {
+    return uShadowSoftKernel == 0 ? interleaved_gradient_noise(gl_FragCoord.xy) * 6.28318530718 : 0.0;
+}
+
+float sun_layer_visibility(vec3 coord, int layer) {
+    if (!uShadowSoft) return texture(uShadowMap, vec4(coord.xy, float(layer), coord.z));
+    float phi = soft_phi();
+    int taps = soft_tap_count();
     float sum = 0.0;
-    for (int i = 0; i < 5; i++) {
-        vec2 offset = vogel_disk_sample(i, 5, phi) * uShadowTexel;
-        sum += texture(uShadowMap, vec3(shadow_coord.xy + offset, shadow_coord.z));
+    for (int i = 0; i < taps; i++) {
+        vec2 offset = soft_tap(i, phi) * uShadowTexels[layer];
+        sum += texture(uShadowMap, vec4(coord.xy + offset, float(layer), coord.z));
     }
-    return sum * 0.2;
+    return sum / float(taps);
+}
+
+vec3 sun_layer_coord(vec3 position, int layer) {
+    vec4 coord = uShadowMatrices[layer] * vec4(position, 1.0);
+    vec3 c = coord.xyz / coord.w;
+    c.z += uShadowBiases[layer];
+    return c;
+}
+
+// Distance (in uv) from the cascade's border; negative outside.
+float cascade_inset(vec3 c) {
+    return min(min(c.x, 1.0 - c.x), min(c.y, 1.0 - c.y));
+}
+
+#define CASCADE_BLEND 0.08 // Outer band (in uv) blended into the next cascade.
+
+float sun_visibility(vec3 position) {
+    if (uShadowLayers == 1) {
+        vec3 c = sun_layer_coord(position, 0);
+        // Krunker: outside the shadow camera's frustum is lit.
+        if (c.x < 0.0 || c.x > 1.0 || c.y < 0.0 || c.y > 1.0 || c.z > 1.0) return 1.0;
+        return sun_layer_visibility(c, 0);
+    }
+    vec3 c0 = sun_layer_coord(position, 0);
+    for (int layer = 0; layer < uShadowLayers; layer++) {
+        vec3 c = vec3(c0.xy * uCascadeScaleOffset[layer].xy + uCascadeScaleOffset[layer].zw, c0.z);
+        float inset = cascade_inset(c);
+        // Keep a 2-texel margin for the soft filter's footprint.
+        float margin = 2.0 * uShadowTexels[layer];
+        if (inset < margin || c.z > 1.0) continue;
+        float visibility = sun_layer_visibility(c, layer);
+        float blend = (inset - margin) / CASCADE_BLEND;
+        if (blend >= 1.0 || layer + 1 >= uShadowLayers) return visibility;
+        vec3 next = vec3(c0.xy * uCascadeScaleOffset[layer + 1].xy + uCascadeScaleOffset[layer + 1].zw, c0.z);
+        if (cascade_inset(next) < 2.0 * uShadowTexels[layer + 1]) return visibility;
+        return mix(sun_layer_visibility(next, layer + 1), visibility, blend);
+    }
+    return 1.0; // Past the last cascade (beyond the fog).
+}
+
+float player_visibility(vec3 position) {
+    vec4 coord = uPlayerShadowMatrix * vec4(position, 1.0);
+    vec3 c = coord.xyz / coord.w;
+    if (c.x < 0.0 || c.x > 1.0 || c.y < 0.0 || c.y > 1.0 || c.z < 0.0) return 1.0;
+    // Receivers past the fitted far plane are still behind every caster.
+    c.z = min(c.z + uPlayerShadowBias, 1.0);
+    if (!uShadowSoft) return texture(uPlayerShadowMap, c);
+    float phi = soft_phi();
+    int taps = soft_tap_count();
+    float sum = 0.0;
+    for (int i = 0; i < taps; i++) {
+        sum += texture(uPlayerShadowMap, vec3(c.xy + soft_tap(i, phi) * uPlayerShadowTexel, c.z));
+    }
+    return sum / float(taps);
+}
+
+float sun_shadow(vec3 normal) {
+    vec3 position = world_pos + normal * uShadowNormalBias;
+    float visibility = sun_visibility(position);
+    if (uPlayerShadowEnabled && visibility > 0.0) visibility = min(visibility, player_visibility(position));
+    return visibility;
 }
 
 vec3 f_schlick(vec3 f0, float dot_vh) {
