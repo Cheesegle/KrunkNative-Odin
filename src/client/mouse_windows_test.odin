@@ -2,6 +2,7 @@
 
 package main
 
+import "core:sync"
 import "core:testing"
 import win "core:sys/windows"
 import glfw "vendor:glfw"
@@ -10,6 +11,8 @@ import shared "../shared"
 when ODIN_TEST {
 	g_mouse_test_scroll: f64
 	mouse_test_scroll :: proc "c" (window: glfw.WindowHandle, x, y: f64) { g_mouse_test_scroll += y }
+	g_mouse_test_cursor: [2]f64
+	mouse_test_cursor :: proc "c" (window: glfw.WindowHandle, x, y: f64) { g_mouse_test_cursor = {x, y} }
 
 	@(test)
 	buffered_mouse_preserves_high_rate_motion :: proc(t: ^testing.T) {
@@ -85,9 +88,9 @@ when ODIN_TEST {
 		defer glfw.DestroyWindow(window)
 		hwnd := glfw.GetWin32Window(window)
 		previous := win.GetWindowLongPtrW(hwnd, win.GWLP_WNDPROC)
-		if !testing.expect(t, client_mouse_init(window), "the Windows input hook must install") do return
-		defer client_mouse_fini()
-		testing.expect(t, client_mouse_init(window), "initialization must be safe to repeat without creating a recursive hook")
+		if !testing.expect(t, native_mouse_subclass_init(window), "the Windows input hook must install") do return
+		defer native_mouse_subclass_fini()
+		testing.expect(t, native_mouse_subclass_init(window), "initialization must be safe to repeat without creating a recursive hook")
 		testing.expect(t, win.GetWindowLongPtrW(hwnd, win.GWLP_WNDPROC) != previous, "window procedure must be wrapped")
 		fallback := shared.Vec2{12, -3}
 		testing.expect(t, client_mouse_delta(fallback) == fallback, "menu/unfocused input must retain GLFW cursor movement")
@@ -107,8 +110,194 @@ when ODIN_TEST {
 		win.SendMessageW(hwnd, win.WM_KILLFOCUS, 0, 0)
 		testing.expect(t, g_native_mouse.x == 0 && !g_native_mouse.active, "focus loss must clear queued movement")
 		client_poll_events()
-		client_mouse_fini()
+		native_mouse_subclass_fini()
 		testing.expect(t, win.GetWindowLongPtrW(hwnd, win.GWLP_WNDPROC) == previous, "shutdown must restore GLFW's original window procedure")
 		testing.expect(t, client_mouse_delta(fallback) == fallback, "fallback must remain usable after shutdown")
+	}
+
+	mouse_test_relative_report :: proc(dx, dy: i32) -> win.RAWINPUT {
+		report := win.RAWINPUT{header = {dwType = win.RIM_TYPEMOUSE, dwSize = size_of(win.RAWINPUT)}}
+		report.data.mouse.lLastX, report.data.mouse.lLastY = dx, dy
+		return report
+	}
+
+	mouse_test_absolute_report :: proc(device: uintptr, x, y: i32) -> win.RAWINPUT {
+		report := win.RAWINPUT{header = {dwType = win.RIM_TYPEMOUSE, dwSize = size_of(win.RAWINPUT), hDevice = win.HANDLE(device)}}
+		report.data.mouse.usFlags = win.MOUSE_MOVE_ABSOLUTE
+		report.data.mouse.lLastX, report.data.mouse.lLastY = x, y
+		return report
+	}
+
+	@(test)
+	raw_input_thread_matches_window_procedure_sensitivity :: proc(t: ^testing.T) {
+		old := new(Native_Mouse)
+		defer free(old)
+		state := new(Raw_Input_Thread)
+		defer free(state)
+		raw_input_thread_set_active(state, true)
+
+		// Relative: one second of 8 kHz motion in the GetRawInputBuffer layout,
+		// 1000-report batches on both paths. The thread path publishes per
+		// WM_INPUT and the main thread takes once per "frame" (every 3 batches);
+		// the totals must be identical.
+		old_total, new_total: shared.Vec2
+		for batch in 0..<8 {
+			for i in 0..<1000 {
+				index := batch * 1000 + i
+				record := mouse_test_relative_report(i32(index % 17 - 8), i32(index % 13 - 6))
+				(cast(^win.RAWINPUT)&old.buffer[i * size_of(win.RAWINPUT) / size_of(u64)])^ = record
+				(cast(^win.RAWINPUT)&state.mouse.buffer[i * size_of(win.RAWINPUT) / size_of(u64)])^ = record
+			}
+			old_data := (cast([^]u8)&old.buffer[0])[:size_of(old.buffer)]
+			new_data := (cast([^]u8)&state.mouse.buffer[0])[:size_of(state.mouse.buffer)]
+			testing.expect(t, native_mouse_consume_buffer(old, old_data, 1000))
+			active := raw_input_thread_sync(state)
+			testing.expect(t, native_mouse_consume_buffer(&state.mouse, new_data, 1000))
+			raw_input_thread_publish(state, active)
+			if batch % 3 == 2 { new_total += raw_input_thread_take_delta(state) }
+		}
+		old_total += native_mouse_take_delta(old)
+		new_total += raw_input_thread_take_delta(state)
+		testing.expect_value(t, new_total, old_total)
+		testing.expect(t, old_total != (shared.Vec2{}), "the reference sequence must produce motion")
+		testing.expect_value(t, raw_input_thread_take_delta(state), shared.Vec2{})
+
+		// Single WM_INPUT reports (GetRawInputData path), including totals past 32 bits.
+		for dx in ([]i32{max(i32), max(i32), -5, 7}) {
+			record := mouse_test_relative_report(dx, -dx / 2)
+			native_mouse_accumulate(old, &record)
+			native_mouse_accumulate(&state.mouse, &record)
+			raw_input_thread_publish(state, raw_input_thread_sync(state))
+		}
+		testing.expect(t, sync.atomic_load(&state.dx) == old.x && sync.atomic_load(&state.dy) == old.y, "per-message reports must sum identically without 32-bit wrap")
+		testing.expect_value(t, raw_input_thread_take_delta(state), native_mouse_take_delta(old))
+
+		// Absolute devices: two interleaved devices with per-device baselines.
+		absolute := [?]win.RAWINPUT{
+			mouse_test_absolute_report(1, 10000, 20000),
+			mouse_test_absolute_report(2, 30000, 30000),
+			mouse_test_absolute_report(1, 11000, 19000),
+			mouse_test_absolute_report(2, 29000, 32000),
+			mouse_test_absolute_report(1, 12500, 18000),
+		}
+		for &record in absolute {
+			native_mouse_accumulate(old, &record)
+			native_mouse_accumulate(&state.mouse, &record)
+			raw_input_thread_publish(state, raw_input_thread_sync(state))
+		}
+		old_absolute := native_mouse_take_delta(old)
+		testing.expect(t, old_absolute.x > 0, "absolute reference must move")
+		testing.expect_value(t, raw_input_thread_take_delta(state), old_absolute)
+	}
+
+	@(test)
+	raw_input_thread_drops_inactive_motion :: proc(t: ^testing.T) {
+		state := new(Raw_Input_Thread)
+		defer free(state)
+		move := mouse_test_relative_report(40, -20)
+
+		// Inactive from the start (menu open): reports are read and dropped.
+		native_mouse_accumulate(&state.mouse, &move)
+		raw_input_thread_publish(state, raw_input_thread_sync(state))
+		testing.expect_value(t, raw_input_thread_take_delta(state), shared.Vec2{})
+
+		// Active: motion counts, and an absolute baseline is established.
+		raw_input_thread_set_active(state, true)
+		first := mouse_test_absolute_report(7, 10000, 10000)
+		native_mouse_accumulate(&state.mouse, &first)
+		raw_input_thread_publish(state, raw_input_thread_sync(state))
+		native_mouse_accumulate(&state.mouse, &move)
+		raw_input_thread_publish(state, raw_input_thread_sync(state))
+		testing.expect_value(t, raw_input_thread_take_delta(state), shared.Vec2{40, -20})
+
+		// Motion published but not yet taken when the game loses focus is
+		// discarded by the transition, not delivered after alt-tab.
+		native_mouse_accumulate(&state.mouse, &move)
+		raw_input_thread_publish(state, raw_input_thread_sync(state))
+		raw_input_thread_set_active(state, false)
+		far := mouse_test_absolute_report(7, 60000, 60000)
+		native_mouse_accumulate(&state.mouse, &far)
+		native_mouse_accumulate(&state.mouse, &move)
+		raw_input_thread_publish(state, raw_input_thread_sync(state))
+		raw_input_thread_set_active(state, true)
+		testing.expect_value(t, raw_input_thread_take_delta(state), shared.Vec2{})
+
+		// Back in game: the absolute device re-baselines instead of jumping
+		// by the distance it travelled while inactive.
+		back := mouse_test_absolute_report(7, 20000, 20000)
+		active := raw_input_thread_sync(state)
+		native_mouse_accumulate(&state.mouse, &back)
+		raw_input_thread_publish(state, active)
+		testing.expect_value(t, raw_input_thread_take_delta(state), shared.Vec2{})
+	}
+
+	mouse_test_registered_target :: proc() -> (target: win.HWND, found: bool) {
+		devices: [16]win.RAWINPUTDEVICE
+		count := u32(len(devices))
+		n := win.GetRegisteredRawInputDevices(&devices[0], &count, size_of(win.RAWINPUTDEVICE))
+		if n == max(u32) { return nil, false }
+		for device in devices[:n] {
+			if device.usUsagePage == 1 && device.usUsage == 2 { return device.hwndTarget, true }
+		}
+		return nil, false
+	}
+
+	@(test)
+	raw_input_thread_lifecycle :: proc(t: ^testing.T) {
+		if !testing.expect(t, bool(glfw.Init())) do return
+		defer glfw.Terminate()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		window := glfw.CreateWindow(160, 120, "Raw input thread regression", nil, nil)
+		if !testing.expect(t, window != nil) do return
+		defer glfw.DestroyWindow(window)
+		hwnd := glfw.GetWin32Window(window)
+		previous := win.GetWindowLongPtrW(hwnd, win.GWLP_WNDPROC)
+
+		if !testing.expect(t, client_mouse_init(window), "the raw input thread must start") do return
+		defer client_mouse_fini()
+		state := &g_raw_input_thread
+		testing.expect(t, state.handle != nil && state.hwnd != nil, "the thread path must be chosen over the window-procedure fallback")
+		testing.expect(t, g_native_mouse.previous_proc == nil && state.game_previous_proc != nil, "the thread path must be chosen and only wrap the game window once")
+		testing.expect(t, client_mouse_init(window), "initialization must be safe to repeat")
+		testing.expect(t, glfw.GetInputMode(window, glfw.RAW_MOUSE_MOTION) == 0, "GLFW must not compete for the raw mouse registration")
+		target, found := mouse_test_registered_target()
+		testing.expect(t, found && target == state.hwnd, "raw mouse input must target the message-only window")
+
+		// Capturing the cursor must not let GLFW re-register raw input.
+		glfw.SetInputMode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+		client_poll_events()
+		target, found = mouse_test_registered_target()
+		testing.expect(t, found && target == state.hwnd, "cursor capture must keep our registration")
+		fallback := shared.Vec2{12, -3}
+		testing.expect_value(t, client_mouse_delta(fallback), fallback) // a hidden window is never focused
+		testing.expect(t, !sync.atomic_load(&state.active), "an unfocused window must not count raw motion")
+		glfw.SetInputMode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+
+		win.SendMessageW(hwnd, win.WM_LBUTTONDOWN, 0, 0)
+		testing.expect(t, glfw.GetMouseButton(window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS, "mouse buttons must still reach GLFW")
+		win.SendMessageW(hwnd, win.WM_LBUTTONUP, 0, 0)
+		g_mouse_test_scroll = 0
+		glfw.SetScrollCallback(window, mouse_test_scroll)
+		win.SendMessageW(hwnd, win.WM_MOUSEWHEEL, 120 << 16, 0)
+		testing.expect(t, g_mouse_test_scroll == 1, "scroll wheel input must still reach GLFW")
+		win.SendMessageW(hwnd, win.WM_KEYDOWN, 'W', 0x00110000)
+		testing.expect(t, glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS, "keyboard input must still reach GLFW")
+		win.SendMessageW(hwnd, win.WM_KEYUP, 'W', 0xC0110000)
+		client_wait_events(0.001)
+
+		// Menus (cursor not captured) still get GLFW cursor movement.
+		g_mouse_test_cursor = {}
+		glfw.SetCursorPosCallback(window, mouse_test_cursor)
+		win.SendMessageW(hwnd, win.WM_MOUSEMOVE, 0, win.LPARAM(40 | 30 << 16))
+		testing.expect_value(t, g_mouse_test_cursor, [2]f64{40, 30})
+
+		client_mouse_fini()
+		testing.expect(t, state.handle == nil, "shutdown must join the input thread")
+		testing.expect(t, win.GetWindowLongPtrW(hwnd, win.GWLP_WNDPROC) == previous, "shutdown must restore GLFW's window procedure")
+		_, found = mouse_test_registered_target()
+		testing.expect(t, !found, "shutdown must remove the raw mouse registration")
+		testing.expect_value(t, client_mouse_delta(fallback), fallback)
+		// The class is unregistered on exit, so the thread can start again.
+		testing.expect(t, client_mouse_init(window), "the input thread must restart after shutdown")
 	}
 }
