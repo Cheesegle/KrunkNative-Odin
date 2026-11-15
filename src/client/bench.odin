@@ -29,8 +29,10 @@ BENCH_WARMUP_FRAMES :: 30
 BENCH_REMOTE_PLAYERS :: 6
 
 Bench_Config :: struct {
-	name:    string,
-	quality: menuui.Quality_Settings,
+	name:     string,
+	quality:  menuui.Quality_Settings,
+	batching: bool, // Static map batches (map_batch.odin).
+	culling:  bool, // Frustum culling; only used on the batched path.
 }
 
 Bench_Result :: struct {
@@ -46,12 +48,16 @@ Bench_Result :: struct {
 	gpu_avg_ms:  f64,
 	gpu_p95_ms:  f64,
 	extra_ms:    f64, // One-off GPU work when the configuration is applied (static shadow map).
+	draw_calls:  f64, // Average draw calls per measured frame (world + viewmodel).
+	culled:      f64, // Average map batches culled per frame.
 }
 
 bench_configs :: proc() -> []Bench_Config {
 	configs := make([dynamic]Bench_Config, context.temp_allocator)
 	base := menuui.Quality_Settings{}
-	append(&configs, Bench_Config{"baseline (off)", base})
+	append(&configs, Bench_Config{"per-object (batching off)", base, false, false})
+	append(&configs, Bench_Config{"batched, no culling", base, true, false})
+	append(&configs, Bench_Config{"batched + culled", base, true, true})
 	return configs[:]
 }
 
@@ -176,6 +182,9 @@ bench_frame :: proc(client: ^Client, target: ^Bench_Target, frame: int) {
 bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_Config, seconds: f32, map_name: string) -> Bench_Result {
 	client.quality_settings = config.quality
 	client.visual_settings = menuui.DEFAULT_VISUAL_SETTINGS
+	client.render_batching = config.batching
+	g_render_culling = config.culling
+	defer g_render_culling = true
 	result := Bench_Result{map_name = map_name, width = target.width, height = target.height, config = config.name}
 
 	queries: [BENCH_QUERY_RING]u32
@@ -200,6 +209,7 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	cpu_ms := make([dynamic]f64, context.temp_allocator)
 	gpu_ms := make([dynamic]f64, context.temp_allocator)
 	pending: [BENCH_QUERY_RING]bool
+	draw_sum, culled_sum: int
 	start := time.tick_now()
 	previous := start
 	frame := 0
@@ -223,6 +233,8 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 		gl.BeginQuery(gl.TIME_ELAPSED, queries[slot])
 		bench_frame(client, target, frame)
 		gl.EndQuery(gl.TIME_ELAPSED)
+		draw_sum += g_draw_stats.draw_calls
+		culled_sum += g_draw_stats.batches_culled
 		pending[slot] = true
 		append(&cpu_ms, time.duration_milliseconds(time.tick_since(now)))
 		fences[fence_slot] = gl.FenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
@@ -240,6 +252,8 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	bench_screenshot(client, target, config.name, map_name)
 
 	result.frames = len(frame_ms)
+	result.draw_calls = f64(draw_sum) / f64(max(frame, 1))
+	result.culled = f64(culled_sum) / f64(max(frame, 1))
 	result.avg_ms = bench_mean(frame_ms[:])
 	result.cpu_avg_ms = bench_mean(cpu_ms[:])
 	result.gpu_avg_ms = bench_mean(gpu_ms[:])
@@ -296,9 +310,14 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 		client.game.map_count = 0
 	}
 	if !client.game.ready { return false }
+	// Build the batches once; each configuration only switches the draw path.
+	client.render_batching = true
 	client_load_current_map(client)
 	bench_spawn_players(client)
 	fmt.printf("[Bench] %s: %d objects, %d world meshes, %d spawns\n", map_name, len(map_inst.objects), len(client.scene.meshes), len(map_inst.spawns))
+	if set := client.scene.batches; set != nil {
+		fmt.printf("[Bench] %s: %d map batches hold %d meshes (%d vertices, %d indices)\n", map_name, len(set.batches), len(set.members), set.vertex_count, set.index_count)
+	}
 
 	for size in sizes {
 		target := bench_target_init(size[0], size[1])
@@ -306,9 +325,9 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 		for bench_config in bench_configs() {
 			result := bench_run_config(client, &target, bench_config, client.bench_seconds, map_name)
 			append(results, result)
-			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  [%d frames]\n",
+			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  draws %7.1f  [%d frames]\n",
 				map_name, size[0], size[1], result.config, result.avg_ms, 1000 / max(result.avg_ms, 0.0001), result.p95_ms, result.p99_ms,
-				result.cpu_avg_ms, result.gpu_avg_ms, result.gpu_p95_ms, result.extra_ms, result.frames)
+				result.cpu_avg_ms, result.gpu_avg_ms, result.gpu_p95_ms, result.extra_ms, result.draw_calls, result.frames)
 			free_all(context.temp_allocator)
 		}
 	}
@@ -362,6 +381,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	client.viewmodel_settings = menuui.DEFAULT_VIEWMODEL_SETTINGS
 	client.selected_secondary = 2
 	client.bench_seconds = seconds
+	client.render_batching = true
 	client_graphics_init(client)
 	defer client_graphics_fini(client)
 	client.scene = scene_init()
@@ -391,16 +411,16 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 
 	// Markdown table for pasting into a PR.
 	fmt.printf("\nGPU: %s\n\n", renderer)
-	fmt.println("| Map | Resolution | Configuration | Avg ms | FPS | p95 ms | p99 ms | CPU ms | GPU ms | GPU p95 ms | One-off ms |")
-	fmt.println("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+	fmt.println("| Map | Resolution | Configuration | Avg ms | FPS | p95 ms | p99 ms | CPU ms | GPU ms | GPU p95 ms | One-off ms | Draw calls |")
+	fmt.println("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for r in results {
-		fmt.printf("| %s | %dx%d | %s | %.3f | %.0f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
-			r.map_name, r.width, r.height, r.config, r.avg_ms, 1000 / max(r.avg_ms, 0.0001), r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms)
+		fmt.printf("| %s | %dx%d | %s | %.3f | %.0f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.0f |\n",
+			r.map_name, r.width, r.height, r.config, r.avg_ms, 1000 / max(r.avg_ms, 0.0001), r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls)
 	}
 	csv := strings.builder_make(context.temp_allocator)
-	strings.write_string(&csv, "map,width,height,config,frames,avg_ms,p95_ms,p99_ms,cpu_avg_ms,gpu_avg_ms,gpu_p95_ms,one_off_ms\n")
+	strings.write_string(&csv, "map,width,height,config,frames,avg_ms,p95_ms,p99_ms,cpu_avg_ms,gpu_avg_ms,gpu_p95_ms,one_off_ms,draw_calls,batches_culled\n")
 	for r in results {
-		fmt.sbprintf(&csv, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", r.map_name, r.width, r.height, r.config, r.frames, r.avg_ms, r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms)
+		fmt.sbprintf(&csv, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%.1f\n", r.map_name, r.width, r.height, r.config, r.frames, r.avg_ms, r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls, r.culled)
 	}
 	if os.write_entire_file("bin/bench-results.csv", transmute([]u8)strings.to_string(csv)) == nil {
 		fmt.println("\n[Bench] Wrote bin/bench-results.csv")
