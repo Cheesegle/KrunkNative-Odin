@@ -1612,6 +1612,7 @@ main :: proc() {
 
 	glfw.SwapInterval(client.vsync ? 1 : 0)
 	client_apply_display_settings(client)
+	defer software_cursor_fini()
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	client.scene = scene_init()
@@ -1687,6 +1688,7 @@ main :: proc() {
 		g_draw_calls = 0
 		phase_frame_begin()
 
+		software_cursor_update(client.window)
 		phase_mark(.TICK)
 		client_tick(client, now, delta)
 		gl_check("frame")
@@ -1704,6 +1706,7 @@ main :: proc() {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))
 		}
+		software_cursor_render(client)
 		swap_start := glfw.GetTime()
 		phase_mark(.SWAP_BUFFERS)
 		glfw.SwapBuffers(client.window)
