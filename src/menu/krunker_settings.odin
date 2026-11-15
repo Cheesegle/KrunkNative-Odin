@@ -15,7 +15,7 @@ import "core:strings"
 // text to their defaults; binds missing from "controls" stay unchanged.
 
 Krunker_Key :: enum {
-	SHOW_TRAILS, YOUR_TRAILS, SHOW_FPS,
+	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS,
 	CROSSHAIR_TYPE, CROSSHAIR_OPACITY, CROSSHAIR_USE_OPACITY, CROSSHAIR_ALWAYS, CROSSHAIR_COLOR, CROSSHAIR_SHADOW,
 	CROSSHAIR_SHADOW_THICKNESS, CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, CROSSHAIR_GAP, CROSSHAIR_DOT,
 	HITMARKER_SHOW, HITMARKER_COLOR, HITMARKER_KILL_COLOR, HITMARKER_OPACITY, HITMARKER_LENGTH, HITMARKER_THICKNESS, HITMARKER_SPACING, HITMARKER_ANIM_SIZE, HITMARKER_FADE,
@@ -23,7 +23,7 @@ Krunker_Key :: enum {
 	SOUND, PLAYER_VOLUME, UI_VOLUME,
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
-	SATURATION,
+	SATURATION, FEED_LIMIT,
 }
 Krunker_Value_Kind :: enum { NUMBER, SWITCH, COLOR }
 Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min, max: f64 }
@@ -33,6 +33,7 @@ Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min,
 KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.SHOW_TRAILS = {"showTrails", .SWITCH, 1, 0, 0},
 	.YOUR_TRAILS = {"yourTrails", .SWITCH, 1, 0, 0},
+	.SHOW_KILLS = {"showKills", .SWITCH, 1, 0, 0},
 	.SHOW_FPS = {"showFPS", .SWITCH, 0, 0, 0},
 	.CROSSHAIR_TYPE = {"crosshairSho", .NUMBER, 1, 0, 5}, // 1 Dynamic ... 5 Precision.
 	.CROSSHAIR_OPACITY = {"crosshairOpacity", .NUMBER, 1, 0, 1},
@@ -84,6 +85,7 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.SHOW_WEAPON_MEL = {"showWeaponMel", .SWITCH, 1, 0, 0},
 	.LEFT_HAND = {"leftHand", .SWITCH, 0, 0, 0},
 	.SATURATION = {"saturationn", .NUMBER, 1, 0, 3}, // Krunker's spelling.
+	.FEED_LIMIT = {"feedLimit", .NUMBER, KILL_FEED_DEFAULT_LIMIT, 1, KILL_FEED_MAX_LIMIT},
 }
 KRUNKER_CROSSHAIR_PRECISION :: 5
 KRUNKER_VIEWMODEL := [Viewmodel_Control]Krunker_Key{
@@ -293,6 +295,8 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string) -> (resu
 	draft.fov = fov_validate(f32(numbers[.FOV]))
 	draft.show_fps = switches[.SHOW_FPS]
 	draft.trails = {hide_others = !switches[.SHOW_TRAILS], hide_yours = !switches[.YOUR_TRAILS]}
+	draft.hud.hide_kill_feed = !switches[.SHOW_KILLS]
+	draft.hud.kill_feed_limit = i32(clamp(math.round(numbers[.FEED_LIMIT]), 1, KILL_FEED_MAX_LIMIT))
 	draft.audio_volumes[0] = f32(numbers[.SOUND])
 	draft.audio_volumes[2] = f32(numbers[.PLAYER_VOLUME])
 	draft.audio_volumes[3] = f32(numbers[.UI_VOLUME])
@@ -401,6 +405,7 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	numbers[.HITMARKER_SPACING], numbers[.HITMARKER_ANIM_SIZE], numbers[.HITMARKER_FADE] = f64(hitmarker.values[.SPACING]), f64(hitmarker.values[.ANIM_SIZE]), f64(hitmarker.values[.FADE])
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
+	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))
 
 	builder := strings.builder_make(allocator)
 	strings.write_byte(&builder, '{')

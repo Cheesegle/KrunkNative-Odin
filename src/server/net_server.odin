@@ -255,6 +255,7 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	}
 	player_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE]byte
 	impact_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_BULLET_IMPACT_PAYLOAD_SIZE]byte
+	kill_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_KILL_FEED_PAYLOAD_SIZE]byte
 
 	for client in ns.clients {
 		if !client.active {
@@ -343,10 +344,21 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 				break
 			}
 		}
+		if !client.active {
+			continue
+		}
+		for &event in game.kill_events {
+			kill_size := shared.packet_serialize_kill_feed(kill_buf[:], &event)
+			if kill_size > 0 && !net_server_send(client, kill_buf[:kill_size]) {
+				client.active = false
+				break
+			}
+		}
 	}
-	// Impacts are reliable TCP events. Once every active joined client has had
-	// them queued, retain only new impacts generated before the next snapshot.
+	// Impacts and kills are reliable TCP events. Once every active joined client
+	// has had them queued, retain only new ones generated before the next snapshot.
 	clear(&game.impacts)
+	clear(&game.kill_events)
 }
 
 net_server_close :: proc(ns: ^Net_Server) {

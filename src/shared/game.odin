@@ -4,6 +4,7 @@ import "core:math/rand"
 
 game_clear_players :: proc(game: ^Game) {
 	clear(&game.presentation_events)
+	clear(&game.kill_events)
 	clear(&game.projectiles)
 	delete(game.players)
 	game.players = nil
@@ -299,7 +300,7 @@ game_tick :: proc(game: ^Game, now, delta: f32) {
 						continue
 					}
 
-					kill_info := Player_Kill_Info{}
+					kill_info := Player_Kill_Info{weapon_id = -1}
 
 					nuke_reward += 50
 					player_kill(player, game.nuke_player, &kill_info, true)
@@ -359,6 +360,7 @@ game_destroy :: proc(game: ^Game) {
 
 	game_clear_players(game)
 	delete(game.impacts)
+	delete(game.kill_events)
 	delete(game.presentation_events)
 	delete(game.projectiles)
 	delete(game.objective_indices)

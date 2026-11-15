@@ -49,6 +49,7 @@ Client :: struct {
 	scroll_press: bool,
 	scroll_press_time: f64, // GetTime of the last latched press (50 ms throttle).
 	hud_settings: menuui.HUD_Settings,
+	kill_feed: Kill_Feed,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -1425,6 +1426,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
+	client_tick_kill_feed(client, delta)
 	client_tick_projectiles(client)
 	krunker_client_tick_explosions(client, delta)
 

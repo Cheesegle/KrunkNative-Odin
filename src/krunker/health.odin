@@ -1,6 +1,7 @@
 package krunker
 
 import "core:math"
+import shared "../shared"
 
 // CHANGE_HEALTH(health, sid?, hitX?, hitZ?, silent?, resetMax?). An omitted
 // SID addresses the local player; remote health changes carry a numeric SID.
@@ -42,10 +43,52 @@ krunker_world_apply_player_gone :: proc(state: ^Krunker_World_State, packet: []K
 		// REMOVE_PLAYER(2) has no death count; KILL_PLAYER(3) does.
 		if (opcode == "3" || numeric == 3) && len(packet) > 2 {
 			if deaths, ok := krunker_world_bounded_number(packet[2], 0, 2147483647); ok { player.deaths = u32(deaths) }
+			krunker_world_record_kill(state, sid, packet)
 		}
 		player.pose_count = 0
 		player.revision += 1
 		return true
 	}
 	return false
+}
+
+// One KILL_PLAYER killfeed line. weapon_id is -1 when the info object has no
+// wId; the browser then shows the killer's currently equipped weapon.
+Krunker_World_Kill :: struct {
+	victim_sid, killer_sid, weapon_id, streak: i32,
+	headshot, wallbang, fists, thrown: bool,
+}
+
+KRUNKER_WORLD_MAX_KILLS :: 32
+
+// KILL_PLAYER(3) is [3, victim sid, deaths, killer sid, death-screen data,
+// kill info, hide]. The browser handler (game.deob.js iiïîîìî) adds a
+// killfeed line unless the last argument is set; killer null means the
+// victim "committed" a suicide. The info object carries wId (weapon), hs
+// (headshot), wb (wallbang), fs (fists), pj (thrown melee) and stk (streak).
+krunker_world_record_kill :: proc(state: ^Krunker_World_State, victim_sid: i32, packet: []Krunker_Msgpack_Value) {
+	if len(packet) > 6 && krunker_world_bool(packet[6]) { return }
+	kill := Krunker_World_Kill{victim_sid = victim_sid, killer_sid = -1, weapon_id = -1, streak = -1}
+	if len(packet) > 3 {
+		if sid, ok := krunker_world_bounded_number(packet[3], 0, 2147483647); ok { kill.killer_sid = i32(sid) }
+	}
+	if len(packet) > 5 {
+		if entries, ok := packet[5].([]Krunker_Msgpack_Map_Entry); ok {
+			for entry in entries {
+				key, textual := entry.key.(string); if !textual { continue }
+				switch key {
+				case "wId":
+					if id, valid := krunker_world_bounded_number(entry.value, 0, f64(len(shared.WEAPONS_LIST)-1)); valid && shared.WEAPONS_LIST[int(id)] != nil { kill.weapon_id = i32(id) }
+				case "hs": kill.headshot = krunker_world_bool(entry.value)
+				case "wb": kill.wallbang = krunker_world_bool(entry.value)
+				case "fs": kill.fists = krunker_world_bool(entry.value)
+				case "pj": kill.thrown = krunker_world_bool(entry.value)
+				case "stk":
+					if streak, valid := krunker_world_bounded_number(entry.value, 0, 1000); valid { kill.streak = i32(streak) }
+				}
+			}
+		}
+	}
+	if len(state.kills) >= KRUNKER_WORLD_MAX_KILLS { ordered_remove(&state.kills, 0) }
+	append(&state.kills, kill)
 }

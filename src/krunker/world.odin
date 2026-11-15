@@ -108,6 +108,8 @@ Krunker_World_State :: struct {
 	class_limits: [len(shared.CLASSES_LIST)]i32,
 	lobby_team_names: [2]string,
 	shots:       [dynamic]Krunker_World_Shot,
+	// KILL_PLAYER (3) killfeed lines, drained by the client each frame.
+	kills:       [dynamic]Krunker_World_Kill,
 	has_leaders: bool,
 	leader_stat_count: int,
 	match: shared.Match_State,
@@ -154,6 +156,7 @@ krunker_world_reset :: proc(state: ^Krunker_World_State) {
 	delete(state.lobby_players)
 	for name in state.lobby_team_names { delete(name) }
 	delete(state.shots)
+	delete(state.kills)
 	delete(state.projectile_events)
 	delete(state.local_socket_id)
 	delete(state.local_connection_uid)
@@ -238,6 +241,7 @@ krunker_world_apply_init :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	for player in state.players { delete(player.name); delete(player.socket_id) }
 	clear(&state.players)
 	clear(&state.shots)
+	clear(&state.kills)
 	state.in_game = false
 	krunker_world_init_match(state, packet)
 	state.mode_index = krunker_world_i32(packet[2], -1)

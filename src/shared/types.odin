@@ -553,7 +553,18 @@ Game_Config :: struct {
 Player_Kill_Info :: struct {
 	streak:    i32,
 	weapon_id: i32,
+	headshot:  bool,
 }
+
+// One killfeed line, produced by the authoritative simulation (player_kill)
+// and sent to native clients as a KILL_FEED packet. killer_uid is -1 for
+// environmental deaths (falling out of the map); weapon_id is -1 when there
+// is no weapon to show (nukes).
+Kill_Event :: struct {
+	victim_uid, killer_uid, weapon_id: i32,
+	headshot: bool,
+}
+KILL_EVENTS_CAPACITY :: 64
 
 Bullet_Hit_Kind :: enum u8 { Miss, World, Player }
 
@@ -664,6 +675,7 @@ Game :: struct {
 	player_count: i32,
 	players:      [dynamic]^Player,
 	impacts:      [dynamic]Bullet_Impact,
+	kill_events:  [dynamic]Kill_Event,
 	presentation_enabled: bool,
 	presentation_events: [dynamic]Presentation_Event,
 	projectiles:  [dynamic]Projectile,

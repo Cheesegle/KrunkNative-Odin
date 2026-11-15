@@ -317,11 +317,13 @@ ui_stroke_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, r
 	ui.material.stroke_width = 0
 }
 
-ui_draw_image :: proc(ui: ^UI, texture_id: u32, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}) {
+// mirror flips the image horizontally (CSS transform: scaleX(-1)).
+ui_draw_image :: proc(ui: ^UI, texture_id: u32, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
 	ui.material.color = color
 	ui.material.texture = texture_id
 
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
+	// quad.frag samples u * viewport[2] - viewport[0]; {-1, 0, -1, 1} gives 1 - u.
+	ui.material.texture_viewport = mirror ? [4]f32{-1.0, 0.0, -1.0, 1.0} : [4]f32{0.0, 0.0, 1.0, 1.0}
 
 	ui.material.border_bottom_left_radius = 0.0
 	ui.material.border_bottom_right_radius = 0.0
