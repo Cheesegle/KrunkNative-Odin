@@ -89,4 +89,63 @@ when ODIN_TEST {
 		loaded = client_settings_validate(loaded)
 		testing.expect(t, loaded.fullscreen_width == 0 && loaded.fullscreen_height == 0, "an invalid saved size must fall back to the largest mode")
 	}
+	// The menu reads monitor modes and names from a cache, refreshed when the
+	// chosen monitor changes, GLFW reports a monitor change, or Settings opens.
+	@(test)
+	monitor_cache_follows_monitors_and_settings :: proc(t: ^testing.T) {
+		if !testing.expect(t, bool(glfw.Init())) do return
+		defer glfw.Terminate()
+		glfw.DefaultWindowHints()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+		window := glfw.CreateWindow(320, 180, "Monitor cache test", nil, nil)
+		if !testing.expect(t, window != nil) do return
+		defer glfw.DestroyWindow(window)
+		defer glfw.DefaultWindowHints()
+		client := Client{window = window}
+		g_client = &client
+		defer g_client = nil
+		defer { delete(menu_portraits); menu_portraits = nil }
+
+		view := menu_view(&client)
+		sizes := monitor_resolutions(client_monitor(0))
+		testing.expect(t, client.monitor_cache.valid && len(view.fullscreen_options) == len(sizes) && len(sizes) > 0, "the picker must list the monitor's modes")
+		for size, i in sizes {
+			testing.expectf(t, client.monitor_cache.sizes[i] == size && view.fullscreen_options[i] == fmt.tprintf("%d x %d", size.width, size.height), "mode %d must match a fresh listing", i)
+		}
+		monitors := glfw.GetMonitors()
+		testing.expect(t, len(view.monitor_names) == len(monitors), "every monitor must be named")
+		for monitor, i in monitors {
+			testing.expect(t, view.monitor_names[i] == fmt.tprintf("%d: %s", i+1, glfw.GetMonitorName(monitor)), "monitor names must match GLFW")
+		}
+
+		// A stale entry stays until something invalidates it.
+		append(&client.monitor_cache.sizes, Display_Resolution{1, 1})
+		testing.expect(t, len(menu_view(&client).fullscreen_options) == len(sizes) + 1, "menu frames must reuse the cache")
+		client_monitor_changed(nil, glfw.CONNECTED)
+		testing.expect(t, len(menu_view(&client).fullscreen_options) == len(sizes), "a monitor change must refresh the cache")
+		append(&client.monitor_cache.sizes, Display_Resolution{1, 1})
+		client.monitor_index = 1
+		testing.expect(t, len(menu_view(&client).fullscreen_options) == len(monitor_resolutions(client_monitor(1))) && client.monitor_cache.index == 1, "choosing another monitor must refresh the cache")
+		append(&client.monitor_cache.sizes, Display_Resolution{1, 1})
+		client.menu.page = .SETTINGS
+		testing.expect(t, len(menu_view(&client).fullscreen_options) == len(monitor_resolutions(client_monitor(1))), "opening Settings must refresh the cache")
+
+		// Menus and loading wait about one refresh per frame; gameplay is uncapped.
+		testing.expect(t, client.monitor_cache.idle_frame_interval > 0 && client.monitor_cache.idle_frame_interval <= 1.0/24, "the idle frame interval must come from the refresh rate")
+		testing.expect(t, client_idle_frame_interval(&client) > 0, "an unready game must not spin")
+		client.game.ready = true
+		testing.expect(t, client_idle_frame_interval(&client) > 0, "the menu must not spin")
+		client.mouse_state.locked = true
+		testing.expect(t, client_idle_frame_interval(&client) == 0, "gameplay must stay uncapped")
+		client.game.ready = false
+		client.krunker.connected, client.krunker_world.ready = true, true
+		testing.expect(t, client_idle_frame_interval(&client) == 0, "live Krunker gameplay must stay uncapped")
+		// Krunker's "ready" packet clears this during waiting/warmup while the
+		// player still moves; capping then caused hitches.
+		client.krunker_world.ready = false
+		testing.expect(t, client_idle_frame_interval(&client) == 0, "live play during warmup must stay uncapped")
+		client.mouse_state.locked = false
+		testing.expect(t, client_idle_frame_interval(&client) > 0, "releasing the cursor must cap again")
+	}
 }

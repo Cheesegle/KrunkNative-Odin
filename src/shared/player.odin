@@ -299,12 +299,17 @@ player_collides :: proc(player: ^Player, object: ^Object, pad: f32) -> bool {
 }
 
 player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, can_jump: bool, delta: f32, recon: bool) {
-	max_ramp_height: ^f32
+	max_ramp_height: f32
+	has_max_ramp_height: bool
 
-	for obj in player.game.map_inst.objects {
-		collides_padded := player_collides(player, obj, GAME_CONSTANTS.collision_padding)
+	// Loaded maps list the objects a player can touch, in map order, so
+	// order-dependent resolution is unchanged. Hand-built maps scan everything.
+	map_inst := player.game.map_inst
+	count := map_inst.collision_indexed ? len(map_inst.collision_objects) : len(map_inst.objects)
+	for i in 0 ..< count {
+		obj := map_inst.objects[map_inst.collision_indexed ? int(map_inst.collision_objects[i]) : i]
 
-		if !obj.active || !collides_padded {
+		if !obj.active || !player_collides(player, obj, GAME_CONSTANTS.collision_padding) {
 			continue
 		}
 
@@ -392,14 +397,14 @@ player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, 
 				progress := clamp(progress_on_line(obj.ramp.start, obj.ramp.end, player_dir), 0.0, 1.0)
 				collision_height := obj.position.y + (obj.scale.y + 0.01) * progress
 
-				if max_ramp_height == nil {
-					max_ramp_height = new(f32)
-					max_ramp_height^ = collision_height
+				if !has_max_ramp_height {
+					has_max_ramp_height = true
+					max_ramp_height = collision_height
 				}
 
-				if (player.position.y <= collision_height || can_jump) && (max_ramp_height == nil || max_ramp_height^ <= collision_height) {
-					if max_ramp_height != nil {
-						max_ramp_height^ = collision_height
+				if (player.position.y <= collision_height || can_jump) && (!has_max_ramp_height || max_ramp_height <= collision_height) {
+					if has_max_ramp_height {
+						max_ramp_height = collision_height
 					}
 
 					if obj.ramp.boost != 0 {
@@ -422,14 +427,9 @@ player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, 
 						player.on_ground = true
 						player.on_terrain = false
 
-						if player.ramp_fix == nil {
-							player.ramp_fix = new(f32)
-						}
-
-						if player.ramp_fix != nil {
-							player.on_ramp = true
-							player.ramp_fix^ = obj.position.y + obj.scale.y * math.round(progress)
-						}
+						player.has_ramp_fix = true
+						player.on_ramp = true
+						player.ramp_fix = obj.position.y + obj.scale.y * math.round(progress)
 					}
 				}
 
@@ -515,10 +515,6 @@ player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, 
 				player.velocity.y = 0.0
 			}
 		}
-	}
-
-	if max_ramp_height != nil {
-		free(max_ramp_height)
 	}
 }
 
@@ -1045,21 +1041,16 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			player_do_map_collisions(player, input, move_dir, can_jump, delta, recon && !predict_effects)
 		}
 
-		if !player.did_jump && player.ramp_fix != nil && math.abs(player.position.y - player.ramp_fix^) <= GAME_CONSTANTS.climb_height {
+		if !player.did_jump && player.has_ramp_fix && math.abs(player.position.y - player.ramp_fix) <= GAME_CONSTANTS.climb_height {
 			if !player.on_ramp {
-				player.position.y = player.ramp_fix^
+				player.position.y = player.ramp_fix
 				player.on_ground = true
 				player.velocity.y = 0.0
 
-				free(player.ramp_fix)
-				player.ramp_fix = nil
+				player.has_ramp_fix = false
 			}
 		} else {
-			if player.ramp_fix != nil {
-				free(player.ramp_fix)
-			}
-
-			player.ramp_fix = nil
+			player.has_ramp_fix = false
 		}
 
 		player.air_time = player.on_ground ? 0 : player.air_time + delta
@@ -1473,10 +1464,6 @@ player_interpolate :: proc(player: ^Player, delta: f32) {
 }
 
 player_destroy :: proc(player: ^Player) {
-	if player.ramp_fix != nil {
-		free(player.ramp_fix)
-	}
-
 	delete(player.loadout)
 	delete(player.ammo)
 	delete(player.reloads)

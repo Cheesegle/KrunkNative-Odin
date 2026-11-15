@@ -68,6 +68,7 @@ Client :: struct {
 	render_batching: bool,
 	settings_dirty, vsync: bool,
 	monitor_index: i32,
+	monitor_cache: Monitor_Cache,
 
 	mouse_state: struct {
 		locked:  bool,
@@ -139,6 +140,56 @@ Client :: struct {
 }
 
 g_client: ^Client
+
+// The menu's monitor names and fullscreen sizes. glfw.GetVideoModes
+// re-enumerates every display mode on Windows, so this is refreshed only when
+// a monitor is connected or removed, the chosen monitor changes, or Settings
+// opens. Fixed capacity keeps it allocation-free.
+Monitor_Cache :: struct {
+	valid: bool,
+	index: i32,
+	sizes: [dynamic; 256]Display_Resolution,
+	// GLFW owns the names until the monitor is removed, which invalidates the cache.
+	names: [dynamic; 32]string,
+	// Seconds per frame while not playing, from the monitor's refresh rate.
+	idle_frame_interval: f64,
+}
+
+client_monitor_cache_refresh :: proc(client: ^Client) {
+	cache := &client.monitor_cache
+	cache^ = {valid = true, index = client.monitor_index, idle_frame_interval = 1.0 / 60}
+	monitor := client_monitor(client.monitor_index)
+	append(&cache.sizes, ..monitor_resolutions(monitor))
+	for handle in glfw.GetMonitors() { append(&cache.names, glfw.GetMonitorName(handle)) }
+	if monitor != nil {
+		if mode := glfw.GetVideoMode(monitor); mode != nil && mode.refresh_rate > 0 { cache.idle_frame_interval = 1.0 / f64(mode.refresh_rate) }
+	}
+}
+
+// Refreshes the cache when it is stale or Settings is opening this frame.
+client_monitor_cache :: proc(client: ^Client) -> ^Monitor_Cache {
+	settings_opening := (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) && !client.menu.settings_active
+	if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index || settings_opening {
+		client_monitor_cache_refresh(client)
+	}
+	return &client.monitor_cache
+}
+
+client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
+	if g_client != nil { g_client.monitor_cache.valid = false }
+}
+
+// Menus and loading screens wait for about one display refresh per frame
+// instead of spinning a core. Whenever the cursor is captured for play, frames
+// stay uncapped. Readiness flags are deliberately not checked: Krunker's
+// "ready" packet clears krunker_world.ready during waiting and warmup phases
+// while the player still moves, and capping then causes visible hitches.
+// client_tick still runs every frame, so sockets keep being polled.
+client_idle_frame_interval :: proc(client: ^Client) -> f64 {
+	if client.mouse_state.locked { return 0 }
+	if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
+	return client.monitor_cache.idle_frame_interval
+}
 
 MAX_PREDICTED_INPUTS :: 256
 
@@ -545,9 +596,14 @@ client_clear_players :: proc(client: ^Client) {
 }
 
 client_discard_acked_inputs :: proc(client: ^Client, ack_seq: i32) {
-	for len(client.predicted_inputs) > 0 && client.predicted_inputs[0].seq <= ack_seq {
-		ordered_remove(&client.predicted_inputs, 0)
-	}
+	acked := 0
+	for acked < len(client.predicted_inputs) && client.predicted_inputs[acked].seq <= ack_seq { acked += 1 }
+	remove_range(&client.predicted_inputs, 0, acked)
+}
+
+// Drops the oldest predicted inputs beyond `limit` in one shift.
+client_cap_predicted_inputs :: proc(client: ^Client, limit: int) {
+	if excess := len(client.predicted_inputs) - limit; excess > 0 { remove_range(&client.predicted_inputs, 0, excess) }
 }
 
 client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packet_Player_State) {
@@ -568,9 +624,8 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	player.jump_timer = state.jump_timer
 	shared.player_update_height(player)
 
-	if !state.on_ramp && player.ramp_fix != nil {
-		free(player.ramp_fix)
-		player.ramp_fix = nil
+	if !state.on_ramp {
+		player.has_ramp_fix = false
 	}
 }
 
@@ -1197,9 +1252,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
-			if len(client.predicted_inputs) > MAX_PREDICTED_INPUTS {
-				ordered_remove(&client.predicted_inputs, 0)
-			}
+			client_cap_predicted_inputs(client, MAX_PREDICTED_INPUTS)
 			shared.player_proc_input(client.me, &input, true, client.game.move_lock, true)
 			net_client_send_input(&client.net, &input)
 		} else {
@@ -1398,6 +1451,7 @@ main :: proc() {
 	glfw.SetCharCallback(client.window, menu_character)
 	glfw.SetKeyCallback(client.window, client_binding_key)
 	glfw.SetMouseButtonCallback(client.window, client_binding_mouse)
+	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.MakeContextCurrent(client.window)
 
 	if bool(glfw.RawMouseMotionSupported()) {
@@ -1479,7 +1533,8 @@ main :: proc() {
 	last_tick := f32(glfw.GetTime())
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
-		now := f32(glfw.GetTime())
+		frame_start := glfw.GetTime()
+		now := f32(frame_start)
 		delta := now - last_tick
 
 		last_tick = now
@@ -1492,6 +1547,13 @@ main :: proc() {
 		}
 		glfw.SwapBuffers(client.window)
 		client_poll_events()
+		if interval := client_idle_frame_interval(client); interval > 0 {
+			for !bool(glfw.WindowShouldClose(client.window)) {
+				remaining := interval - (glfw.GetTime() - frame_start)
+				if remaining <= 0 { break }
+				client_wait_events(remaining)
+			}
+		}
 		free_all(context.temp_allocator)
 	}
 
@@ -1503,6 +1565,7 @@ main :: proc() {
 	krunker_ws_disconnect(&client.krunker)
 	shared.join_link_free(&client.join_link)
 	kproto.network_log_clear_secrets()
+	kproto.network_log_close()
 	delete(client.join_status)
 	delete(client.selection_status)
 	kproto.krunker_world_reset(&client.krunker_world)

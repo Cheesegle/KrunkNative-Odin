@@ -222,7 +222,7 @@ Tracer_Marker :: struct {
 g_geometry_cache: map[string]^Geometry
 g_texture_cache:  map[string]^Texture_Cache_Entry
 g_texture_by_id:  map[u32]^Texture_Cache_Entry
-g_glyph_cache:    map[u8]^Glyph_Cache_Entry
+g_glyph_cache:    [256]^Glyph_Cache_Entry
 
 g_resource_clock: u64
 
