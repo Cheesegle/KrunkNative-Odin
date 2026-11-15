@@ -188,7 +188,7 @@ debug_ui_update :: proc(client: ^Client) -> bool {
 // Clicks, scroll and mouse binds over the debug window stay out of the menu.
 debug_ui_block_menu_input :: proc(input: ^menuui.Input) {
 	input.pointer = {DEBUG_UI_OFFSCREEN, DEBUG_UI_OFFSCREEN}
-	input.down = false
+	input.down, input.right_down = false, false
 	input.scroll = {}
 	if input.binding_pressed < 0 { input.binding_pressed = 0 }
 }

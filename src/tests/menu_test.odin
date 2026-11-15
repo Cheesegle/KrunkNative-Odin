@@ -191,6 +191,7 @@ test_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {binding_pressed = 261})
 	if state.settings_draft.bindings[.FORWARD][1] != 0 { fmt.println("Delete must clear a binding"); return false }
 	menu_test_frame(&state, view, {})
+	if !test_menu_unbind(&state, view) { return false }
 	box = clay.GetElementData(clay.ID("SettingsPanel")).boundingBox
 	menu_test_frame(&state, view, {pointer = {box.x+box.width/2, box.y+box.height/2}, scroll = {0, -100}})
 	menu_test_frame(&state, view, {})
@@ -701,5 +702,60 @@ test_live_lobby_records :: proc() -> bool {
 	if world.lobby_players[0].team!=2 || world.lobby_players[0].name!="Player name" || world.lobby_players[0].class_index != -1 { return false }
 	if !kproto.krunker_world_apply_packet(&world, []kproto.Krunker_Msgpack_Value{"cda","socket-a",kproto.Krunker_Msgpack_Nil{}}) || len(world.lobby_players) != 0 { return false }
 	fmt.println("Live pre-spawn lobby roster and assignment tests OK")
+	return true
+}
+
+// Unbinding without entering capture: the X button (Krunker's unbindCont),
+// right-click, and Delete or Backspace on a focused slot.
+test_menu_unbind :: proc(state: ^menuui.State, view: menuui.View) -> bool {
+	saved := state.settings_draft.bindings
+	defer state.settings_draft.bindings = saved
+	slot_index :: proc(action: menuui.Binding_Action, slot: int) -> u32 { return u32(action)*2 + u32(slot) }
+	// The X on the FORWARD primary slot clears it directly.
+	if menu_test_click(state, view, clay.ID("Unbind", slot_index(.FORWARD, 0))).kind != .UNBIND_KEY || state.settings_draft.bindings[.FORWARD][0] != 0 || state.binding_capture != 0 {
+		fmt.println("The X button must unbind a slot without opening the listener"); return false
+	}
+	if view.bindings[.FORWARD][0] != 'W' { fmt.println("Unbinding must only change the draft"); return false }
+	if state.focus != clay.ID("Binding", slot_index(.FORWARD, 0)).id { fmt.println("Focus must move from the disabled X to its slot"); return false }
+	menu_test_frame(state, view, {})
+	// Both FORWARD slots are now unbound; the X is disabled and does nothing.
+	if state.settings_draft.bindings[.FORWARD] != ([2]i32{0, 0}) { fmt.println("Both slots must be unbound"); return false }
+	if menu_test_click(state, view, clay.ID("Unbind", slot_index(.FORWARD, 1))).kind != .NONE || state.errors != 0 { fmt.println("A disabled X must be inert"); return false }
+	if menuui.binding_label(0) != "Unbound" { fmt.println("Unbound slots must read Unbound"); return false }
+	// Right-click clears a slot and never opens the listener.
+	box := clay.GetElementData(clay.ID("Binding", slot_index(.BACKWARD, 0))).boundingBox
+	centre := [2]f32{box.x + box.width/2, box.y + box.height/2}
+	if menu_test_frame(state, view, {pointer = centre, right_down = true}).kind != .UNBIND_KEY { fmt.println("Right-click must unbind"); return false }
+	menu_test_frame(state, view, {pointer = centre})
+	if state.settings_draft.bindings[.BACKWARD][0] != 0 || state.binding_capture != 0 { fmt.println("Right-click must clear the slot without capturing"); return false }
+	// Right-click elsewhere leaves binds alone.
+	menu_test_frame(state, view, {pointer = {1, 1}, right_down = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings[.LEFT][0] != 'A' { fmt.println("Right-click outside a slot must not unbind"); return false }
+	// Delete and Backspace clear the focused slot.
+	state.focus = clay.ID("Binding", slot_index(.LEFT, 0)).id
+	menu_test_frame(state, view, {delete_key = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings[.LEFT][0] != 0 || state.binding_capture != 0 { fmt.println("Delete must unbind the focused slot"); return false }
+	state.focus = clay.ID("Binding", slot_index(.RIGHT, 0)).id
+	menu_test_frame(state, view, {backspace = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings[.RIGHT][0] != 0 { fmt.println("Backspace must unbind the focused slot"); return false }
+	// Backspace during capture still binds Backspace itself.
+	menu_test_click(state, view, clay.ID("Binding", slot_index(.RIGHT, 0)))
+	menu_test_frame(state, view, {binding_pressed = 259, backspace = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings[.RIGHT][0] != 259 { fmt.println("Backspace must remain bindable while capturing"); return false }
+	// Enter on a focused X unbinds too (keyboard-only path).
+	state.focus = clay.ID("Unbind", slot_index(.JUMP, 0)).id
+	menu_test_frame(state, view, {enter = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings[.JUMP][0] != 0 { fmt.println("Enter on the X must unbind"); return false }
+	// Delete on a focused non-bind control must not touch binds.
+	before := state.settings_draft.bindings
+	state.focus = clay.ID("SettingsTab", u32(menuui.Settings_Tab.INPUT)).id
+	menu_test_frame(state, view, {delete_key = true})
+	menu_test_frame(state, view, {})
+	if state.settings_draft.bindings != before || state.errors != 0 { fmt.println("Delete must only unbind a focused slot"); return false }
 	return true
 }
