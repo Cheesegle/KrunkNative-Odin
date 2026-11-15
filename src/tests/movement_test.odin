@@ -201,26 +201,27 @@ test_loadout :: proc(player: ^shared.Player, class_index, sidearm, melee: i32) {
 	fmt.println("Loadout composition test OK")
 }
 
-run_test :: proc(name: string, player: ^shared.Player) {
+// Returns false when the trace fails to load or diverges from the recording.
+run_test :: proc(name: string, player: ^shared.Player) -> bool {
 	path := fmt.tprintf("%ssrc/tests/inputs/%s", project_root(), name)
 	data, err := os.read_entire_file_from_path(path, context.temp_allocator)
 
 	if err != nil {
 		fmt.printf("Failed to parse %s, skipping...\n", name)
-		return
+		return false
 	}
 
 	json_val, parse_err := json.parse_string(string(data))
 	if parse_err != .None {
 		fmt.printf("Failed to parse %s, skipping...\n", name)
-		return
+		return false
 	}
 	defer json.destroy_value(json_val)
 
 	ticks_arr, arr_ok := json_val.(json.Array)
 	if !arr_ok {
 		fmt.printf("Failed to parse %s, skipping...\n", name)
-		return
+		return false
 	}
 
 	tick_count := len(ticks_arr)
@@ -233,7 +234,7 @@ run_test :: proc(name: string, player: ^shared.Player) {
 		tick, ok := parse_tick(ticks_arr[i])
 		if !ok {
 			fmt.printf("Failed to parse tick #%d!\n", i)
-			return
+			return false
 		}
 
 		ticks[i] = tick
@@ -242,17 +243,22 @@ run_test :: proc(name: string, player: ^shared.Player) {
 	shared.player_spawn(player)
 
 	player.position = ticks[0].expected.position
+	// The recording carries no class: it only enables wall jumping. Give it a
+	// Runner-sized allowance so the recorded wall jumps replay; the per-class
+	// cap itself is covered by test_wall_jump_limit.
 	player.wall_jump = name == "wall_jump.json"
+	if player.wall_jump { player.wall_jump_max = 100 }
 
 	for i in 0 ..< tick_count {
 		if !validate_tick(player, &ticks[i].expected, i) {
-			return
+			return false
 		}
 
 		shared.player_proc_input(player, &ticks[i].input, false, false)
 	}
 
 	fmt.println("Test OK")
+	return true
 }
 
 project_root :: proc() -> string {
@@ -424,8 +430,10 @@ main :: proc() {
 	// weapon switching (Q/E) works. Hunter (class 1) config has secondary=true.
 	test_loadout(player, 1, 3, 12)
 
+	// Run every trace so one failure does not hide another, then fail the run.
+	trace_failures := 0
 	for test in tests {
-		run_test(test, player)
+		if !run_test(test, player) { trace_failures += 1 }
 		fmt.println()
 	}
 
@@ -444,5 +452,9 @@ main :: proc() {
 	shared.game_init(&game, 0, -1, true)
 	shared.game_players_add(&game, player)
 
-	run_test("kanji_jump_pad.json", player)
+	if !run_test("kanji_jump_pad.json", player) { trace_failures += 1 }
+	if trace_failures > 0 {
+		fmt.eprintf("%d recorded movement trace(s) failed\n", trace_failures)
+		os.exit(1)
+	}
 }
