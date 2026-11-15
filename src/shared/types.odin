@@ -214,7 +214,7 @@ Class_Config :: struct {
 	// registry without throwing away data needed by later parity work.
 	throw_charge:    f32,
 	turn_speed:      f32,
-	wall_jump_mlt:   f32,
+	wall_jump_max:   f32, // Krunker wallJM ("Walljumps Max"): wall jumps allowed before landing
 	leap:            bool,
 	back_slide:      bool,
 	slide_time:      f32,
@@ -387,6 +387,8 @@ Player :: struct {
 	on_wall:                         u8,
 	terrain_slipping:                bool,
 	wall_jump:                       bool,
+	wall_jump_max:                   i32, // from the class; 0 means none
+	wall_jump_count:                 i32, // wall jumps since last landing (Krunker wallJumpC)
 	did_act:                         bool,
 	did_shoot:                       bool,
 	did_jump:                        bool,

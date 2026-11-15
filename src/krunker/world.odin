@@ -37,6 +37,7 @@ Krunker_World_Player :: struct {
 	on_terrain: bool,
 	did_jump: bool,
 	did_wall_jump: bool,
+	wall_jump_count: i32, // SYNC_PLAYER field 12 (wallJumpC)
 	on_wall: i32,
 	slide_timer: f32,
 	can_slide: bool,
@@ -377,6 +378,7 @@ krunker_world_apply_sync_player :: proc(state: ^Krunker_World_State, packet: []K
 	player.on_ground = krunker_world_bool(values[9])
 	player.did_jump = krunker_world_bool(values[10])
 	player.did_wall_jump = krunker_world_bool(values[11])
+	player.wall_jump_count = krunker_world_i32(values[12])
 	player.on_wall = krunker_world_i32(values[13])
 	player.on_ladder = krunker_world_bool(values[14])
 	player.aim_val = krunker_world_aim(values[15], player.aim_val)
