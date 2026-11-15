@@ -45,6 +45,11 @@ uniform float uFogFar;
 uniform vec3 uCameraPosition;
 uniform vec4 uVisualImage; // brightness, gamma, contrast, saturation
 uniform vec2 uVisualLighting; // ambient and sunlight multipliers
+// Night mode (night_mode.odin) dims the lights themselves; these cover what
+// no light reaches. uNightLowTint multiplies lit materials under Lighting Low
+// (unlit), uNightUnlitTint emissive (unlit) materials. White when night is off.
+uniform vec3 uNightLowTint;
+uniform vec3 uNightUnlitTint;
 
 // Krunker "Lighting": 0 Low (unlit), 1 Normal (Lambert), 2 High (Phong),
 // 3 Physical (standard, roughness 1, metalness 0). See shadows.odin.
@@ -338,7 +343,7 @@ void main() {
     // The map loader uses white as the neutral/default emissive value. Keep
     // that default neutral; explicit emissive materials need a separate
     // strength flag before they can be added without brightening every mesh.
-    vec3 lit_rgb = frag_color.rgb * (shaded ? lighting : vec3(1.0)) + specular;
+    vec3 lit_rgb = frag_color.rgb * (shaded ? lighting : (m_unlit ? uNightUnlitTint : uNightLowTint)) + specular;
     float fog_span = max(0.001, uFogFar - uFogNear);
     float fog_amount = m_no_fog ? 0.0 : clamp((length(world_pos - uCameraPosition) - uFogNear) / fog_span, 0.0, 1.0);
     vec3 rgb = mix(lit_rgb, uFogColor, fog_amount);

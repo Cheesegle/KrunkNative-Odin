@@ -318,7 +318,7 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_frame(&state, view, {})
 		}
 	}
-	if count != 28 { fmt.println("Missing editable slider values", count); return false }
+	if count != 29 { fmt.println("Missing editable slider values", count); return false }
 	menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(menuui.Settings_Tab.GAMEPLAY)}})
 	menu_test_frame(&state, view, {})
 	gap: menuui.Control
@@ -554,6 +554,22 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {enter=true})
 	menu_test_frame(&state, view, {})
 	if !state.settings_draft.visuals.hide_cats || !state.settings_draft.visuals.hide_extra_props || view.visuals.hide_cats || view.visuals.hide_extra_props { fmt.println("Map detail toggles must stage changes without modifying saved preferences"); return false }
+	// Night mode and its strength follow the map details.
+	menu_test_frame(&state, view, {tab=true})
+	menu_test_frame(&state, view, {})
+	if state.focus != clay.ID("NightMode", 2).id { fmt.println("Night mode must be reachable after the map details"); return false }
+	menu_test_frame(&state, view, {enter=true})
+	menu_test_frame(&state, view, {})
+	menu_test_frame(&state, view, {tab=true})
+	menu_test_frame(&state, view, {})
+	if state.focus != clay.ID("NightStrength").id { fmt.println("Night strength must follow Night mode"); return false }
+	menu_test_frame(&state, view, {right=true})
+	menu_test_frame(&state, view, {})
+	if !state.settings_draft.visuals.night_mode || abs(state.settings_draft.visuals.night_strength-0.75)>0.001 || view.visuals.night_mode || view.visuals.night_strength != menuui.DEFAULT_NIGHT_STRENGTH {
+		fmt.println("Night mode and strength must stage changes without modifying saved preferences", state.settings_draft.visuals.night_strength); return false
+	}
+	menu_test_frame(&state, view, {tab=true})
+	menu_test_frame(&state, view, {})
 	menu_test_frame(&state, view, {tab=true})
 	menu_test_frame(&state, view, {})
 	box := clay.GetElementData(clay.ID("ResetVisuals")).boundingBox

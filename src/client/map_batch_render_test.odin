@@ -29,6 +29,8 @@ when ODIN_TEST {
 		name:             string,
 		hide_cats:        bool,
 		hide_extra_props: bool,
+		night:            bool, // Night mode at the default strength.
+		lighting:         i32,  // Lighting quality (Normal unless set).
 	}
 
 	@(private = "file")
@@ -131,9 +133,12 @@ when ODIN_TEST {
 		_ = gl.GetError()
 
 		old_lighting, old_visuals := g_lighting_config, g_visual_settings
-		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals }
+		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals; g_night_low_tint, g_night_unlit_tint = {1, 1, 1}, {1, 1, 1} }
 		defer shadow_fini()
-		toggles := [?]Batch_Eq_Toggles{{"details-shown", false, false}, {"details-hidden", true, true}, {"cats-hidden", true, false}}
+		toggles := [?]Batch_Eq_Toggles{
+			{"details-shown", false, false, false, 1}, {"details-hidden", true, true, false, 1}, {"cats-hidden", true, false, false, 1},
+			{"night", false, false, true, 1}, {"night-low", false, false, true, 0},
+		}
 		failures := 0
 		for map_name in ([]string{"burg", "bastion", "sandstorm_v3", "undergrowth"}) {
 			client := Client{scene = scene_init(), render_batching = true}
@@ -156,7 +161,11 @@ when ODIN_TEST {
 				for toggle, toggle_index in toggles {
 					visuals := menuui.DEFAULT_VISUAL_SETTINGS
 					visuals.hide_cats, visuals.hide_extra_props = toggle.hide_cats, toggle.hide_extra_props
+					visuals.night_mode = toggle.night
 					g_visual_settings = visuals
+					// As client_update_graphics: night rewrites the frame's lighting.
+					g_lighting_config = toggle.night ? night_lighting(map_inst.lighting, visuals.night_strength) : map_inst.lighting
+					g_night_low_tint, g_night_unlit_tint = night_tints(visuals)
 					client_update_map_details(&client, visuals)
 					samplers := [2]u32{0, smooth}
 					// The smooth sampler pass runs once per view to cover mip selection.
@@ -166,7 +175,7 @@ when ODIN_TEST {
 					// map built from batches must match the one built per object.
 					for shadows in ([2]bool{false, true}) {
 						if shadows && sampler_index != 0 do continue
-						quality := menuui.Quality_Settings{lighting = 1, shadows = shadows}
+						quality := menuui.Quality_Settings{lighting = toggle.lighting, shadows = shadows}
 						stats_off := batch_eq_render(&client, &camera, &target, false, sampler, off, depth_off, quality)
 						stats_on := batch_eq_render(&client, &camera, &target, true, sampler, on, depth_on, quality)
 						// A pixel may differ by more than 1 only where both renders
