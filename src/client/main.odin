@@ -67,6 +67,8 @@ Client :: struct {
 	// `--no-batching` turns it off for A/B comparisons.
 	render_batching: bool,
 	settings_dirty, vsync: bool,
+	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
+	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
 
@@ -185,16 +187,58 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 	if g_client != nil { g_client.monitor_cache.valid = false }
 }
 
-// Menus and loading screens wait for about one display refresh per frame
-// instead of spinning a core. Whenever the cursor is captured for play, frames
-// stay uncapped. Readiness flags are deliberately not checked: Krunker's
-// "ready" packet clears krunker_world.ready during waiting and warmup phases
-// while the player still moves, and capping then causes visible hitches.
-// client_tick still runs every frame, so sockets keep being polled.
+// Menus and loading screens wait between frames instead of spinning a core:
+// by default one display refresh, or the user's menu FPS limit. Whenever the
+// cursor is captured for play, frames stay uncapped. Readiness flags are
+// deliberately not checked: Krunker's "ready" packet clears
+// krunker_world.ready during waiting and warmup phases while the player still
+// moves, and capping then causes visible hitches. client_tick still runs every
+// frame, so sockets keep being polled.
 client_idle_frame_interval :: proc(client: ^Client) -> f64 {
 	if client.mouse_state.locked { return 0 }
-	if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
-	return client.monitor_cache.idle_frame_interval
+	limit := client.menu_fps_limit
+	// Settings previews the staged limit; Cancel discards it with the draft.
+	if client.menu.settings_active && (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) { limit = client.menu.settings_draft.menu_fps_limit }
+	limit = menuui.menu_fps_limit_validate(limit)
+	switch limit {
+	case menuui.MENU_FPS_LIMIT_UNLIMITED: return 0
+	case menuui.MENU_FPS_LIMIT_MONITOR:
+		if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
+		return client.monitor_cache.idle_frame_interval
+	case: return 1 / f64(limit)
+	}
+}
+
+// The next frame's target end. Deadlines advance by whole intervals so wakeup
+// jitter does not lower the average rate; after a frame that ran more than one
+// interval late, or when pacing starts, the schedule restarts from this frame.
+client_idle_frame_deadline :: proc(previous, frame_start, interval: f64) -> f64 {
+	deadline := previous + interval
+	if previous <= 0 || deadline < frame_start || deadline > frame_start + interval { deadline = frame_start + interval }
+	return deadline
+}
+
+// Event waits keep window messages and input flowing until the last stretch,
+// which yields on the clock. With 1 ms timer resolution the waits land within
+// a fraction of a millisecond, and the deadline schedule absorbs the rest, so
+// a short margin keeps frame times even without burning a core: at 240 FPS a
+// 1.5 ms margin cost about a third of a core more than 0.5 ms for no gain in
+// rate (measured on a 240 Hz Windows laptop).
+IDLE_FRAME_SPIN_MARGIN :: 0.0005
+
+client_pace_idle_frame :: proc(client: ^Client, frame_start, interval: f64) {
+	if interval <= 0 { client.idle_frame_deadline = 0; return }
+	deadline := client_idle_frame_deadline(client.idle_frame_deadline, frame_start, interval)
+	client.idle_frame_deadline = deadline
+	for !bool(glfw.WindowShouldClose(client.window)) {
+		remaining := deadline - glfw.GetTime()
+		if remaining <= 0 { return }
+		if remaining > IDLE_FRAME_SPIN_MARGIN {
+			client_wait_events(remaining - IDLE_FRAME_SPIN_MARGIN)
+		} else {
+			client_timer_yield()
+		}
+	}
 }
 
 MAX_PREDICTED_INPUTS :: 256
@@ -1421,6 +1465,8 @@ main :: proc() {
 		return
 	}
 	defer glfw.Terminate()
+	client_set_timer_precision()
+	defer client_restore_timer_precision()
 
 	client := new(Client)
 	defer free(client)
@@ -1434,6 +1480,7 @@ main :: proc() {
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
+	client.menu_fps_limit = preferences.menu_fps_limit
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse
@@ -1483,11 +1530,12 @@ main :: proc() {
 	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.MakeContextCurrent(client.window)
 
-	if bool(glfw.RawMouseMotionSupported()) {
-		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
-	}
+	// The native Windows path owns raw mouse input (and decides whether GLFW's
+	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
 	if client_mouse_init(client.window) {
-		fmt.println("[Input] Buffered Windows raw mouse enabled")
+		fmt.println("[Input] Native Windows raw mouse enabled")
+	} else if bool(glfw.RawMouseMotionSupported()) {
+		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
 	}
 	defer client_mouse_fini()
 
@@ -1594,13 +1642,7 @@ main :: proc() {
 			prev_swap_ms = f32((swap_end-swap_start)*1000)
 			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
 		}
-		if interval := client_idle_frame_interval(client); interval > 0 {
-			for !bool(glfw.WindowShouldClose(client.window)) {
-				remaining := interval - (glfw.GetTime() - frame_start)
-				if remaining <= 0 { break }
-				client_wait_events(remaining)
-			}
-		}
+		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
 		free_all(context.temp_allocator)
 	}
 
