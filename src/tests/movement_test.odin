@@ -354,6 +354,9 @@ main :: proc() {
 	if !test_objective_combat_state() {
 		os.exit(1)
 	}
+	if !test_player_hitboxes_match_inline() || !test_shot_paths_use_player_hitboxes() {
+		os.exit(1)
+	}
 	fmt.println()
 
 	ss_v3_path := fmt.tprintf("%sassets/maps/sandstorm_v3.json", project_root())
