@@ -11,7 +11,7 @@ when ODIN_TEST {
 	settings_reset_test_client :: proc() -> Client {
 		client := Client{sensitivity = 2, mouse_dpi = 1600, ads_sensitivity = 0.5, advanced_sensitivity = true, invert_mouse = true,
 			show_fps = true, vsync = true, menu_fps_limit = menuui.MENU_FPS_LIMITS[2], bindings = menuui.default_bindings(),
-			hud_settings = {hide_timer = true, hide_ping = true}, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS, quality_settings = {smooth_textures = true, anisotropy = 4},
+			hud_settings = {hide_timer = true, hide_ping = true}, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS, quality_settings = {anisotropy = 4},
 			viewmodel_settings = menuui.DEFAULT_VIEWMODEL_SETTINGS, trail_settings = {hide_others = true}, crosshair_settings = menuui.DEFAULT_CROSSHAIR_SETTINGS,
 			audio_settings = {0.1, 0.2, 0.3, 0.4}, max_anisotropy = 16}
 		client.camera.fov = 110 * 3.14159265 / 180

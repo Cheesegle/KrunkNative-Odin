@@ -25,7 +25,6 @@ DEFAULT_NIGHT_STRENGTH :: 0.7
 // (shadowsDynamic), all default off, and "Lighting" (lighting): 0 Low,
 // 1 Normal (default), 2 High, 3 Physical.
 Quality_Settings :: struct {
-	smooth_textures: bool,
 	anisotropy:      i32, // 0 = off; otherwise 2, 4, 8 or 16.
 	shadows, soft_shadows, high_res_shadows, dynamic_shadows: bool,
 	lighting:        i32,
@@ -116,13 +115,6 @@ settings_visuals :: proc(state: ^State) {
 
 settings_quality :: proc(state: ^State, view: View) {
 	settings_section(state, "Quality")
-	if settings_search_show(state, "Texture filtering") {
-		if clay.UI(clay.ID("TextureFilteringRow"))(settings_row(state)) {
-			settings_label("Texture filtering", state.scale)
-			spacer()
-			settings_dropdown_field(state, state.settings_draft.quality.smooth_textures ? "Smooth" : "Sharp", "TextureFiltering", .TEXTURE_FILTER)
-		}
-	}
 	if settings_search_show(state, "Anisotropic filtering") {
 		if clay.UI(clay.ID("AnisotropyRow"))(settings_row(state)) {
 			settings_label("Anisotropic filtering", state.scale)
@@ -131,7 +123,7 @@ settings_quality :: proc(state: ^State, view: View) {
 			settings_dropdown_field(state, label, "Anisotropy", .ANISOTROPY, view.max_anisotropy >= 2)
 		}
 	}
-	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
+	settings_note(state, "Anisotropic filtering improves textures viewed at an angle.")
 	quality := state.settings_draft.quality
 	settings_toggle_row(state, "Shadows", "QualityShadows", quality.shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SHADOWS)})
 	settings_toggle_row(state, "Soft Shadows", "QualitySoftShadows", quality.soft_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SOFT_SHADOWS)})
