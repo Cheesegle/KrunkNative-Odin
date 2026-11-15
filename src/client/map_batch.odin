@@ -22,12 +22,18 @@ import shared "../shared"
 
 MAP_BATCH_CHUNK_SIZE :: f32(128)
 
+// face_idx and object_index are whole numbers stored as f32 (exact below
+// 2^24): float attributes are the one vertex format every driver gets right,
+// unlike integer attributes set up with glVertexArrayAttribIFormat.
 Batched_Vertex :: struct {
 	position:     shared.Vec3,
 	tex_coord:    shared.Vec2,
-	face_idx:     u32,
-	object_index: u32,
+	face_idx:     f32,
+	object_index: f32,
 }
+
+// Object indices must stay exact in an f32.
+MAP_BATCH_MAX_OBJECTS :: 1 << 24
 
 BATCH_FLAG_RAMP           :: 1
 BATCH_FLAG_LADDER         :: 2
@@ -35,17 +41,41 @@ BATCH_FLAG_FACE_TEX_SCALE :: 4
 BATCH_FLAG_UNLIT          :: 8
 BATCH_FLAG_NO_FOG         :: 16
 
-// std430 layout of `Batch_Object` in basic.vert/basic.frag.
+// One object in the batched shader's storage buffer. basic.vert declares the
+// buffer as a plain `vec4 objects[]` (std430 stride 16 on every driver; no
+// struct, matrix or vec3 alignment rules involved) and reads field F of object
+// i at objects[i * BATCH_OBJECT_VEC4S + BATCH_SLOT_F]. Those numbers are
+// generated from this struct by map_batch_shader_defines, so the two sides
+// cannot drift apart. Every field is a vec4 of plain floats; integers are
+// stored as exact float values, never as bit patterns.
 Batch_Object :: struct {
-	transform:  shared.Mat4,
+	transform:  shared.Mat4, // Column-major, as glUniformMatrix4fv uploads it.
 	color:      shared.Vec4,
 	emissive:   shared.Vec4,
 	face_scale: shared.Vec4, // xyz face scale, w texture scale
 	tex_row0:   shared.Vec4,
 	tex_row1:   shared.Vec4,
-	flags:      [4]i32, // face mask, BATCH_FLAG_*, alpha_test bits, unused
+	params:     shared.Vec4, // x face mask (0..63), y BATCH_FLAG_* bits, z alpha_test, w unused
 }
 #assert(size_of(Batch_Object) == 160)
+#assert(size_of(Batch_Object) % 16 == 0)
+BATCH_OBJECT_VEC4S :: size_of(Batch_Object) / 16
+
+// The #defines basic.vert/basic.frag are compiled with for the BATCHED variant.
+map_batch_shader_defines :: proc(allocator := context.allocator) -> string {
+	return fmt.aprintf(
+		"#define BATCHED\n#define BATCH_OBJECT_VEC4S %d\n#define BATCH_SLOT_TRANSFORM %d\n#define BATCH_SLOT_COLOR %d\n#define BATCH_SLOT_EMISSIVE %d\n#define BATCH_SLOT_FACE_SCALE %d\n#define BATCH_SLOT_TEX_ROW0 %d\n#define BATCH_SLOT_TEX_ROW1 %d\n#define BATCH_SLOT_PARAMS %d\n",
+		BATCH_OBJECT_VEC4S,
+		offset_of(Batch_Object, transform) / 16,
+		offset_of(Batch_Object, color) / 16,
+		offset_of(Batch_Object, emissive) / 16,
+		offset_of(Batch_Object, face_scale) / 16,
+		offset_of(Batch_Object, tex_row0) / 16,
+		offset_of(Batch_Object, tex_row1) / 16,
+		offset_of(Batch_Object, params) / 16,
+		allocator = allocator,
+	)
+}
 
 Map_Batch_Key :: struct {
 	texture:   u32,
@@ -134,7 +164,7 @@ batch_object_from_material :: proc(material: ^Basic_Material, transform: shared.
 		face_scale = {material.face_scale.x, material.face_scale.y, material.face_scale.z, material.texture_scale},
 		tex_row0   = {tex[0][0], tex[0][1], tex[0][2], 0},
 		tex_row1   = {tex[1][0], tex[1][1], tex[1][2], 0},
-		flags      = {i32(material.face_mask), flags, transmute(i32)material.alpha_test, 0},
+		params     = {f32(material.face_mask & 0x3f), f32(flags), material.alpha_test, 0},
 	}
 }
 
@@ -384,6 +414,9 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 		fmt.eprintln("[Render] Batched map shader unavailable; drawing map objects individually")
 		return false
 	}
+	if g_map_batch_shader_layout_reason != "" {
+		return false
+	}
 
 	// Every opaque map mesh takes part in the tie check; only eligible ones
 	// can be merged.
@@ -478,12 +511,12 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 		}
 
 		material := cast(^Basic_Material)mesh.material
-		object_index := u32(len(objects))
+		object_index := f32(len(objects))
 		append(&objects, batch_object_from_material(material, mesh.transform_matrix))
 		set.merged += 1
 		base := u32(len(vertices))
 		for vertex, vertex_id in data.vertices {
-			append(&vertices, Batched_Vertex{vertex.position, vertex.tex_coord, batch_face_index(material, vertex_id), object_index})
+			append(&vertices, Batched_Vertex{vertex.position, vertex.tex_coord, f32(batch_face_index(material, vertex_id)), object_index})
 		}
 		for t := 0; t + 2 < len(data.indices); t += 3 {
 			// Faces are flat-shaded from the provoking (last) vertex. A masked
@@ -493,6 +526,20 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 			append(&indices, base + data.indices[t], base + data.indices[t + 1], base + data.indices[t + 2])
 		}
 		batch.index_count = i32(u32(len(indices)) - batch.first_index)
+	}
+
+	max_block_size: i64
+	gl.GetInteger64v(gl.MAX_SHADER_STORAGE_BLOCK_SIZE, &max_block_size)
+	if len(objects) >= MAP_BATCH_MAX_OBJECTS || i64(len(objects) * size_of(Batch_Object)) > max_block_size {
+		fmt.eprintf("[Render] Map batching skipped: %d objects exceed GL_MAX_SHADER_STORAGE_BLOCK_SIZE %d\n", len(objects), max_block_size)
+		map_batch_set_free(set, members_alive = false)
+		return false
+	}
+	when ODIN_TEST {
+		// Simulates a driver that misreads the storage buffer.
+		if g_map_batch_fault_inject {
+			for &object in objects { object.transform = {} }
+		}
 	}
 
 	for mesh in set.members {
@@ -511,8 +558,8 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 		gl.VertexArrayElementBuffer(set.vao, set.ebo)
 		gl.VertexArrayAttribFormat(set.vao, 0, 3, gl.FLOAT, false, u32(offset_of(Batched_Vertex, position)))
 		gl.VertexArrayAttribFormat(set.vao, 1, 2, gl.FLOAT, false, u32(offset_of(Batched_Vertex, tex_coord)))
-		gl.VertexArrayAttribIFormat(set.vao, 2, 1, gl.UNSIGNED_INT, u32(offset_of(Batched_Vertex, face_idx)))
-		gl.VertexArrayAttribIFormat(set.vao, 3, 1, gl.UNSIGNED_INT, u32(offset_of(Batched_Vertex, object_index)))
+		gl.VertexArrayAttribFormat(set.vao, 2, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, face_idx)))
+		gl.VertexArrayAttribFormat(set.vao, 3, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, object_index)))
 		for attrib in u32(0) ..< 4 {
 			gl.EnableVertexArrayAttrib(set.vao, attrib)
 			gl.VertexArrayAttribBinding(set.vao, attrib, 0)

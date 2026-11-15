@@ -376,16 +376,21 @@ text_material_init :: proc() -> ^Text_Material {
 }
 
 // Compiled on first use. Returns 0 when the driver rejects it (for example no
-// shader storage buffers); the map then keeps the per-object path.
+// shader storage buffers); the map then keeps the per-object path. After a
+// successful link, the driver's storage-buffer layout is checked against
+// Batch_Object; a mismatch is kept in g_map_batch_shader_layout_reason.
 basic_batched_program :: proc() -> u32 {
 	if basic_batched_shader_program == 0 {
 		vert_shader := shared.concat(shared.assets_path(), "shaders/basic.vert")
 		frag_shader := shared.concat(shared.assets_path(), "shaders/basic.frag")
+		defines := map_batch_shader_defines()
 		defer delete(vert_shader)
 		defer delete(frag_shader)
-		basic_batched_shader_program = shader_compile(vert_shader, frag_shader, "#define BATCHED\n")
+		defer delete(defines)
+		basic_batched_shader_program = shader_compile(vert_shader, frag_shader, defines)
 		if basic_batched_shader_program != 0 {
 			u_basic_batched = cache_uniforms(basic_batched_shader_program)
+			g_map_batch_shader_layout_reason = map_batch_program_layout_reason(basic_batched_shader_program)
 		}
 	}
 	return basic_batched_shader_program

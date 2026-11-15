@@ -39,9 +39,12 @@ when ODIN_TEST {
 		testing.expect(t, object.face_scale == shared.Vec4{3, 4, 5, 2.5})
 		testing.expect(t, object.tex_row0 == shared.Vec4{tex[0][0], tex[0][1], tex[0][2], 0})
 		testing.expect(t, object.tex_row1 == shared.Vec4{tex[1][0], tex[1][1], tex[1][2], 0})
-		testing.expect_value(t, object.flags[0], i32(0x2d))
-		testing.expect_value(t, object.flags[1], i32(BATCH_FLAG_RAMP | BATCH_FLAG_FACE_TEX_SCALE | BATCH_FLAG_UNLIT))
-		testing.expect_value(t, transmute(f32)object.flags[2], material.alpha_test)
+		testing.expect_value(t, object.params.x, f32(0x2d))
+		testing.expect_value(t, object.params.y, f32(BATCH_FLAG_RAMP | BATCH_FLAG_FACE_TEX_SCALE | BATCH_FLAG_UNLIT))
+		testing.expect_value(t, object.params.z, material.alpha_test)
+		// Only the six cube-face bits reach the shader, as exact float values.
+		material.face_mask = 0xffffffff
+		testing.expect_value(t, batch_object_from_material(&material, transform).params.x, f32(0x3f))
 		// Rotation: cos/sin of the same float, repeat and offset in place.
 		c, s := math.cos(material.texture_rotation), math.sin(material.texture_rotation)
 		testing.expect(t, tex[0] == [3]f32{2 * c, 2 * s, 0.25} && tex[1] == [3]f32{-3 * s, 3 * c, 0.75} && tex[2] == [3]f32{0, 0, 1})

@@ -70,6 +70,9 @@ Client :: struct {
 	// Static map batching and frustum culling (map_batch.odin). On by default;
 	// `--no-batching` turns it off for A/B comparisons.
 	render_batching: bool,
+	// The startup self-test (map_batch_self_test.odin) has compared batched and
+	// per-object rendering this session.
+	batch_self_test_done: bool,
 	settings_dirty, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
@@ -624,10 +627,7 @@ client_load_map :: proc(client: ^Client) {
 		}
 	}
 
-	map_batch_destroy(client.scene)
-	if client.render_batching {
-		map_batch_build(client.scene, client.game.map_inst)
-	}
+	client_build_map_batches(client)
 }
 
 client_find_player :: proc(client: ^Client, uid: i32) -> ^shared.Player {
