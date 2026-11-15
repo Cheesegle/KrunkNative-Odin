@@ -10,6 +10,11 @@ network_log_attempt: u64
 network_log_started: time.Time
 network_log_secrets: [dynamic]string
 network_log_file_warning: bool
+// Tests may point this elsewhere; call network_log_close first so the next
+// line opens the new path.
+network_log_path := NETWORK_LOG_PATH
+// Kept open across lines; network_log_close releases it on shutdown.
+network_log_file: ^os.File
 
 network_log_secret :: proc(secret: string) {
 	if len(secret) == 0 do return
@@ -92,14 +97,23 @@ network_log :: proc(stage, message: string) {
 	elapsed := network_log_attempt == 0 ? 0.0 : time.duration_milliseconds(time.since(network_log_started))
 	line := fmt.tprintf("[Krunker][%s][attempt=%d +%.1fms][%s] %s\n", stamp, network_log_attempt, elapsed, stage, safe)
 	fmt.print(line)
-	os.make_directory_all("logs")
-	file, err := os.open(NETWORK_LOG_PATH, {.Write, .Append, .Create})
-	if err == nil {
-		defer os.close(file)
-		_, write_err := os.write_string(file, line)
+	if network_log_file == nil {
+		os.make_directory_all(os.dir(network_log_path))
+		file, err := os.open(network_log_path, {.Write, .Append, .Create})
+		if err == nil { network_log_file = file }
+	}
+	if network_log_file != nil {
+		_, write_err := os.write_string(network_log_file, line)
 		if write_err == nil do return
+		// Reopen on the next line, as before when every line reopened the file.
+		network_log_close()
 	}
 	if !network_log_file_warning { fmt.eprintln("[Krunker] Could not write logs/krunker-network.log; diagnostics continue on console."); network_log_file_warning = true }
+}
+
+network_log_close :: proc() {
+	if network_log_file != nil { os.close(network_log_file) }
+	network_log_file = nil
 }
 
 network_log_clear_secrets :: proc() {

@@ -291,8 +291,24 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	debug_ui_cell(ctx, "", stats.shown_gpu_valid ? fmt.tprintf("%.2f", stats.shown_gpu_ms) : "--", stats.shown_gpu_valid ? white : muted, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
+	// Total draws this frame (world, view model, HUD and menus), then the
+	// world/view-model share and how map batching and culling handled it.
+	world := stats.shown_world
 	mu.label(ctx, "Draw calls")
 	debug_ui_cell(ctx, "", fmt.tprintf("%d", stats.shown_draw_calls), white, muted)
+	debug_ui_cell(ctx, "world", fmt.tprintf("%d", world.draw_calls), white, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
+	mu.label(ctx, "Batches")
+	if client.render_batching {
+		debug_ui_cell(ctx, "", fmt.tprintf("%d", world.batch_draws), white, muted)
+		debug_ui_cell(ctx, "culled", fmt.tprintf("%d", world.batches_culled), white, muted)
+	} else {
+		debug_ui_cell(ctx, "", "off", muted, muted)
+		debug_ui_cell(ctx, "", "", white, muted)
+	}
+	debug_ui_cell(ctx, "", "", white, muted)
+	mu.label(ctx, "Culled objs")
+	debug_ui_cell(ctx, "", fmt.tprintf("%d", world.meshes_culled), white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 

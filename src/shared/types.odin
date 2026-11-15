@@ -190,6 +190,10 @@ Map :: struct {
 	death_y:         f32,
 	spawns:          [dynamic]^Spawn,
 	objects:         [dynamic]^Object,
+	// Indices of objects whose collision type is not NONE, in map order; set
+	// by map_load_from_file. Movement collision scans only these.
+	collision_objects: [dynamic]i32,
+	collision_indexed: bool,
 	min_dim:         Vec3,
 	max_dim:         Vec3,
 	camera_position: Vec3,
@@ -426,7 +430,8 @@ Player :: struct {
 	slide_timer:                     f32,
 	jump_timer:                      f32,
 	interact_progress:               f32,
-	ramp_fix:                        ^f32,
+	ramp_fix:                        f32, // Valid only while has_ramp_fix.
+	has_ramp_fix:                    bool,
 	idle_anim:                       f32,
 	hp_chase:                        f32,
 	// Krunker `canBSeen`: client-side nameplate visibility, refreshed every

@@ -5,6 +5,17 @@ in vec2 tex_coord;
 in flat int face_idx;
 in vec3 world_pos;
 
+uniform float world_uv_scale;
+
+#ifdef BATCHED
+// Batch_Object fields from basic.vert (flat: copied bit for bit).
+in flat vec4 b_color;
+in flat vec4 b_emissive;
+in flat vec4 b_face_scale; // xyz face scale, w texture scale
+in flat vec4 b_tex_row0;
+in flat vec4 b_tex_row1;
+in flat ivec4 b_flags; // x face mask, y bit flags, z float bits of alpha_test
+#else
 uniform bool is_ramp;
 uniform bool is_ladder;
 
@@ -13,7 +24,6 @@ uniform int face_mask;
 uniform float texture_scale;
 uniform bool unlit;
 uniform bool no_fog;
-uniform float world_uv_scale;
 uniform vec3 face_scale;
 
 uniform vec4 color;
@@ -21,6 +31,8 @@ uniform vec4 emissive;
 uniform float alpha_test;
 
 uniform mat3 tex_transform;
+#endif
+
 uniform sampler2D tex;
 uniform vec3 uAmbientColor;
 uniform float uAmbientIntensity;
@@ -35,51 +47,83 @@ uniform vec4 uVisualImage; // brightness, gamma, contrast, saturation
 uniform vec2 uVisualLighting; // ambient and sunlight multipliers
 
 void main() {
-    if (face_idx < 6 && ((face_mask & (1 << face_idx)) == 0)) discard;
+#ifdef BATCHED
+    // Same values the per-object path uploads as uniforms (map_batch.odin).
+    bool m_is_ramp = (b_flags.y & 1) != 0;
+    bool m_is_ladder = (b_flags.y & 2) != 0;
+    bool m_use_face_tex_scaling = (b_flags.y & 4) != 0;
+    bool m_unlit = (b_flags.y & 8) != 0;
+    bool m_no_fog = (b_flags.y & 16) != 0;
+    int m_face_mask = b_flags.x;
+    float m_texture_scale = b_face_scale.w;
+    vec3 m_face_scale = b_face_scale.xyz;
+    vec4 m_color = b_color;
+    vec4 m_emissive = b_emissive;
+    float m_alpha_test = intBitsToFloat(b_flags.z);
+    mat3 m_tex_transform = mat3(
+        vec3(b_tex_row0.x, b_tex_row1.x, 0.0),
+        vec3(b_tex_row0.y, b_tex_row1.y, 0.0),
+        vec3(b_tex_row0.z, b_tex_row1.z, 1.0));
+#else
+    bool m_is_ramp = is_ramp;
+    bool m_is_ladder = is_ladder;
+    bool m_use_face_tex_scaling = use_face_tex_scaling;
+    bool m_unlit = unlit;
+    bool m_no_fog = no_fog;
+    int m_face_mask = face_mask;
+    float m_texture_scale = texture_scale;
+    vec3 m_face_scale = face_scale;
+    vec4 m_color = color;
+    vec4 m_emissive = emissive;
+    float m_alpha_test = alpha_test;
+    mat3 m_tex_transform = tex_transform;
+#endif
+
+    if (face_idx < 6 && ((m_face_mask & (1 << face_idx)) == 0)) discard;
     vec2 scaled_tex_coord;
 
-    if (use_face_tex_scaling) {
+    if (m_use_face_tex_scaling) {
         vec2 scale;
 
-        if (is_ramp) {
+        if (m_is_ramp) {
             switch (face_idx) {
                 case 0:
-                    scale = vec2(face_scale.x, sqrt(face_scale.z*face_scale.z + face_scale.y*face_scale.y));
+                    scale = vec2(m_face_scale.x, sqrt(m_face_scale.z*m_face_scale.z + m_face_scale.y*m_face_scale.y));
                     break;
                 case 1:
-                    scale = face_scale.xz;
+                    scale = m_face_scale.xz;
                     break;
                 case 2:
-                    scale = face_scale.zy;
+                    scale = m_face_scale.zy;
                     break;
                 case 3:
-                    scale = face_scale.xy;
+                    scale = m_face_scale.xy;
                     break;
             }
-        } else if (is_ladder) {
-            if (face_idx < 2) scale = face_scale.xy;
-            else if (face_idx < 4) scale = face_scale.zy;
-            else if (face_idx < 6) scale = face_scale.xz;
-            else if (face_idx < 8) scale = face_scale.xy;
-            else if (face_idx < 10) scale = face_scale.zy;
-            else scale = face_scale.xz;
+        } else if (m_is_ladder) {
+            if (face_idx < 2) scale = m_face_scale.xy;
+            else if (face_idx < 4) scale = m_face_scale.zy;
+            else if (face_idx < 6) scale = m_face_scale.xz;
+            else if (face_idx < 8) scale = m_face_scale.xy;
+            else if (face_idx < 10) scale = m_face_scale.zy;
+            else scale = m_face_scale.xz;
         } else {
-            if (face_idx < 2) scale = face_scale.xy;
-            else if (face_idx < 4) scale = face_scale.zy;
-            else scale = face_scale.xz;
+            if (face_idx < 2) scale = m_face_scale.xy;
+            else if (face_idx < 4) scale = m_face_scale.zy;
+            else scale = m_face_scale.xz;
         }
 
-        vec2 repeat_scale = (scale / world_uv_scale) * texture_scale;
+        vec2 repeat_scale = (scale / world_uv_scale) * m_texture_scale;
         scaled_tex_coord = repeat_scale * tex_coord;
         scaled_tex_coord.x += 0.5f - repeat_scale.x * 0.5f;
     } else {
         scaled_tex_coord = tex_coord;
     }
 
-    vec3 t_tex_coord = tex_transform * vec3(scaled_tex_coord, 1.0f);
-    frag_color = texture(tex, t_tex_coord.xy) * mix(color, emissive, 0.0f);
+    vec3 t_tex_coord = m_tex_transform * vec3(scaled_tex_coord, 1.0f);
+    frag_color = texture(tex, t_tex_coord.xy) * mix(m_color, m_emissive, 0.0f);
     // Cutout foliage stays in the opaque pass, with holes in color and depth.
-    if (frag_color.a < alpha_test) discard;
+    if (frag_color.a < m_alpha_test) discard;
 
     vec3 normal = normalize(cross(dFdx(world_pos), dFdy(world_pos)));
     float light_length = length(uLightDir);
@@ -94,9 +138,9 @@ void main() {
     // The map loader uses white as the neutral/default emissive value. Keep
     // that default neutral; explicit emissive materials need a separate
     // strength flag before they can be added without brightening every mesh.
-    vec3 lit_rgb = frag_color.rgb * (unlit ? vec3(1.0) : lighting);
+    vec3 lit_rgb = frag_color.rgb * (m_unlit ? vec3(1.0) : lighting);
     float fog_span = max(0.001, uFogFar - uFogNear);
-    float fog_amount = no_fog ? 0.0 : clamp((length(world_pos - uCameraPosition) - uFogNear) / fog_span, 0.0, 1.0);
+    float fog_amount = m_no_fog ? 0.0 : clamp((length(world_pos - uCameraPosition) - uFogNear) / fog_span, 0.0, 1.0);
     vec3 rgb = mix(lit_rgb, uFogColor, fog_amount);
     rgb = (rgb * uVisualImage.x - 0.5) * uVisualImage.z + 0.5;
     float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));

@@ -33,6 +33,7 @@ Perf_Stats :: struct {
 	frame_ms, cpu_ms: [PERF_HISTORY]f32,
 	head, count: int, // head is the next write index.
 	draw_calls: u32, // Draw calls of the last recorded frame.
+	world: Draw_Stats, // World/viewmodel batching and culling stats of that frame.
 	gpu_ms: f32,
 	gpu_valid: bool,
 	queries: [PERF_GPU_QUERIES]u32,
@@ -45,6 +46,7 @@ Perf_Stats :: struct {
 	shown_gpu_ms: f32,
 	shown_gpu_valid: bool,
 	shown_draw_calls: u32,
+	shown_world: Draw_Stats,
 	shown_valid: bool,
 	since_refresh_ms: f32,
 }
@@ -71,7 +73,7 @@ perf_sample_index :: proc(stats: ^Perf_Stats, age: int) -> int {
 perf_frame_sample :: proc(stats: ^Perf_Stats, age: int) -> f32 { return stats.frame_ms[perf_sample_index(stats, age)] }
 
 perf_reset :: proc(stats: ^Perf_Stats) {
-	stats.head, stats.count, stats.draw_calls = 0, 0, 0
+	stats.head, stats.count, stats.draw_calls, stats.world = 0, 0, 0, {}
 	stats.gpu_ms, stats.gpu_valid = 0, false
 	stats.shown, stats.shown_valid, stats.since_refresh_ms = {}, false, 0
 }
@@ -80,6 +82,7 @@ perf_overlay_record :: proc(client: ^Client, frame_ms, cpu_ms: f32) {
 	if !client.perf_overlay { return }
 	perf_push(&client.perf, frame_ms, cpu_ms)
 	client.perf.draw_calls = g_draw_calls
+	client.perf.world = g_draw_stats // Reset per frame by client_render_world.
 	perf_refresh_shown(&client.perf)
 }
 
@@ -108,6 +111,7 @@ perf_refresh_shown :: proc(stats: ^Perf_Stats, force := false) {
 	stats.shown = summary
 	stats.shown_gpu_ms, stats.shown_gpu_valid = stats.gpu_ms, stats.gpu_valid
 	stats.shown_draw_calls = stats.draw_calls
+	stats.shown_world = stats.world
 	stats.shown_valid = true
 	stats.since_refresh_ms = 0
 }

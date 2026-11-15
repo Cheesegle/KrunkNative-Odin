@@ -103,10 +103,10 @@ validate_tick :: proc(player: ^shared.Player, expected: ^Player_State, tick_inde
 	vz_bad := abs(dvz) > EPSILON
 
 	ramp_bad :=
-		(expected.ramp_fix != nil) != (player.ramp_fix != nil) ||
+		(expected.ramp_fix != nil) != player.has_ramp_fix ||
 		(expected.ramp_fix != nil &&
-				player.ramp_fix != nil &&
-				abs(player.ramp_fix^ - expected.ramp_fix^) > EPSILON)
+				player.has_ramp_fix &&
+				abs(player.ramp_fix - expected.ramp_fix^) > EPSILON)
 
 	bad := x_bad || y_bad || z_bad || vx_bad || vy_bad || vz_bad || ramp_bad
 
@@ -124,7 +124,7 @@ validate_tick :: proc(player: ^shared.Player, expected: ^Player_State, tick_inde
 			print_field(
 				"ramp_fix",
 				expected.ramp_fix^,
-				player.ramp_fix != nil ? player.ramp_fix^ : 0.0,
+				player.has_ramp_fix ? player.ramp_fix : 0.0,
 			)
 		}
 	}
@@ -303,7 +303,7 @@ main :: proc() {
 	if !test_sandstorm_palms() {
 		os.exit(1)
 	}
-	if !test_sandstorm_hidden_colliders() {
+	if !test_sandstorm_hidden_colliders() || !test_collision_index_matches_full_scan() {
 		os.exit(1)
 	}
 	if !test_net_send_queue() {

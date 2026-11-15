@@ -142,6 +142,26 @@ when ODIN_TEST {
 		g_draw_calls = 0
 	}
 
+	@(test)
+	perf_overlay_shows_batching_stats :: proc(t: ^testing.T) {
+		client := new(Client)
+		defer free(client)
+		perf_overlay_set(client, true)
+		// The renderer resets g_draw_stats each frame; the window snapshots it.
+		g_draw_calls = 90
+		g_draw_stats = {draw_calls = 80, batch_draws = 60, batches_culled = 140, meshes_culled = 12}
+		perf_overlay_record(client, 2, 1)
+		testing.expect(t, client.perf.shown_valid && client.perf.shown_draw_calls == 90, "the first frame is shown right away")
+		testing.expect(t, client.perf.shown_world == (Draw_Stats{draw_calls = 80, batch_draws = 60, batches_culled = 140, meshes_culled = 12}), "batching and culling stats reach the window")
+		// Later frames update the snapshot only at the 250 ms refresh.
+		g_draw_stats = {draw_calls = 300, batch_draws = 0, batches_culled = 0, meshes_culled = 0}
+		perf_overlay_record(client, 2, 1)
+		testing.expect(t, client.perf.shown_world.batch_draws == 60, "batching stats refresh with the other numbers")
+		for _ in 0..<130 { perf_overlay_record(client, 2, 1) }
+		testing.expect(t, client.perf.shown_world.draw_calls == 300, "and update after 250 ms")
+		g_draw_calls, g_draw_stats = 0, {}
+	}
+
 	// Fixed-width text so the input tests need no GL font.
 	perf_test_measure :: proc(ui: ^UI, text: string, size: f32) -> f32 { return f32(len(text)) * size * 0.5 }
 

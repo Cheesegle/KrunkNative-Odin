@@ -273,4 +273,39 @@ when ODIN_TEST {
 		testing.expect(t, len(client.predicted_inputs) == 0 && len(client.krunker.input_commands) == 0 && client.krunker.input_elapsed == 0,
 			"respawns/input resets must discard unsent movement along with prediction history")
 	}
+	@(test)
+	predicted_input_discard_keeps_unacked_commands :: proc(t: ^testing.T) {
+		client: Client
+		defer delete(client.predicted_inputs)
+		fill :: proc(client: ^Client, first, count: i32) {
+			clear(&client.predicted_inputs)
+			for seq in first ..< first + count { append(&client.predicted_inputs, shared.Input{seq = seq}) }
+		}
+		fill(&client, 10, 5)
+		client_discard_acked_inputs(&client, 9)
+		testing.expect(t, len(client.predicted_inputs) == 5 && client.predicted_inputs[0].seq == 10, "an ack below every command must keep them all")
+		client_discard_acked_inputs(&client, 10)
+		testing.expect(t, len(client.predicted_inputs) == 4 && client.predicted_inputs[0].seq == 11, "an ack equal to the oldest command must drop exactly that command")
+		client_discard_acked_inputs(&client, 12)
+		testing.expect(t, len(client.predicted_inputs) == 2 && client.predicted_inputs[0].seq == 13 && client.predicted_inputs[1].seq == 14, "acked commands must be dropped up to and including the ack")
+		client_discard_acked_inputs(&client, 14)
+		testing.expect(t, len(client.predicted_inputs) == 0, "acking the newest command must drop every command")
+		client_discard_acked_inputs(&client, 99)
+		testing.expect(t, len(client.predicted_inputs) == 0, "discarding from an empty history must be a no-op")
+		// Discard stops at the first unacked command, as the old one-by-one loop did.
+		append(&client.predicted_inputs, shared.Input{seq = 5}, shared.Input{seq = 8}, shared.Input{seq = 6})
+		client_discard_acked_inputs(&client, 6)
+		testing.expect(t, len(client.predicted_inputs) == 2 && client.predicted_inputs[0].seq == 8 && client.predicted_inputs[1].seq == 6, "discard must stop at the first unacked command")
+
+		fill(&client, 0, KRUNKER_MAX_PREDICTED_INPUTS)
+		client_cap_predicted_inputs(&client, KRUNKER_MAX_PREDICTED_INPUTS)
+		testing.expect(t, len(client.predicted_inputs) == KRUNKER_MAX_PREDICTED_INPUTS && client.predicted_inputs[0].seq == 0, "a full history at the cap must be kept")
+		append(&client.predicted_inputs, shared.Input{seq = KRUNKER_MAX_PREDICTED_INPUTS})
+		client_cap_predicted_inputs(&client, KRUNKER_MAX_PREDICTED_INPUTS)
+		testing.expect(t, len(client.predicted_inputs) == KRUNKER_MAX_PREDICTED_INPUTS && client.predicted_inputs[0].seq == 1 && client.predicted_inputs[KRUNKER_MAX_PREDICTED_INPUTS-1].seq == KRUNKER_MAX_PREDICTED_INPUTS,
+			"one command over the cap must drop only the oldest")
+		fill(&client, 0, MAX_PREDICTED_INPUTS + 3)
+		client_cap_predicted_inputs(&client, MAX_PREDICTED_INPUTS)
+		testing.expect(t, len(client.predicted_inputs) == MAX_PREDICTED_INPUTS && client.predicted_inputs[0].seq == 3, "an overfull history must keep the newest commands")
+	}
 }
