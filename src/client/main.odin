@@ -148,6 +148,8 @@ Client :: struct {
 	last_perf_overlay_key: bool,
 	perf:           Perf_Stats,
 	debug_ui:       ^Debug_UI,
+	// Debug window "Rendering" toggles and their line buffers (developer builds).
+	debug_render:   Debug_Render,
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
@@ -1083,6 +1085,7 @@ client_tick_impacts :: proc(client: ^Client, delta: f32) {
 		client_add_tracer(client, &impact)
 		client_add_bullet_hole(client, &impact)
 	}
+	when KRODIN_DEV { debug_render_record_impacts(client, glfw.GetTime()) }
 	clear(&client.game.impacts)
 	client_tick_bullet_holes(client, delta)
 	client_tick_tracers(client, delta)
@@ -1471,6 +1474,8 @@ client_render_world :: proc(client: ^Client) {
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	// Hitbox/collision wireframes, depth-tested against the world just drawn.
+	when KRODIN_DEV { debug_render_after_world(client) }
 	client.camera.fov = saved_fov
 
 	phase_mark(.RENDER_VIEWMODEL)
@@ -1481,6 +1486,7 @@ client_render_world :: proc(client: ^Client) {
 	g_shadow_viewmodel_pass = true
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	g_shadow_viewmodel_pass = false
+	when KRODIN_DEV { debug_render_after_viewmodel(client) }
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
@@ -1743,6 +1749,7 @@ main :: proc() {
 	scene_fini(client.scene)
 	overlay_fini()
 	debug_ui_fini(client)
+	when KRODIN_DEV { debug_render_fini(&client.debug_render) }
 	ui_fini(client.ui)
 	resource_cache_fini()
 	delete(menu_portraits)
