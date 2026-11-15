@@ -401,10 +401,14 @@ map_batch_plan :: proc(entries: []Batch_Entry) -> (slots: int, extracted: int) {
 	return len(node_keyed), extracted
 }
 
+// Builds so far this session (diagnostics and tests).
+g_map_batch_builds: int
+
 // Builds the batches for every eligible map object. Meshes stay in the scene
 // (bullet holes, map details and tests read them) and are marked `batched`
 // when the batch pass draws them, merged or as a single slot.
 map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
+	g_map_batch_builds += 1
 	map_batch_destroy(scene)
 	if scene == nil || map_inst == nil {
 		return false
