@@ -2,6 +2,7 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:math"
 import "core:strings"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
@@ -74,8 +75,13 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 
 menu_color :: proc(color: clay.Color) -> shared.Vec4 { return {color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255} }
 
+// glScissor rejects negative sizes (GL_INVALID_VALUE), and NaN converts to
+// INT_MIN; an empty or invalid clip becomes a zero-size scissor.
 menu_scissor :: proc(ui: ^UI, box: clay.BoundingBox) {
-	gl.Scissor(i32(box.x), i32(ui.height - box.y - box.height), i32(box.width), i32(box.height))
+	finite :: proc(value: f32) -> f32 { return math.is_nan(value) || math.is_inf(value) ? 0 : value }
+	x, y := finite(box.x), finite(ui.height - box.y - box.height)
+	width, height := max(finite(box.width), 0), max(finite(box.height), 0)
+	gl.Scissor(i32(clamp(x, -65536, 65536)), i32(clamp(y, -65536, 65536)), i32(min(width, 65536)), i32(min(height, 65536)))
 }
 
 menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderCommand)) {
@@ -174,13 +180,20 @@ hud_render :: proc(client: ^Client, delta: f32, pointer_blocked := false) {
 	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0 || client.menu.import_open || menuui.settings_search_focused(&client.menu)) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
 	client.menu_scroll = {}
 	client.menu_text_length = 0
+	phase_mark(.MENU_VIEW)
 	view := menu_view(client)
+	phase_mark(.MENU_BUILD)
+	if client.menu.page == .SETTINGS || client.menu.page == .CONTROLS {
+		phase_mark(menuui.settings_searching(&client.menu) ? .SETTINGS_SEARCH : settings_tab_phase(int(client.menu.settings_tab)))
+	}
 	commands := menuui.build(&client.menu, view, input, client.ui.width, client.ui.height, delta)
+	phase_mark(.MENU_RENDER)
 	ui_fill_rect(client.ui, {0.015, 0.025, 0.035, 0.55}, 0, 0, client.ui.width, client.ui.height)
 	menu_render_commands(client.ui, commands)
 	previous_page := client.menu.page
 	previous_tab := client.menu.settings_tab
 	action := menuui.interact(&client.menu, input, view)
 	if client.menu.page != previous_page || client.menu.settings_tab != previous_tab { audio_play_effect(client.audio, "tick_0", .UI, 0.6) }
+	phase_mark(.MENU_ACTION)
 	menu_apply_action(client, action)
 }

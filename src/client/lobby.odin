@@ -122,8 +122,9 @@ client_secondary_reason :: proc(client: ^Client) -> string {
 
 menu_weapon_icon :: proc(client: ^Client, id: i32) -> rawptr {
 	if id < 0 || int(id) >= len(client.game.weapons) || client.game.weapons[id] == nil { return nil }
-	texture := menu_portraits[-id-1]
-	if texture == 0 && client.ui != nil {
+	// A missing icon is cached as 0, so menus do not retry the file every frame.
+	texture, cached := menu_portraits[-id-1]
+	if !cached && client.ui != nil {
 		weapon := client.game.weapons[id]
 		folder := weapon.melee ? "melee" : "weapons"
 		path := shared.concat(shared.assets_path(), fmt.tprintf("textures/%s/%s.png", folder, weapon.icon))

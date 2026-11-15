@@ -129,11 +129,15 @@ map_batch_self_test_camera :: proc(map_inst: ^shared.Map) -> Camera {
 	return camera
 }
 
+// Self-test renders so far this session (diagnostics and tests).
+g_map_batch_self_tests: int
+
 // Renders one small view batched and per object and compares them. Culling is
 // off for both renders, so every batch is drawn once. GL bindings that the
 // frame loop relies on (framebuffer, viewport, pack alignment) are restored.
 // `ran` is false when the scene has no batch geometry to test.
 map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bool, compare: Map_Batch_Compare, ran: bool) {
+	g_map_batch_self_tests += 1
 	if scene == nil || map_inst == nil || scene.batches == nil || scene.batches.vao == 0 {
 		return true, {}, false
 	}
@@ -213,6 +217,7 @@ client_build_map_batches :: proc(client: ^Client) {
 		map_batch_disable(client, reason)
 		return
 	}
+	phase_mark(.BATCH_BUILD)
 	if !map_batch_build(client.scene, client.game.map_inst) {
 		if basic_batched_shader_program == 0 {
 			map_batch_disable(client, "batched shader did not compile")
@@ -224,6 +229,7 @@ client_build_map_batches :: proc(client: ^Client) {
 	if client.batch_self_test_done {
 		return
 	}
+	phase_mark(.BATCH_SELF_TEST)
 	start := time.tick_now()
 	passed, compare, ran := map_batch_self_test(client.scene, client.game.map_inst)
 	elapsed_ms := time.duration_milliseconds(time.tick_since(start))
