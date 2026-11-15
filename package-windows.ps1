@@ -78,7 +78,7 @@ Push-Location $root
 try {
     if (-not $SkipBuild) {
         Write-Host "Building release binaries..."
-        & cmd.exe /c "build.bat all aggressive"
+        & cmd.exe /c (Join-Path $root "build.bat") all aggressive
         if ($LASTEXITCODE -ne 0) { throw "build.bat all failed with exit code $LASTEXITCODE." }
     }
     foreach ($file in $binaries) {
