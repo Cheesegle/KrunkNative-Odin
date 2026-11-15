@@ -172,6 +172,29 @@ when ODIN_TEST {
 	}
 
 	@(test)
+	perf_shown_values_refresh_four_times_a_second :: proc(t: ^testing.T) {
+		client := new(Client)
+		defer free(client)
+		client.perf_overlay = true
+		// The first frame is shown right away.
+		perf_overlay_record(client, 10, 2)
+		testing.expect(t, client.perf.shown_valid && client.perf.shown.frame_ms == 10, "the first frame is shown immediately")
+		// Faster frames for less than 250 ms do not change the shown values.
+		for _ in 0..<40 { perf_overlay_record(client, 5, 1) } // 200 ms
+		testing.expect(t, client.perf.shown.frame_ms == 10 && client.perf.shown.cpu_ms == 2, "values hold until 250 ms of frames pass")
+		// Crossing 250 ms refreshes them to the mean over the last 250 ms.
+		for _ in 0..<10 { perf_overlay_record(client, 5, 1) } // 250 ms in total
+		testing.expect(t, client.perf.shown.frame_ms == 5 && client.perf.shown.fps == 200 && client.perf.shown.cpu_ms == 1, "after 250 ms the shown values are the interval mean")
+		// A single slow frame moves the shown current value only at the next refresh.
+		perf_overlay_record(client, 40, 1)
+		testing.expect(t, client.perf.shown.frame_ms == 5, "one hitch does not flash the number immediately")
+		testing.expect(t, perf_frame_sample(&client.perf, 0) == 40, "the graph still sees every frame")
+		// Closing the window (no recording) leaves nothing to refresh.
+		perf_reset(&client.perf)
+		testing.expect(t, !client.perf.shown_valid, "reset clears the snapshot")
+	}
+
+	@(test)
 	debug_ui_stat_cells_do_not_shift :: proc(t: ^testing.T) {
 		client, dbg := perf_test_debug_ui()
 		defer { free(dbg); free(client) }
@@ -179,7 +202,9 @@ when ODIN_TEST {
 		captions_a, rights_a := perf_test_cell_edges(dbg)
 		// The current frame jumps from 8 ms (125 FPS) to 0.5 ms (2000 FPS): the
 		// current values gain a digit, but the avg/max/1% low cells must not move.
-		perf_push(&client.perf, 0.5, 0.1)
+		for _ in 0..<500 { perf_push(&client.perf, 0.5, 0.1) }
+		perf_refresh_shown(&client.perf, true)
+		testing.expect(t, client.perf.shown.fps >= 1000, "the shown current FPS gained a digit")
 		perf_test_frame(client, dbg, {})
 		captions_b, rights_b := perf_test_cell_edges(dbg)
 		testing.expect(t, len(captions_a) >= 5 && len(captions_a) == len(captions_b), "every row draws its captions")

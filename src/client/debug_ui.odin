@@ -255,7 +255,10 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	ctx := &dbg.ctx
 	s := dbg.scale
 	stats := &client.perf
-	summary := perf_summary(stats)
+	// The numbers come from the snapshot refreshed every PERF_TEXT_REFRESH_MS;
+	// only the graph below reads every frame.
+	if !stats.shown_valid { perf_refresh_shown(stats, true) }
+	summary := stats.shown
 	if .ACTIVE not_in mu.header(ctx, "Performance", {.EXPANDED}) { return }
 	muted := mu.Color{150, 156, 168, 255}
 	white := ctx.style.colors[.TEXT]
@@ -285,11 +288,11 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	debug_ui_cell(ctx, "avg", fmt.tprintf("%.2f", summary.cpu_avg), white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	mu.label(ctx, "GPU ms")
-	debug_ui_cell(ctx, "", stats.gpu_valid ? fmt.tprintf("%.2f", stats.gpu_ms) : "--", stats.gpu_valid ? white : muted, muted)
+	debug_ui_cell(ctx, "", stats.shown_gpu_valid ? fmt.tprintf("%.2f", stats.shown_gpu_ms) : "--", stats.shown_gpu_valid ? white : muted, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	mu.label(ctx, "Draw calls")
-	debug_ui_cell(ctx, "", fmt.tprintf("%d", stats.draw_calls), white, muted)
+	debug_ui_cell(ctx, "", fmt.tprintf("%d", stats.shown_draw_calls), white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 

@@ -15,6 +15,9 @@ PERF_FPS_WINDOW_MS :: 1000 // Average FPS window.
 PERF_FRAME_WINDOW_MS :: 2000 // Frame-time average and max window.
 PERF_LOW_WINDOW_MS :: 5000 // 1% low window (capped by PERF_HISTORY).
 PERF_REFERENCE_FPS := [3]f32{60, 144, 240} // Graph reference lines.
+// The window's numbers refresh four times a second (the graph still updates
+// every frame); "current" values are the mean over that interval.
+PERF_TEXT_REFRESH_MS :: 250
 
 // Counted in scene_draw_mesh and ui_fill_rect_; reset at the start of each frame.
 g_draw_calls: u32
@@ -32,6 +35,13 @@ Perf_Stats :: struct {
 	query_next: int,
 	query_active: bool,
 	queries_issued: int, // Total timer queries begun (tests use it).
+	// Values shown in the window, refreshed every PERF_TEXT_REFRESH_MS.
+	shown: Perf_Summary,
+	shown_gpu_ms: f32,
+	shown_gpu_valid: bool,
+	shown_draw_calls: u32,
+	shown_valid: bool,
+	since_refresh_ms: f32,
 }
 
 Perf_Summary :: struct {
@@ -58,12 +68,43 @@ perf_frame_sample :: proc(stats: ^Perf_Stats, age: int) -> f32 { return stats.fr
 perf_reset :: proc(stats: ^Perf_Stats) {
 	stats.head, stats.count, stats.draw_calls = 0, 0, 0
 	stats.gpu_ms, stats.gpu_valid = 0, false
+	stats.shown, stats.shown_valid, stats.since_refresh_ms = {}, false, 0
 }
 
 perf_overlay_record :: proc(client: ^Client, frame_ms, cpu_ms: f32) {
 	if !client.perf_overlay { return }
 	perf_push(&client.perf, frame_ms, cpu_ms)
 	client.perf.draw_calls = g_draw_calls
+	perf_refresh_shown(&client.perf)
+}
+
+// Snapshots the displayed values once PERF_TEXT_REFRESH_MS of frames have
+// passed since the last snapshot (immediately when nothing is shown yet, or
+// when forced). "Current" FPS, frame and CPU time become the mean over the
+// refresh interval, so the numbers are readable instead of flickering.
+perf_refresh_shown :: proc(stats: ^Perf_Stats, force := false) {
+	if stats.count > 0 && stats.shown_valid && !force {
+		stats.since_refresh_ms += perf_frame_sample(stats, 0)
+		if stats.since_refresh_ms < PERF_TEXT_REFRESH_MS { return }
+	}
+	summary := perf_summary(stats)
+	if stats.count > 0 {
+		recent := perf_window_frames(stats, PERF_TEXT_REFRESH_MS)
+		frame_total, cpu_total: f32
+		for age in 0..<recent {
+			index := perf_sample_index(stats, age)
+			frame_total += stats.frame_ms[index]
+			cpu_total += stats.cpu_ms[index]
+		}
+		summary.frame_ms = frame_total / f32(recent)
+		summary.cpu_ms = cpu_total / f32(recent)
+		summary.fps = summary.frame_ms > 0 ? 1000 / summary.frame_ms : 0
+	}
+	stats.shown = summary
+	stats.shown_gpu_ms, stats.shown_gpu_valid = stats.gpu_ms, stats.gpu_valid
+	stats.shown_draw_calls = stats.draw_calls
+	stats.shown_valid = true
+	stats.since_refresh_ms = 0
 }
 
 // Number of newest frames whose summed time first reaches window_ms (all of
