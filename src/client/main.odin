@@ -1077,7 +1077,7 @@ client_tick_impacts :: proc(client: ^Client, delta: f32) {
 	for &impact in client.game.impacts {
 		// Limit pellet/packet bursts without affecting the visual impact pool.
 		if impact.kind == .World && impact_sounds < 6 {
-			audio_play_effect(client.audio, "impact_0", gain = 0.18, position = impact.position, spatial = true, radius = 120, priority = 0)
+			audio_play_effect(client.audio, "impact_0", gain = 0.18, position = impact.position, spatial = true, range = 120, priority = 0)
 			impact_sounds += 1
 		}
 		client_add_tracer(client, &impact)
@@ -1413,7 +1413,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			player_update_meshes(client.me, false)
 		}
 	}
-	audio_update_listener(client.audio, &client.camera)
+	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_projectiles(client)
 	krunker_client_tick_explosions(client, delta)
