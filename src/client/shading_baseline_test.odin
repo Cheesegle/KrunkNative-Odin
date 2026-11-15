@@ -6,6 +6,7 @@ import "core:os"
 import "core:testing"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
+import menuui "../menu"
 import shared "../shared"
 
 when ODIN_TEST {
@@ -73,6 +74,13 @@ when ODIN_TEST {
 			if window != nil { glfw.DestroyWindow(window) }
 		}
 		if !ok do return
+		// The frame goes through the per-frame shadow step exactly as the client
+		// does, with Shadows off and Lighting Normal.
+		defer shadow_fini()
+		renders := g_shadow.renders
+		shadow_prepare(client.scene, client.game.map_inst, menuui.Quality_Settings{lighting = i32(menuui.Lighting_Quality.NORMAL)})
+		testing.expect(t, g_shadow.renders == renders && g_shadow.fbo == 0 && g_render_quality == Render_Quality{lighting = .NORMAL},
+			"Shadows off must not allocate or render a shadow map")
 		pixels := shading_baseline_capture(&client)
 		defer delete(pixels)
 		when #config(SHADING_BASELINE_WRITE, false) {
@@ -90,6 +98,16 @@ when ODIN_TEST {
 				if diff > 1 { differing += 1 }
 			}
 			testing.expect(t, differing == 0, fmt.tprintf("Shadows off and Lighting Normal must match the pre-shadow renderer (%d channels differ, worst %d)", differing, worst))
+			// Krunker's default (Shadows on) must visibly change Burg.
+			shadow_prepare(client.scene, client.game.map_inst, menuui.DEFAULT_QUALITY_SETTINGS)
+			testing.expect(t, g_shadow.renders == renders + 1 && g_render_quality.shadows, "Shadows on must render Burg's shadow map once")
+			shadowed := shading_baseline_capture(&client)
+			defer delete(shadowed)
+			changed := 0
+			for value, i in shadowed { if abs(int(value) - int(golden[i])) > 8 { changed += 1 } }
+			testing.expect(t, changed > 1000, fmt.tprintf("Shadows on must darken parts of Burg (%d channels changed)", changed))
+			shadow_release_map()
+			testing.expect(t, g_shadow.fbo == 0 && g_shadow.texture == 0, "unloading must free the shadow map")
 		}
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)
 	}

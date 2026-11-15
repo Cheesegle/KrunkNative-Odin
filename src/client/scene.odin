@@ -21,16 +21,28 @@ scene_remove_mesh :: proc(scene: ^Scene, mesh: ^Mesh) {
 	}
 }
 
+// Players receive shadows and cast only with Dynamic Shadows (Krunker sets
+// castShadow = dynamicShadows on every body part). The local viewmodel lives
+// in the fps scene, which is never drawn into the shadow map.
+scene_add_player_part :: proc(scene: ^Scene, mesh: ^Mesh) {
+	if mesh == nil { return }
+	mesh.shadow_caster = .DYNAMIC
+	if mesh.material != nil && mesh.material.vtable == &basic_material_vtable {
+		(cast(^Basic_Material)mesh.material).receive_shadow = true
+	}
+	scene_add_mesh(scene, mesh)
+}
+
 scene_add_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loadout_size: int) {
 	if player_mesh.body != nil {
 		for mesh in player_mesh.body.meshes {
-			scene_add_mesh(scene, mesh)
+			scene_add_player_part(scene, mesh)
 		}
 	}
 
 	if player_mesh.head != nil {
 		for mesh in player_mesh.head.meshes {
-			scene_add_mesh(scene, mesh)
+			scene_add_player_part(scene, mesh)
 		}
 	}
 
@@ -45,13 +57,13 @@ scene_add_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loadout_
 		}
 
 		if arms.weapon_right != nil {
-			scene_add_mesh(scene, arms.weapon_right)
+			scene_add_player_part(scene, arms.weapon_right)
 		}
 		if arms.weapon_left != nil {
-			scene_add_mesh(scene, arms.weapon_left)
+			scene_add_player_part(scene, arms.weapon_left)
 		}
 		if arms.attachment != nil {
-			scene_add_mesh(scene, arms.attachment)
+			scene_add_player_part(scene, arms.attachment)
 		}
 
 		for j in 0 ..< 2 {
@@ -62,18 +74,18 @@ scene_add_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loadout_
 			}
 
 			if arm.extender != nil {
-				scene_add_mesh(scene, arm.extender)
+				scene_add_player_part(scene, arm.extender)
 			}
 
 			if arm.upper != nil {
-				scene_add_mesh(scene, arm.upper)
+				scene_add_player_part(scene, arm.upper)
 			}
 			if arm.joint != nil {
-				scene_add_mesh(scene, arm.joint)
+				scene_add_player_part(scene, arm.joint)
 			}
 
 			for k in arm.lower.meshes {
-				scene_add_mesh(scene, k)
+				scene_add_player_part(scene, k)
 			}
 		}
 	}
@@ -84,7 +96,7 @@ scene_add_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loadout_
 		}
 
 		for mesh in leg.meshes {
-			scene_add_mesh(scene, mesh)
+			scene_add_player_part(scene, mesh)
 		}
 	}
 
@@ -93,11 +105,11 @@ scene_add_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loadout_
 			continue
 		}
 
-		scene_add_mesh(scene, leg.upper)
-		scene_add_mesh(scene, leg.joint)
+		scene_add_player_part(scene, leg.upper)
+		scene_add_player_part(scene, leg.joint)
 
 		for mesh in leg.lower.meshes {
-			scene_add_mesh(scene, mesh)
+			scene_add_player_part(scene, mesh)
 		}
 	}
 }

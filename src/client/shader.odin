@@ -1,10 +1,12 @@
 package main
 
 import "core:fmt"
+import "core:strings"
 import gl "vendor:OpenGL"
 import shared "../shared"
 
-shader_compile :: proc(vertex_shader_path, fragment_shader_path: string) -> u32 {
+// `defines` is inserted into the fragment shader after its #version line.
+shader_compile :: proc(vertex_shader_path, fragment_shader_path: string, defines: string = "") -> u32 {
 	vertex_shader, v_ok := shared.read_file(vertex_shader_path)
 	fragment_shader, f_ok := shared.read_file(fragment_shader_path)
 
@@ -17,6 +19,11 @@ shader_compile :: proc(vertex_shader_path, fragment_shader_path: string) -> u32 
 
 	v_src := string(vertex_shader)
 	f_src := string(fragment_shader)
+	if len(defines) > 0 {
+		line_end := strings.index_byte(f_src, 10) // '\n'
+		if line_end < 0 { line_end = len(f_src) - 1 }
+		f_src = strings.concatenate({f_src[:line_end + 1], defines, f_src[line_end + 1:]}, context.temp_allocator)
+	}
 
 	vert := gl.CreateShader(gl.VERTEX_SHADER)
 	frag := gl.CreateShader(gl.FRAGMENT_SHADER)

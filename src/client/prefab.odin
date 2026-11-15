@@ -295,6 +295,12 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		material.color.w = opacity
 		material.emissive = emissive
 		material.unlit = custom_unlit
+		// Krunker model prefabs cast and receive (castShadow in the prefab
+		// list); grass and runes do not cast. Custom assets cast when opaque.
+		material.receive_shadow = true
+		if prefab_id != int(shared.Prefab.GRASS) && prefab_id != int(shared.Prefab.RUNE) && (!custom_asset_found || opacity == 1.0) {
+			mesh.shadow_caster = .STATIC
+		}
 
 		return mesh
 	}
@@ -409,6 +415,14 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 
 		material.use_face_tex_scaling = prefab_id != int(shared.Prefab.BILLBOARD)
 		material.face_scale = object.scale
+		// Cubes: shadows = opacity == 1 (cast and receive). Planes and
+		// billboards set shadowsR: receive only.
+		if prefab_id == int(shared.Prefab.CUBE) {
+			material.receive_shadow = opacity == 1.0
+			if opacity == 1.0 { mesh.shadow_caster = .STATIC }
+		} else {
+			material.receive_shadow = true
+		}
 
 		if prefab_id != int(shared.Prefab.CUBE) {
 			mesh.transform.scale.y = 0.01
@@ -450,6 +464,7 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		material.is_ramp = true
 		material.use_face_tex_scaling = true
 		material.face_scale = mesh.transform.scale
+		material.receive_shadow = true // Ramps set shadowsR: receive only.
 
 		return mesh
 	}
@@ -474,6 +489,8 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 
 		material.is_ladder = true
 		material.use_face_tex_scaling = true
+		material.receive_shadow = true
+		mesh.shadow_caster = .STATIC // addLadder sets shadows.
 
 		material.face_scale = shared.Vec3{
 			shared.GAME_CONSTANTS.ladder_width * 2.0,

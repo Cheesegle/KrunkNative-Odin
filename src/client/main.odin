@@ -63,6 +63,7 @@ Client :: struct {
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
 	bench_seconds: f32, // Benchmark mode only.
+	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
 	settings_dirty, vsync: bool,
 	monitor_index: i32,
 
@@ -855,6 +856,7 @@ client_unload_map :: proc(client: ^Client) {
 
 	resource_trim_texture_cache()
 	resource_trim_geometry_cache()
+	shadow_release_map()
 	client.map_loaded = false
 }
 
@@ -1282,6 +1284,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 // numbers cover the same work as a real frame minus the HUD.
 client_render_world :: proc(client: ^Client) {
 	client_update_graphics(client)
+	_, quality := client_graphics_values(client)
+	shadow_prepare(client.scene, client.game.map_inst, menuui.quality_settings_validate(quality), client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height})
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
@@ -1495,6 +1499,7 @@ main :: proc() {
 	shared.game_destroy(&client.game)
 	shared.unload_default_maps()
 	if client.offline_custom_map != nil { shared.map_destroy(client.offline_custom_map) }
+	shadow_fini()
 	scene_fini(client.fps_scene)
 	scene_fini(client.scene)
 	overlay_fini()

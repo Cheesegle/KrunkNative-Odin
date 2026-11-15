@@ -56,6 +56,20 @@ Shader_Uniforms :: struct {
 	offset:                i32,
 	scale:                 i32,
 	depth:                 i32,
+	lighting_mode:         i32,
+	shadow_enabled:        i32,
+	shadow_matrix:         i32,
+	shadow_soft:           i32,
+	shadow_texel:          i32,
+	shadow_bias:           i32,
+	shadow_normal_bias:    i32,
+	shadow_map:            i32,
+	receive_shadow:        i32,
+	map_light_count:       i32,
+	map_light_position:    i32,
+	map_light_color:       i32,
+	map_light_direction:   i32,
+	map_light_cone:        i32,
 }
 
 u_basic: Shader_Uniforms
@@ -103,6 +117,23 @@ cache_uniforms :: proc(program: u32) -> Shader_Uniforms {
 	u.offset = gl.GetUniformLocation(program, "offset")
 	u.scale = gl.GetUniformLocation(program, "scale")
 	u.depth = gl.GetUniformLocation(program, "depth")
+	u.lighting_mode = gl.GetUniformLocation(program, "uLightingMode")
+	u.shadow_enabled = gl.GetUniformLocation(program, "uShadowEnabled")
+	u.shadow_matrix = gl.GetUniformLocation(program, "uShadowMatrix")
+	u.shadow_soft = gl.GetUniformLocation(program, "uShadowSoft")
+	u.shadow_texel = gl.GetUniformLocation(program, "uShadowTexel")
+	u.shadow_bias = gl.GetUniformLocation(program, "uShadowBias")
+	u.shadow_normal_bias = gl.GetUniformLocation(program, "uShadowNormalBias")
+	u.shadow_map = gl.GetUniformLocation(program, "uShadowMap")
+	u.receive_shadow = gl.GetUniformLocation(program, "receive_shadow")
+	u.map_light_count = gl.GetUniformLocation(program, "uMapLightCount")
+	u.map_light_position = gl.GetUniformLocation(program, "uMapLightPosition")
+	u.map_light_color = gl.GetUniformLocation(program, "uMapLightColor")
+	u.map_light_direction = gl.GetUniformLocation(program, "uMapLightDirection")
+	u.map_light_cone = gl.GetUniformLocation(program, "uMapLightCone")
+	// The shadow sampler always reads unit 1 so it never shares unit 0 with
+	// the colour sampler (mixing sampler types on one unit is a GL error).
+	if u.shadow_map > -1 { gl.ProgramUniform1i(program, u.shadow_map, 1) }
 	return u
 }
 
@@ -146,6 +177,7 @@ basic_material_update_uniforms :: proc(mat: rawptr) {
 	gl.Uniform4f(color, material.color.x, material.color.y, material.color.z, material.color.w)
 	gl.Uniform4f(emissive, material.emissive.x, material.emissive.y, material.emissive.z, material.emissive.w)
 	gl.Uniform1f(u_basic.alpha_test, material.alpha_test)
+	if g_render_quality.shadows { gl.Uniform1i(u_basic.receive_shadow, i32(material.receive_shadow)) }
 
 	transform_flat := flatten_mat3(transform)
 	gl.UniformMatrix3fv(tex_transform, 1, gl.TRUE, &transform_flat[0])
@@ -195,6 +227,7 @@ basic_material_update_pass_uniforms :: proc(camera: ^Camera) {
 	values := g_visual_settings.values
 	gl.Uniform4f(u_basic.visual_image, values[.BRIGHTNESS], values[.GAMMA], values[.CONTRAST], values[.SATURATION])
 	gl.Uniform2f(u_basic.visual_lighting, values[.AMBIENT], values[.SUNLIGHT])
+	shadow_update_pass_uniforms()
 }
 
 flatten_mat3 :: proc(m: [3][3]f32) -> [9]f32 {

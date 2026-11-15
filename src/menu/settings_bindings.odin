@@ -56,6 +56,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	filter_labels := [2]string{"Sharp", "Smooth"}
 	anisotropy_labels := [5]string{"Off", "2x", "4x", "8x", "16x"}
 	crosshair_labels := [2]string{"Precision", "Image (coming later)"}
+	lighting_labels := [4]string{LIGHTING_LABELS[.LOW], LIGHTING_LABELS[.NORMAL], LIGHTING_LABELS[.HIGH], LIGHTING_LABELS[.PHYSICAL]}
 	labels: []string
 	anchor: string
 	action: Action_Kind
@@ -65,6 +66,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .MONITOR: labels, anchor, action = view.monitor_names, "Monitor", .MONITOR
 	case .RESOLUTION: labels, anchor, action = settings_resolution_options(state, view), "Resolution", .RESOLUTION_SELECT
 	case .TEXTURE_FILTER: labels, anchor, action = filter_labels[:], "TextureFiltering", .TEXTURE_FILTER
+	case .LIGHTING: labels, anchor, action = lighting_labels[:], "Lighting", .LIGHTING
 	case .CROSSHAIR_TYPE: labels, anchor, action = crosshair_labels[:], "CrosshairType", .CROSSHAIR_TYPE
 	case .ANISOTROPY:
 		count := 1

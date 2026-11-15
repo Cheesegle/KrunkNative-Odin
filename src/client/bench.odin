@@ -46,12 +46,32 @@ Bench_Result :: struct {
 	gpu_avg_ms:  f64,
 	gpu_p95_ms:  f64,
 	extra_ms:    f64, // One-off GPU work when the configuration is applied (static shadow map).
+	shadow_renders: int, // Shadow-map renders during the timed frames.
+	shadow_size: i32,
 }
 
 bench_configs :: proc() -> []Bench_Config {
-	configs := make([dynamic]Bench_Config, context.temp_allocator)
-	base := menuui.Quality_Settings{}
-	append(&configs, Bench_Config{"baseline (off)", base})
+	configs := make([dynamic]Bench_Config, context.allocator) // Outlives per-config temp frees.
+	// Baseline is the renderer as it was: Shadows off, Lighting Normal.
+	base := menuui.Quality_Settings{lighting = i32(menuui.Lighting_Quality.NORMAL)}
+	q := base
+	append(&configs, Bench_Config{"baseline: shadows off, lighting Normal", q})
+	q = base; q.lighting = i32(menuui.Lighting_Quality.LOW)
+	append(&configs, Bench_Config{"lighting Low", q})
+	q = base; q.lighting = i32(menuui.Lighting_Quality.HIGH)
+	append(&configs, Bench_Config{"lighting High", q})
+	q = base; q.lighting = i32(menuui.Lighting_Quality.PHYSICAL)
+	append(&configs, Bench_Config{"lighting Physical", q})
+	q = base; q.shadows = true
+	append(&configs, Bench_Config{"shadows (Krunker default)", q})
+	q = base; q.shadows, q.soft_shadows = true, true
+	append(&configs, Bench_Config{"shadows + soft", q})
+	q = base; q.shadows, q.high_res_shadows = true, true
+	append(&configs, Bench_Config{"shadows + high-res", q})
+	q = base; q.shadows, q.dynamic_shadows = true, true
+	append(&configs, Bench_Config{"shadows + dynamic", q})
+	q = {shadows = true, soft_shadows = true, high_res_shadows = true, dynamic_shadows = true, lighting = i32(menuui.Lighting_Quality.PHYSICAL)}
+	append(&configs, Bench_Config{"max: all shadows + Physical", q})
 	return configs[:]
 }
 
@@ -168,6 +188,7 @@ bench_frame :: proc(client: ^Client, target: ^Bench_Target, frame: int) {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
 	gl.Viewport(0, 0, target.width, target.height)
 	client.viewport_width, client.viewport_height = target.width, target.height
+	client.render_framebuffer = target.fbo
 	client_render_world(client)
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 }
@@ -200,6 +221,7 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	cpu_ms := make([dynamic]f64, context.temp_allocator)
 	gpu_ms := make([dynamic]f64, context.temp_allocator)
 	pending: [BENCH_QUERY_RING]bool
+	renders_before := g_shadow.renders
 	start := time.tick_now()
 	previous := start
 	frame := 0
@@ -237,6 +259,8 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 		append(&gpu_ms, f64(ns) / 1e6)
 	}
 
+	result.shadow_renders = g_shadow.renders - renders_before
+	result.shadow_size = g_render_quality.shadows ? g_shadow.size : 0
 	bench_screenshot(client, target, config.name, map_name)
 
 	result.frames = len(frame_ms)
@@ -303,12 +327,14 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 	for size in sizes {
 		target := bench_target_init(size[0], size[1])
 		defer bench_target_fini(&target)
-		for bench_config in bench_configs() {
+		configs := bench_configs()
+		defer delete(configs)
+		for bench_config in configs {
 			result := bench_run_config(client, &target, bench_config, client.bench_seconds, map_name)
 			append(results, result)
-			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  [%d frames]\n",
+			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  [%d frames, shadow map %d, %d shadow renders]\n",
 				map_name, size[0], size[1], result.config, result.avg_ms, 1000 / max(result.avg_ms, 0.0001), result.p95_ms, result.p99_ms,
-				result.cpu_avg_ms, result.gpu_avg_ms, result.gpu_p95_ms, result.extra_ms, result.frames)
+				result.cpu_avg_ms, result.gpu_avg_ms, result.gpu_p95_ms, result.extra_ms, result.frames, result.shadow_size, result.shadow_renders)
 			free_all(context.temp_allocator)
 		}
 	}
@@ -367,6 +393,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	client.scene = scene_init()
 	client.fps_scene = scene_init()
 	defer {
+		shadow_fini()
 		scene_fini(client.fps_scene)
 		scene_fini(client.scene)
 		resource_cache_fini()
@@ -391,11 +418,12 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 
 	// Markdown table for pasting into a PR.
 	fmt.printf("\nGPU: %s\n\n", renderer)
-	fmt.println("| Map | Resolution | Configuration | Avg ms | FPS | p95 ms | p99 ms | CPU ms | GPU ms | GPU p95 ms | One-off ms |")
-	fmt.println("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+	fmt.println("| Map | Resolution | Configuration | Avg ms | FPS | p95 ms | p99 ms | CPU ms | GPU ms | GPU p95 ms | One-off ms | Shadow map |")
+	fmt.println("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for r in results {
-		fmt.printf("| %s | %dx%d | %s | %.3f | %.0f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
-			r.map_name, r.width, r.height, r.config, r.avg_ms, 1000 / max(r.avg_ms, 0.0001), r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms)
+		shadow_text := r.shadow_size == 0 ? "-" : fmt.tprintf("%d, %s", r.shadow_size, r.shadow_renders > 1 ? "every frame" : "once")
+		fmt.printf("| %s | %dx%d | %s | %.3f | %.0f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %s |\n",
+			r.map_name, r.width, r.height, r.config, r.avg_ms, 1000 / max(r.avg_ms, 0.0001), r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, shadow_text)
 	}
 	csv := strings.builder_make(context.temp_allocator)
 	strings.write_string(&csv, "map,width,height,config,frames,avg_ms,p95_ms,p99_ms,cpu_avg_ms,gpu_avg_ms,gpu_p95_ms,one_off_ms\n")
