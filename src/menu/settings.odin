@@ -101,6 +101,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_viewmodel(state)
 		settings_trails(state)
 		settings_crosshair(state)
+		settings_hitmarker(state)
 	case .AUDIO:
 		settings_section(state, "Volume")
 		labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}

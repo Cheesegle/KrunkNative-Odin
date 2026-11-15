@@ -9,6 +9,7 @@ Presentation_Event :: struct {
 	position: Vec3,
 	value: f32,
 	headshot: bool,
+	lethal: bool, // HIT only: the damage killed the victim.
 }
 
 game_emit_presentation :: proc(game: ^Game, event: Presentation_Event) {
