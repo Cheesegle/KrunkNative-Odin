@@ -90,7 +90,9 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Display")
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_menu_fps_limit_row(state)
 		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.")
+		settings_note(state, "Menu FPS limit caps menus, loading and the end screen. Gameplay is never capped.")
 		settings_quality(state, view)
 	case .VISUALS:
 		settings_visuals(state)

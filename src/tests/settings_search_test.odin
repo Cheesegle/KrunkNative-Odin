@@ -124,6 +124,11 @@ test_settings_search :: proc() -> bool {
 	menu_test_frame(&state, view, {pointer = {box.x + box.width*0.25, box.y + box.height*0.5}})
 	if abs(state.settings_draft.audio_volumes[1] - 0.25) > 0.02 { fmt.println("A search result slider must work in place", state.settings_draft.audio_volumes[1]); return false }
 
+	// The menu FPS limit row is found by its label.
+	menu_test_click(&state, view, search)
+	search_test_type(&state, view, "fps limit")
+	if !search_test_shown(&state, clay.ID("MenuFpsLimit")) || search_test_shown(&state, clay.ID("VSync")) { fmt.println("Searching fps limit must list Menu FPS limit only"); return false }
+
 	// No matches.
 	menu_test_click(&state, view, search)
 	search_test_type(&state, view, "zzqx")
@@ -206,5 +211,35 @@ test_settings_search :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	if menuui.settings_searching(&state) { fmt.println("Search text must not persist between visits"); return false }
 	fmt.println("Settings search tests OK")
+	return true
+}
+
+// Settings > Video > Menu FPS limit: a dropdown staged in the draft until Save.
+test_menu_fps_limit_setting :: proc() -> bool {
+	state := menuui.State{}
+	if !menuui.init(&state, menu_test_measure, nil) { return false }
+	defer menuui.fini(&state)
+	view := menuui.View{online = true, ready = true, resolution = "1920 x 1080", sensitivity = 1}
+	view.bindings = menuui.default_bindings()
+	view.menu_fps_limit = 75 // Not an option: the draft falls back to Monitor refresh.
+	state.page = .SETTINGS
+	state.settings_tab = .VIDEO
+	menu_test_frame(&state, view, {})
+	field := clay.ID("MenuFpsLimit")
+	if !search_test_shown(&state, field) || state.settings_draft.menu_fps_limit != menuui.MENU_FPS_LIMIT_MONITOR { fmt.println("The Video tab must show the Menu FPS limit at Monitor refresh"); return false }
+	if len(menuui.MENU_FPS_LIMITS) != 7 || menuui.MENU_FPS_LIMIT_LABELS[0] != "Monitor refresh" || menuui.MENU_FPS_LIMIT_LABELS[6] != "Unlimited" { fmt.println("Unexpected menu FPS limit options"); return false }
+	menu_test_click(&state, view, field)
+	if state.settings_dropdown != .MENU_FPS_LIMIT || state.focus != clay.ID("SettingsOption", 0).id { fmt.println("Opening the dropdown must focus the current limit"); return false }
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsOption", 4))
+	if state.settings_dropdown != .NONE || state.settings_draft.menu_fps_limit != 144 { fmt.println("Choosing 144 must stage it", state.settings_draft.menu_fps_limit); return false }
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, field)
+	if state.focus != clay.ID("SettingsOption", 4).id { fmt.println("Reopening the dropdown must focus 144"); return false }
+	menuui.activate(&state, {id = clay.ID("SettingsOption", 6), action = {kind = .MENU_FPS_LIMIT, index = 6}})
+	if state.settings_draft.menu_fps_limit != menuui.MENU_FPS_LIMIT_UNLIMITED { fmt.println("Choosing Unlimited must stage -1"); return false }
+	if menuui.activate(&state, {action = {kind = .SETTINGS_SAVE}}).kind != .SETTINGS_SAVE { fmt.println("Save must reach the client"); return false }
+	if state.errors != 0 { fmt.println("The Menu FPS limit dropdown reported a layout error"); return false }
+	fmt.println("Menu FPS limit setting tests OK")
 	return true
 }
