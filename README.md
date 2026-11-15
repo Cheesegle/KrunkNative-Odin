@@ -85,6 +85,7 @@ Join problems are logged to `logs/krunker-network.log`. Supported packets are li
 | `-c, --class <name>` | Preselect a class, e.g. `hunter` |
 | `--offline` | Run the simulation locally without a server |
 | `--fps` | Show the FPS meter |
+| `--perf-overlay` | Start with the debug performance window open |
 | `-h, --help` | List every map and class |
 
 Settings are saved to `client-settings.json` and `audio-settings.json` in the working directory.
@@ -106,6 +107,7 @@ These are the default bindings. Rebind them in **Settings → Key binds**.
 | `Tab` (hold) | Leaderboard |
 | `Esc` | Menu / release the cursor |
 | `F11` | Toggle fullscreen |
+| `F3` | Debug performance window (FPS, 1% low, frame/CPU/GPU time, graph, draw calls) |
 
 ## Configuration
 

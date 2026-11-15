@@ -264,6 +264,7 @@ scene_draw_mesh :: proc(mesh: ^Mesh, camera: ^Camera, state: ^Scene_Draw_State) 
 	}
 
 	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	g_draw_calls += 1
 }
 
 // Stable merge sort keeps equal-depth effects in scene order and bounds the

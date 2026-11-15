@@ -14,8 +14,9 @@ settings_bindings :: proc(state: ^State) {
 		}
 	}
 	// Display inspect with weapons and the leaderboard under Interface, as in
-	// Krunker's controls list, while preserving saved enum values.
-	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .MENU, .FULLSCREEN}) {
+	// Krunker's controls list, while preserving saved enum values. The debug
+	// overlay toggle sits beside the leaderboard.
+	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .DEBUG_OVERLAY, .MENU, .FULLSCREEN}) {
 		if action == .FORWARD { settings_section(state, "Move") }
 		if action == .AIM { settings_section(state, "Weapon") }
 		if action == .LEADERBOARD { settings_section(state, "Interface") }
