@@ -12,7 +12,6 @@ SETTINGS_TABS := [Settings_Tab]string{.MAIN = "Main", .INPUT = "Key binds", .VID
 
 settings_window :: proc(state: ^State, view: View) {
 	s := state.scale
-	values := state.settings_draft
 	if clay.UI(clay.ID("Overlay"))({
 		layout = {sizing = {width = clay.SizingFixed(1360*s), height = clay.SizingFixed(780*s)}, layoutDirection = .TopToBottom},
 		backgroundColor = SETTINGS_BG, cornerRadius = clay.CornerRadiusAll(12*s),
@@ -28,7 +27,8 @@ settings_window :: proc(state: ^State, view: View) {
 				}
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(8*s)), childGap = u16(4*s)}}) {
 					for tab in Settings_Tab {
-						settings_button(state, SETTINGS_TABS[tab], "SettingsTab", {kind = .SETTINGS_TAB, index = i32(tab)}, selected = tab == state.settings_tab, align_left = true)
+						// Like Krunker, no tab is selected while search results are shown.
+						settings_button(state, SETTINGS_TABS[tab], "SettingsTab", {kind = .SETTINGS_TAB, index = i32(tab)}, selected = tab == state.settings_tab && !settings_searching(state), align_left = true)
 					}
 				}
 				spacer()
@@ -37,8 +37,10 @@ settings_window :: proc(state: ^State, view: View) {
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
 				if clay.UI(clay.ID("SettingsHeading"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(80*s)}, padding = {left = u16(32*s), right = u16(32*s)}, childAlignment = {y = .Center}}, backgroundColor = SETTINGS_DARK}) {
-					text(SETTINGS_TABS[state.settings_tab], 28, s)
+					text(settings_searching(state) ? "Search results" : SETTINGS_TABS[state.settings_tab], 28, s)
 					spacer()
+					// Krunker's header holds a 220px search field (settSearch, placeholder generic.search).
+					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(232*s)}, padding = {right = u16(12*s)}}}) { settings_search_field(state) }
 					// Krunker's settings header places Export, then Import (settings.export/settings.import).
 					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s)}}}) { settings_button(state, "Export", "SettingsExport", {kind = .SETTINGS_EXPORT}) }
 					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s), height = clay.SizingFixed(48*s)}, padding = {left = u16(12*s)}}}) { settings_button(state, "Import", "SettingsImport", {kind = .SETTINGS_IMPORT_OPEN}) }
@@ -47,47 +49,7 @@ settings_window :: proc(state: ^State, view: View) {
 					layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s))},
 					clip = {vertical = true, childOffset = clay.GetScrollOffset()},
 				}) {
-					switch state.settings_tab {
-					case .MAIN:
-						settings_section("General", s)
-						settings_sensitivity(state)
-						settings_slider(state, "Master volume", "MasterVolume", values.audio_volumes[0], 0, 1, {kind = .AUDIO_VOLUME})
-						settings_display_rows(state, view)
-						settings_fps_row(state)
-					case .INPUT:
-						settings_bindings(state)
-					case .VIDEO:
-						settings_section("Display", s)
-						settings_display_rows(state, view)
-						settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
-						settings_note("Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.", s)
-						settings_quality(state, view)
-					case .VISUALS:
-						settings_visuals(state)
-					case .GAMEPLAY:
-						settings_viewmodel(state)
-						settings_trails(state)
-						settings_crosshair(state)
-					case .AUDIO:
-						settings_section("Volume", s)
-						labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}
-						ids := [4]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume"}
-						for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
-						settings_note("Master volume affects every channel. Set a channel to 0% to mute it.", s)
-					case .HUD:
-						settings_section("Match", s)
-						settings_toggle_row(state, "Timer", "HudTimer", !values.hud.hide_timer, {kind = .HUD_TOGGLE})
-						settings_toggle_row(state, "Team round score", "HudRoundScore", !values.hud.hide_round_score, {kind = .HUD_TOGGLE, index = 1})
-						settings_toggle_row(state, "Team game score", "HudGameScore", !values.hud.hide_game_score, {kind = .HUD_TOGGLE, index = 2})
-						settings_note("Round score: objective points this round. Game score: rounds won.", s)
-						settings_section("Performance", s)
-						// Krunker showPing: "Show Ping", interface category, on by default.
-						settings_toggle_row(state, "Show Ping", "HudPing", !values.hud.hide_ping, {kind = .HUD_TOGGLE, index = 3})
-						settings_fps_row(state)
-						settings_section("Players", s)
-						settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
-						settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
-					}
+					if settings_searching(state) { settings_search_results(state, view) } else { settings_tab_content(state, view, state.settings_tab) }
 				}
 				settings_scrollbar(state)
 			}
@@ -106,6 +68,56 @@ settings_window :: proc(state: ^State, view: View) {
 	}
 	settings_dropdown_menu(state, view)
 	settings_import_popup(state)
+}
+
+// One tab's sections and rows. Search lays out every tab through this too; the
+// row helpers then skip rows that do not match.
+settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
+	values := state.settings_draft
+	switch tab {
+	case .MAIN:
+		settings_section(state, "General")
+		settings_sensitivity(state)
+		// Search shows these shared rows once, under Audio, Video and HUD.
+		if !settings_searching(state) {
+			settings_slider(state, "Master volume", "MasterVolume", values.audio_volumes[0], 0, 1, {kind = .AUDIO_VOLUME})
+			settings_display_rows(state, view)
+			settings_fps_row(state)
+		}
+	case .INPUT:
+		settings_bindings(state)
+	case .VIDEO:
+		settings_section(state, "Display")
+		settings_display_rows(state, view)
+		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.")
+		settings_quality(state, view)
+	case .VISUALS:
+		settings_visuals(state)
+	case .GAMEPLAY:
+		settings_viewmodel(state)
+		settings_trails(state)
+		settings_crosshair(state)
+	case .AUDIO:
+		settings_section(state, "Volume")
+		labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}
+		ids := [4]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume"}
+		for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
+		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
+	case .HUD:
+		settings_section(state, "Match")
+		settings_toggle_row(state, "Timer", "HudTimer", !values.hud.hide_timer, {kind = .HUD_TOGGLE})
+		settings_toggle_row(state, "Team round score", "HudRoundScore", !values.hud.hide_round_score, {kind = .HUD_TOGGLE, index = 1})
+		settings_toggle_row(state, "Team game score", "HudGameScore", !values.hud.hide_game_score, {kind = .HUD_TOGGLE, index = 2})
+		settings_note(state, "Round score: objective points this round. Game score: rounds won.")
+		settings_section(state, "Performance")
+		// Krunker showPing: "Show Ping", interface category, on by default.
+		settings_toggle_row(state, "Show Ping", "HudPing", !values.hud.hide_ping, {kind = .HUD_TOGGLE, index = 3})
+		settings_fps_row(state)
+		settings_section(state, "Players")
+		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
+		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+	}
 }
 
 settings_set_message :: proc(state: ^State, message: string, is_error: bool) {
@@ -238,11 +250,23 @@ settings_scrollbar_interact :: proc(state: ^State, input: Input) -> bool {
 	return true
 }
 
-settings_section :: proc(label: string, s: f32) {
+settings_section :: proc(state: ^State, label: string) {
+	if settings_searching(state) {
+		// Defer the heading until a row in this section matches.
+		state.search_section, state.search_section_pending = label, true
+		state.search_section_match = state.search_tab_match || fuzzy_match(settings_search_query(state), label)
+		return
+	}
+	settings_section_label(label, state.scale)
+}
+
+settings_section_label :: proc(label: string, s: f32) {
 	if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childAlignment = {y = .Center}}}) { text(label, 17, s, SETTINGS_ORANGE) }
 }
 
-settings_note :: proc(label: string, s: f32) {
+settings_note :: proc(state: ^State, label: string) {
+	if settings_searching(state) { return } // Krunker's results list only settings.
+	s := state.scale
 	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = {top = u16(20*s), bottom = u16(16*s)}}}) { text(label, 16, s, SETTINGS_MUTED) }
 }
 
@@ -285,12 +309,14 @@ settings_display_rows :: proc(state: ^State, view: View) {
 	s := state.scale
 	values := state.settings_draft
 	labels := [3]string{"Windowed", "Borderless", "Fullscreen"}
-	if clay.UI(clay.ID("DisplayModeRow"))(settings_row(state)) {
-		settings_label("Video mode", s)
-		spacer()
-		settings_dropdown_field(state, labels[clamp(values.display_mode, 0, 2)], "DisplayMode", .DISPLAY_MODE)
+	if settings_search_show(state, "Video mode") {
+		if clay.UI(clay.ID("DisplayModeRow"))(settings_row(state)) {
+			settings_label("Video mode", s)
+			spacer()
+			settings_dropdown_field(state, labels[clamp(values.display_mode, 0, 2)], "DisplayMode", .DISPLAY_MODE)
+		}
 	}
-	if state.settings_tab == .VIDEO {
+	if settings_current_tab(state) == .VIDEO && settings_search_show(state, "Monitor") {
 		if clay.UI(clay.ID("MonitorRow"))(settings_row(state)) {
 			settings_label("Monitor", s)
 			spacer()
@@ -298,15 +324,18 @@ settings_display_rows :: proc(state: ^State, view: View) {
 			settings_dropdown_field(state, shorten(label, 28), "Monitor", .MONITOR, len(view.monitor_names) > 0)
 		}
 	}
-	if clay.UI(clay.ID("ResolutionRow"))(settings_row(state)) {
-		settings_label("Window resolution", s)
-		spacer()
-		label := settings_resolution_label(state, view)
-		settings_dropdown_field(state, label, "Resolution", .RESOLUTION, len(settings_resolution_options(state, view)) > 0)
+	if settings_search_show(state, "Window resolution") {
+		if clay.UI(clay.ID("ResolutionRow"))(settings_row(state)) {
+			settings_label("Window resolution", s)
+			spacer()
+			label := settings_resolution_label(state, view)
+			settings_dropdown_field(state, label, "Resolution", .RESOLUTION, len(settings_resolution_options(state, view)) > 0)
+		}
 	}
 }
 
 settings_toggle_row :: proc(state: ^State, label, name: string, value: bool, action: Action) {
+	if !settings_search_show(state, label) { return }
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, state.scale)
 		spacer()
@@ -317,6 +346,7 @@ settings_toggle_row :: proc(state: ^State, label, name: string, value: bool, act
 }
 
 settings_fps_row :: proc(state: ^State) {
+	if !settings_search_show(state, "Show FPS") { return }
 	if clay.UI(clay.ID("FpsRow"))(settings_row(state)) {
 		settings_label("Show FPS", state.scale)
 		spacer()
@@ -327,6 +357,7 @@ settings_fps_row :: proc(state: ^State) {
 }
 
 settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05) {
+	if !settings_search_show(state, label) { return }
 	s := state.scale
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, s)

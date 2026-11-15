@@ -86,7 +86,7 @@ when ODIN_TEST {
 			full_players: [32]menuui.Player
 			for &player, i in full_players { player = {name="Competitive player with a long name", class_name="Run N Gun", team=i32(i%2+1), is_you=i==0} }
 			play_y: f32
-			for scenario in 0..<46 {
+			for scenario in 0..<49 {
 				view.online=true; view.team_pending=false; view.class_pending=false; view.spawn_pending=false; view.join_status=""; view.active=false
 				view.presentation=.COMPETITIVE; view.ranked=false; view.team_selection=false; view.local_practice=false; view.ready=true; view.confirmed_team=1; view.play_reason=""
 				view.teams[0].name="Alpha"; view.teams[1].name="Bravo"
@@ -96,6 +96,7 @@ when ODIN_TEST {
 				state.settings_dropdown=.NONE; state.binding_capture=0
 				state.color_edit=0; state.color_invalid=false
 				state.number_edit=.NONE; state.number_invalid=false
+				state.search_length=0
 				view.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 				view.advanced_sensitivity = false
 				view.players=players[:]; view.teams[0].capacity=4; view.teams[1].capacity=4; view.selection_status=""
@@ -148,6 +149,10 @@ when ODIN_TEST {
 				case 42: state.page=.SETTINGS; state.settings_tab=.GAMEPLAY
 				case 43,44: state.page=.SETTINGS; state.settings_tab=.GAMEPLAY
 				case 45: state.page=.SETTINGS; state.settings_tab=.GAMEPLAY; state.settings_active=false
+				// Settings search: a broad query listing nearly every tab, a fuzzy one, and no matches.
+				case 46: state.page=.SETTINGS; state.settings_tab=.MAIN; state.search_length=copy(state.search_buffer[:], "e")
+				case 47: state.page=.SETTINGS; state.settings_tab=.GAMEPLAY; state.search_length=copy(state.search_buffer[:], "hbar"); state.focus=clay.ID("SettingsSearch").id
+				case 48: state.page=.SETTINGS; state.settings_tab=.INPUT; state.search_length=copy(state.search_buffer[:], "zzqx")
 				case 23: view.presentation=.STANDARD; state.page=.LOADOUT; classes[2].name="An exceptionally long selected class name"; classes[2].weapon="An exceptionally long primary weapon name"
 				}
 				page := state.page
@@ -210,6 +215,15 @@ when ODIN_TEST {
 						"Techy-9 must remain selectable separately from Auto Pistol")
 				}
 				testing.expect(t, state.errors == 0, "menu layout reported an error")
+				if scenario >= 46 {
+					heading := clay.GetElementData(clay.ID("SettingsHeading")).boundingBox
+					for id in ([]string{"SettingsSearch", "SettingsExport", "SettingsImport"}) {
+						box := clay.GetElementData(clay.ID(id)).boundingBox
+						testing.expectf(t, box.width > 0 && box.x >= heading.x && box.x+box.width <= heading.x+heading.width+1 && box.y >= heading.y && box.y+box.height <= heading.y+heading.height+1, "%s must fit in the settings header at %v", id, size)
+					}
+					testing.expect(t, (scenario == 48) == clay.GetElementData(clay.ID("SettingsSearchEmpty")).found, "only an unmatched search shows No settings found")
+					if scenario == 47 { testing.expect(t, clay.GetElementData(clay.ID("HudHealthbarsRow")).found, "fuzzy search results must be laid out") }
+				}
 				if page == .SETTINGS || page == .CONTROLS {
 					overlay := clay.GetElementData(clay.ID("Overlay")).boundingBox
 					for id in ([]string{"SettingsSidebar", "SettingsHeading", "SettingsPanel", "SettingsFooter", "SettingsSave", "SettingsCancel"}) {
@@ -224,7 +238,7 @@ when ODIN_TEST {
 								"both binding columns must fit horizontally and remain large enough to click")
 							continue // The full action list scrolls vertically.
 						}
-						if state.settings_dropdown == .NONE && (state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
+						if state.settings_dropdown == .NONE && (menuui.settings_searching(&state) || state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
 							testing.expect(t, box.width > 0 && box.height > 0 && box.x >= overlay.x-1 && box.x+box.width <= overlay.x+overlay.width+1, "scrolling settings must fit horizontally")
 							continue
 						}

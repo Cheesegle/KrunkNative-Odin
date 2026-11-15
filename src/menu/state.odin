@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_SEARCH }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE }
@@ -98,7 +98,8 @@ State :: struct {
 	page: Page,
 	ctx: ^clay.Context,
 	memory: []u8,
-	controls: [64]Control,
+	// Search results can list rows from every settings tab at once.
+	controls: [256]Control,
 	control_count: int,
 	focus, pressed: u32,
 	return_focus: u32,
@@ -138,6 +139,13 @@ State :: struct {
 	settings_message: [160]u8,
 	settings_message_length: int,
 	settings_message_error: bool,
+	// Settings search text lasts for one visit to the menu and is never saved.
+	search_buffer: [SEARCH_MAX]u8,
+	search_length: int,
+	// Per-frame bookkeeping while search results are laid out.
+	search_tab: Settings_Tab,
+	search_section: string,
+	search_tab_pending, search_section_pending, search_tab_match, search_section_match, search_found: bool,
 }
 
 prepare_settings :: proc(state: ^State, view: View) {
@@ -149,6 +157,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.color_edit = 0
 		settings_import_close(state)
 		state.settings_message_length = 0
+		state.search_length = 0
 		return
 	}
 	if !state.settings_active {
@@ -241,6 +250,14 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	for control, i in state.controls[:state.control_count] {
 		if control.id.id == state.focus && control.enabled { focused_index = i }
 	}
+	// With text or focus in the search field, Escape clears the search and leaves
+	// the field instead of closing Settings, as Escape only closes the import popup.
+	if input.escape && !state.previous.escape && (state.page == .SETTINGS || state.page == .CONTROLS) && (state.search_length > 0 || settings_search_focused(state)) {
+		settings_search_clear(state)
+		state.pressed = 0
+		if settings_search_focused(state) { state.focus = 0 }
+		return {}
+	}
 	if input.escape && !state.previous.escape {
 		state.pressed = 0
 		if state.page == .SETTINGS || state.page == .CONTROLS {
@@ -253,6 +270,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 		}
 		return {}
 	}
+	if settings_search_focused(state) { settings_search_input(state, input) }
 	if state.focus == clay.ID("Invite").id {
 		if input.paste && !state.previous.paste { return {kind = .PASTE} }
 		if input.clear_text { state.invite_length = 0 }
@@ -371,7 +389,12 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		settings_set_message(state, fmt.tprintf("Imported %d Krunker settings. Ignored %d unsupported.", result.imported, result.ignored), false)
 		return {kind = .SETTINGS_IMPORT} // The client applies and saves the draft, as Save does.
 	}
+	if control.action.kind == .SETTINGS_SEARCH {
+		state.pressed = 0
+		return {} // Clicking the field focuses it; typing is handled in interact.
+	}
 	if control.action.kind == .SETTINGS_TAB {
+		state.search_length = 0 // Krunker's changeTab clears the search field.
 		state.settings_tab = Settings_Tab(control.action.index)
 		state.scrollbar_dragging = false
 		state.page = .SETTINGS
@@ -390,6 +413,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.binding_reserved = false
 		settings_import_close(state)
 		state.settings_message_length = 0
+		state.search_length = 0
 		return control.action if control.action.kind == .SETTINGS_SAVE else Action{}
 	}
 	if state.settings_active {

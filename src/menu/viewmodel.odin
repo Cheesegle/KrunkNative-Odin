@@ -49,7 +49,7 @@ viewmodel_settings_validate :: proc(settings: Viewmodel_Settings) -> Viewmodel_S
 }
 
 settings_viewmodel :: proc(state: ^State) {
-	settings_section("View model settings", state.scale)
+	settings_section(state, "View model settings")
 	settings_slider(state, "Field of view (FOV)", "FieldOfView", state.settings_draft.fov, MIN_FOV, MAX_FOV, {kind=.FOV}, step=5)
 	for control in Viewmodel_Control {
 		settings_slider(state, VIEWMODEL_LABELS[control], VIEWMODEL_IDS[control], state.settings_draft.viewmodel.values[control],
@@ -58,5 +58,5 @@ settings_viewmodel :: proc(state: ^State) {
 	for toggle in Viewmodel_Toggle {
 		settings_toggle_row(state, VIEWMODEL_TOGGLE_LABELS[toggle], VIEWMODEL_TOGGLE_IDS[toggle], state.settings_draft.viewmodel.toggles[toggle], {kind=.VIEWMODEL_TOGGLE, index=i32(toggle)})
 	}
-	settings_note("Applies to every weapon. Save keeps your changes; Cancel restores them. World FOV preserves hipfire cm/360. ADS FOV power controls the amount of zoom when aiming.", state.scale)
+	settings_note(state, "Applies to every weapon. Save keeps your changes; Cancel restores them. World FOV preserves hipfire cm/360. ADS FOV power controls the amount of zoom when aiming.")
 }
