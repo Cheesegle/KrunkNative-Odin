@@ -79,9 +79,15 @@ client_end_screen :: proc(client: ^Client) -> End_Screen {
 	if client.krunker.connected {
 		world := &client.krunker_world
 		screen.board = end_screen_board_from_world(world)
-		// noWinner modes are outside the decoded mode registry.
-		screen.result = end_screen_result(world.end_result, false)
-		screen.winner_team = world.winner_team == 1 || world.winner_team == 2 ? world.winner_team : 0
+		if world.end_received {
+			// noWinner modes are outside the decoded mode registry.
+			screen.result = end_screen_result(world.end_result, false)
+			screen.winner_team = world.winner_team == 1 || world.winner_team == 2 ? world.winner_team : 0
+		} else {
+			// gsc POST_MATCH can end the match before END arrives; resolve
+			// from the tracked round wins and totals rather than showing DRAW.
+			screen.result, screen.winner_team = end_screen_native_result(&world.match, &screen.board)
+		}
 		screen.abandoned = world.end_index == 3 || world.timer_kind == 3
 		switch {
 		case screen.abandoned: screen.timer = "MATCH ABANDONED"
