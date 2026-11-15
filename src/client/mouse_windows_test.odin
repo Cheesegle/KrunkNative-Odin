@@ -324,4 +324,20 @@ when ODIN_TEST {
 			testing.expectf(t, action == c.action && held == c.held_after, "case %d: got %v/%v, want %v/%v", i, action, held, c.action, c.held_after)
 		}
 	}
+
+	@(test)
+	mouse_capture_drops_on_focus_loss_and_minimise :: proc(t: ^testing.T) {
+		// Alt-tab out of fullscreen: capture must be gone before the window is
+		// minimised, or the minimised window can keep it and never restore.
+		testing.expect(t, mouse_capture_should_drop(win.WM_KILLFOCUS, 0), "losing focus drops capture")
+		testing.expect(t, mouse_capture_should_drop(win.WM_ACTIVATEAPP, 0) && !mouse_capture_should_drop(win.WM_ACTIVATEAPP, 1), "app deactivation drops it, activation does not")
+		testing.expect(t, mouse_capture_should_drop(win.WM_ACTIVATE, win.WPARAM(win.WA_INACTIVE)), "window deactivation drops it")
+		testing.expect(t, !mouse_capture_should_drop(win.WM_ACTIVATE, win.WPARAM(win.WA_ACTIVE)) && !mouse_capture_should_drop(win.WM_ACTIVATE, win.WPARAM(win.WA_CLICKACTIVE)), "activation keeps it")
+		testing.expect(t, mouse_capture_should_drop(win.WM_SIZE, win.SIZE_MINIMIZED) && !mouse_capture_should_drop(win.WM_SIZE, win.SIZE_RESTORED), "minimising drops it, restoring does not")
+		testing.expect(t, !mouse_capture_should_drop(win.WM_SETFOCUS, 0) && !mouse_capture_should_drop(win.WM_MOUSEMOVE, 0), "other messages keep it")
+		// Dropping clears our hold even if Windows already released capture.
+		g_mouse_capture_held = true
+		mouse_capture_drop(nil, win.WM_KILLFOCUS, 0)
+		testing.expect(t, !g_mouse_capture_held, "the hold is cleared")
+	}
 }

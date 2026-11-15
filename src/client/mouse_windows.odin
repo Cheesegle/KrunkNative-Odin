@@ -135,6 +135,7 @@ native_mouse_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT, wp
 		native_mouse_reset(mouse)
 		mouse.active = false
 	}
+	mouse_capture_drop(hwnd, message, wparam)
 	return win.CallWindowProcW(mouse.previous_proc, hwnd, message, wparam, lparam)
 }
 
@@ -250,8 +251,11 @@ raw_input_thread_take_delta :: proc(t: ^Raw_Input_Thread) -> shared.Vec2 {
 }
 
 raw_input_thread_wanted :: proc(window: glfw.WindowHandle) -> bool {
+	// A fullscreen window is iconified while alt-tabbed and can report focus
+	// while it is being restored; it is only "playing" once it is shown again.
 	return window != nil &&
 		glfw.GetWindowAttrib(window, glfw.FOCUSED) != 0 &&
+		glfw.GetWindowAttrib(window, glfw.ICONIFIED) == 0 &&
 		glfw.GetInputMode(window, glfw.CURSOR) == glfw.CURSOR_DISABLED
 }
 
@@ -262,6 +266,7 @@ raw_input_game_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT, 
 	context = runtime.default_context()
 	t := &g_raw_input_thread
 	if message == win.WM_MOUSEMOVE && raw_input_thread_wanted(t.window) { return 0 }
+	mouse_capture_drop(hwnd, message, wparam)
 	return win.CallWindowProcW(t.game_previous_proc, hwnd, message, wparam, lparam)
 }
 
@@ -439,6 +444,28 @@ mouse_capture_update :: proc(window: glfw.WindowHandle, playing: Maybe(bool) = n
 	case .RELEASE: win.ReleaseCapture()
 	case .NONE:
 	}
+}
+
+// Messages after which the window must not keep mouse capture: losing focus or
+// activation, or being minimised (a fullscreen window is minimised on
+// alt-tab). Releasing here, inside the window procedure, means capture is gone
+// before Windows routes the next click (the taskbar, alt-tab back); waiting
+// for the next poll left a minimised fullscreen window holding capture, so it
+// could not be restored.
+mouse_capture_should_drop :: proc(message: win.UINT, wparam: win.WPARAM) -> bool {
+	switch message {
+	case win.WM_KILLFOCUS: return true
+	case win.WM_ACTIVATEAPP: return wparam == 0
+	case win.WM_ACTIVATE: return win.LOWORD(win.DWORD(wparam)) == win.WA_INACTIVE
+	case win.WM_SIZE: return wparam == win.SIZE_MINIMIZED
+	}
+	return false
+}
+
+mouse_capture_drop :: proc(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM) {
+	if !g_mouse_capture_held || !mouse_capture_should_drop(message, wparam) { return }
+	g_mouse_capture_held = false
+	if win.GetCapture() == hwnd { win.ReleaseCapture() }
 }
 
 mouse_capture_release :: proc() {
