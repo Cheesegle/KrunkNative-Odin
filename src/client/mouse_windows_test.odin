@@ -271,6 +271,8 @@ when ODIN_TEST {
 		fallback := shared.Vec2{12, -3}
 		testing.expect_value(t, client_mouse_delta(fallback), fallback) // a hidden window is never focused
 		testing.expect(t, !sync.atomic_load(&state.active), "an unfocused window must not count raw motion")
+		client_poll_events()
+		testing.expect(t, win.GetCapture() != glfw.GetWin32Window(window) && !g_mouse_capture_held, "an unfocused window must not take mouse capture")
 		glfw.SetInputMode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
 
 		win.SendMessageW(hwnd, win.WM_LBUTTONDOWN, 0, 0)
@@ -299,5 +301,27 @@ when ODIN_TEST {
 		testing.expect_value(t, client_mouse_delta(fallback), fallback)
 		// The class is unregistered on exit, so the thread can start again.
 		testing.expect(t, client_mouse_init(window), "the input thread must restart after shutdown")
+	}
+
+	@(test)
+	mouse_capture_is_held_only_while_playing :: proc(t: ^testing.T) {
+		// Holding capture while playing stops Windows sending WM_NCHITTEST,
+		// WM_SETCURSOR and WM_MOUSEMOVE per mouse report (the 2-8 kHz stall).
+		Case :: struct { playing, has, held, button: bool, action: Mouse_Capture_Action, held_after: bool }
+		cases := [?]Case{
+			{playing = true,  has = false, held = false, button = false, action = .TAKE,    held_after = true},  // start playing
+			{playing = true,  has = true,  held = true,  button = false, action = .NONE,    held_after = true},  // keep it
+			{playing = true,  has = false, held = true,  button = false, action = .TAKE,    held_after = true},  // GLFW released on button up: re-take
+			{playing = true,  has = true,  held = false, button = true,  action = .NONE,    held_after = true},  // GLFW already holds it for a button
+			{playing = false, has = true,  held = true,  button = false, action = .RELEASE, held_after = false}, // opened a menu
+			{playing = false, has = true,  held = true,  button = true,  action = .NONE,    held_after = false}, // button still down: GLFW releases it
+			{playing = false, has = false, held = true,  button = false, action = .NONE,    held_after = false}, // alt-tab: Windows dropped it
+			{playing = false, has = true,  held = false, button = false, action = .NONE,    held_after = false}, // not ours (GLFW's button capture in menus)
+			{playing = false, has = false, held = false, button = false, action = .NONE,    held_after = false},
+		}
+		for c, i in cases {
+			action, held := mouse_capture_decide(c.playing, c.has, c.held, c.button)
+			testing.expectf(t, action == c.action && held == c.held_after, "case %d: got %v/%v, want %v/%v", i, action, held, c.action, c.held_after)
+		}
 	}
 }

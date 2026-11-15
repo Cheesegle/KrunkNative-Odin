@@ -392,8 +392,60 @@ client_mouse_init :: proc(window: glfw.WindowHandle) -> bool {
 }
 
 client_mouse_fini :: proc() {
+	mouse_capture_release()
 	raw_input_thread_stop()
 	native_mouse_subclass_fini()
+}
+
+// Hold mouse capture (SetCapture) on the game window while playing.
+//
+// Without capture, Windows hit-tests the window for every mouse report and
+// sends it WM_NCHITTEST, WM_SETCURSOR and WM_MOUSEMOVE. At 2-8 kHz polling
+// these arrive in bursts of 1000+ messages and stalled event polling for
+// 20-140 ms (measured: 96.6 ms worst poll, 1086 messages, 362 of each type).
+// With capture held, the same burst is ~2 messages and the worst poll ~2 ms.
+// Holding a mouse button already did this, because GLFW captures on button
+// down. Capture is taken only while the window is focused with the cursor
+// disabled, and released in menus; Windows itself drops it on alt-tab, and it
+// is re-taken on the next poll if the game is still being played.
+g_mouse_capture_held: bool
+
+Mouse_Capture_Action :: enum u8 { NONE, TAKE, RELEASE }
+
+// playing: focused with the cursor disabled. has: the window holds capture.
+// held: we took it. button_down: GLFW holds it for a pressed button.
+mouse_capture_decide :: proc(playing, has, held, button_down: bool) -> (action: Mouse_Capture_Action, held_after: bool) {
+	if playing { return has ? .NONE : .TAKE, true }
+	if !held { return .NONE, false }
+	// Leave capture alone while GLFW itself holds it for a pressed button.
+	return has && !button_down ? .RELEASE : .NONE, false
+}
+
+mouse_button_down :: proc(window: glfw.WindowHandle) -> bool {
+	for button in i32(glfw.MOUSE_BUTTON_1) ..= i32(glfw.MOUSE_BUTTON_LAST) {
+		if glfw.GetMouseButton(window, button) == glfw.PRESS { return true }
+	}
+	return false
+}
+
+mouse_capture_update :: proc(window: glfw.WindowHandle, playing: Maybe(bool) = nil) {
+	if window == nil { return }
+	hwnd := glfw.GetWin32Window(window)
+	is_playing := playing.? or_else raw_input_thread_wanted(window)
+	action, held := mouse_capture_decide(is_playing, win.GetCapture() == hwnd, g_mouse_capture_held, mouse_button_down(window))
+	g_mouse_capture_held = held
+	switch action {
+	case .TAKE: win.SetCapture(hwnd)
+	case .RELEASE: win.ReleaseCapture()
+	case .NONE:
+	}
+}
+
+mouse_capture_release :: proc() {
+	w := g_raw_input_thread.window
+	if w == nil { w = g_native_mouse.window }
+	if w != nil { mouse_capture_update(w, false) }
+	g_mouse_capture_held = false
 }
 
 client_mouse_delta :: proc(fallback: shared.Vec2) -> shared.Vec2 {
@@ -415,6 +467,7 @@ client_poll_events :: proc() {
 		glfw.PollEvents()
 		// Publish focus and capture changes as soon as GLFW has processed them.
 		raw_input_thread_set_active(t, raw_input_thread_wanted(t.window))
+		mouse_capture_update(t.window)
 		return
 	}
 	mouse := &g_native_mouse
@@ -423,6 +476,7 @@ client_poll_events :: proc() {
 		if mouse.active { native_mouse_drain(mouse) }
 	}
 	glfw.PollEvents()
+	mouse_capture_update(mouse.window)
 }
 
 // Idle-frame wait. The input thread keeps reading on its own. On the fallback
@@ -432,6 +486,7 @@ client_wait_events :: proc(timeout: f64) {
 	if t := &g_raw_input_thread; t.handle != nil {
 		glfw.WaitEventsTimeout(timeout)
 		raw_input_thread_set_active(t, raw_input_thread_wanted(t.window))
+		mouse_capture_update(t.window)
 		return
 	}
 	mouse := &g_native_mouse
@@ -440,4 +495,5 @@ client_wait_events :: proc(timeout: f64) {
 		if mouse.active { native_mouse_drain(mouse) }
 	}
 	glfw.WaitEventsTimeout(timeout)
+	mouse_capture_update(mouse.window)
 }
