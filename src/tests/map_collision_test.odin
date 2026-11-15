@@ -42,6 +42,88 @@ test_map_collision_drop :: proc(object: ^shared.Object, config: shared.Map_Confi
 	return true
 }
 
+// A player dropped onto the object in isolation falls straight through it.
+test_map_object_falls_through :: proc(object: ^shared.Object, config: shared.Map_Config, predicted: bool) -> bool {
+	map_inst := shared.Map{death_y = -10000, config = config}
+	append(&map_inst.objects, object)
+	defer delete(map_inst.objects)
+	maps := []^shared.Map{&map_inst}
+	game := shared.Game{}
+	shared.game_configure(&game, nil, maps, nil, nil, nil)
+	shared.game_init(&game, 0, 0, predicted)
+	defer shared.game_destroy(&game)
+	if !predicted do game.server = rawptr(&game)
+	player := shared.player_init(&game)
+	shared.game_players_add(&game, player)
+	shared.player_spawn(player, 2)
+	top := object.position.y + object.scale.y
+	player.position = {object.position.x, top + 20, object.position.z}
+	player.last_position = player.position
+	player.velocity = {}
+	player.on_ground = false
+	for tick in 0 ..< 128 {
+		input := shared.Input{delta = PHYSICS_DT, move_dir = -1}
+		if predicted {
+			shared.player_proc_input(player, &input, true, false)
+		} else {
+			shared.player_queue_input(player, &input)
+			shared.game_tick(&game, f32(tick + 1) * PHYSICS_DT, PHYSICS_DT)
+		}
+	}
+	if player.position.y > object.position.y - 1 {
+		fmt.eprintf("Non-solid %v at %v stopped a falling player: predicted=%v y=%f grounded=%v\n", object.prefab, object.position, predicted, player.position.y, player.on_ground)
+		return false
+	}
+	return true
+}
+
+// Krunker marks SIGN, SHOWCASE and RUNE noCol. Site's four site-label signs
+// are drawn by neither client here, so as solid boxes they were invisible
+// slabs players could stand on. Hidden (`v`) cubes stay solid, as in Krunker,
+// where `v` only skips the mesh.
+test_site_signs_not_solid :: proc() -> bool {
+	path := shared.concat(shared.assets_path(), "maps/site.json")
+	defer delete(path)
+	map_inst, loaded := shared.map_load_from_file(path)
+	if !loaded {
+		fmt.eprintln("Site collision test: could not load map")
+		return false
+	}
+	defer shared.map_destroy(map_inst)
+
+	signs, hidden := 0, 0
+	for object in map_inst.objects {
+		#partial switch object.prefab {
+		case .SIGN, .SHOWCASE, .RUNE:
+			if object.collision_type != .NONE {
+				fmt.eprintf("Site collision test: %v at %v is solid\n", object.prefab, object.position)
+				return false
+			}
+			if object.prefab == .SIGN {
+				signs += 1
+				if !test_map_object_falls_through(object, map_inst.config, true) || !test_map_object_falls_through(object, map_inst.config, false) {
+					return false
+				}
+			}
+		case .CUBE:
+			raw := object.raw_data.(json.Object)
+			if "v" in raw && !("l" in raw || "col" in raw) {
+				hidden += 1
+				if object.collision_type != .BOX {
+					fmt.eprintf("Site collision test: hidden cube at %v lost its collision\n", object.position)
+					return false
+				}
+			}
+		}
+	}
+	if signs != 4 || hidden != 7 {
+		fmt.eprintf("Site collision coverage changed: signs=%d hidden cubes=%d\n", signs, hidden)
+		return false
+	}
+	fmt.println("Site signs non-solid / hidden cubes solid OK")
+	return true
+}
+
 test_sandstorm_hidden_colliders :: proc() -> bool {
 	path := shared.concat(shared.assets_path(), "maps/sandstorm_v3.json")
 	defer delete(path)

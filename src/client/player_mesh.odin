@@ -47,13 +47,15 @@ Color_Cube_Segment :: struct {
 	scale:  f32,
 }
 
-generate_color_cube :: proc(width, height, length: f32, segments: []Color_Cube_Segment) -> ^Color_Cube {
+// Segments stack downwards from `top` (genColorCube's offset): 0 centres the
+// cube on its transform, -0.5 hangs it below its transform like Krunker's legs.
+generate_color_cube :: proc(width, height, length: f32, segments: []Color_Cube_Segment, top: f32 = 0) -> ^Color_Cube {
 	color_cube := new(Color_Cube)
 	color_cube.mesh_count = i32(len(segments))
 
 	color_cube.transform.scale = shared.Vec3{width, height, length}
 
-	offset: f32 = 0.5
+	offset: f32 = 0.5 + top
 
 	for segment in segments {
 		geo := create_cube_geo()
@@ -234,11 +236,13 @@ generate_leg :: proc(is_left: bool, pants_color, shoe_color: i32) -> ^Color_Cube
 		{shoe_color, 0.25, 1.0},
 	}
 
-	leg := generate_color_cube(shared.GAME_CONSTANTS.leg_scale, shared.GAME_CONSTANTS.leg_height, shared.GAME_CONSTANTS.leg_scale, segments)
+	// Krunker's genLeg hangs the leg from the hip (genColorCube offset -0.5,
+	// mesh at legHeight), so the stride swings it about the hip, not mid-thigh.
+	leg := generate_color_cube(shared.GAME_CONSTANTS.leg_scale, shared.GAME_CONSTANTS.leg_height, shared.GAME_CONSTANTS.leg_scale, segments, -0.5)
 
 	if leg != nil {
 		leg.transform.position.x = shared.GAME_CONSTANTS.leg_scale * 0.5 * (is_left ? -1.0 : 1.0)
-		leg.transform.position.y = shared.GAME_CONSTANTS.leg_height * 0.5
+		leg.transform.position.y = shared.GAME_CONSTANTS.leg_height
 	}
 
 	return leg
@@ -299,7 +303,8 @@ generate_crouched_leg :: proc(is_left: bool, pants_color, shoe_color: i32) -> ^P
 	leg.anchor.scale = shared.Vec3{1.0, 1.0, 1.0}
 
 	leg.anchor.position.x = shared.GAME_CONSTANTS.leg_scale * 0.5 * (is_left ? -1.0 : 1.0)
-	leg.anchor.position.y = shared.GAME_CONSTANTS.leg_height - shared.GAME_CONSTANTS.crouch_distance + 0.5
+	// Full crouch; player_update_meshes moves the hip with the crouch amount.
+	leg.anchor.position.y = player_crouched_leg_hip_y(1)
 
 	leg.anchor.rotation.y = is_left ? math.PI / 8.0 : -math.PI / 6.0
 
@@ -485,12 +490,27 @@ player_uses_third_person_camera :: proc(player: ^shared.Player) -> bool {
 	return player.game.config.third_person || offset.x != 0 || offset.y != 0 || offset.z != 0
 }
 
+// Krunker's updateHeight: bent legs hang 0.5 inside the base of the lower
+// body, which drops by crouchDst * crouchVal.
+player_crouched_leg_hip_y :: proc(crouch: f32) -> f32 {
+	return shared.GAME_CONSTANTS.leg_height + 0.5 - shared.GAME_CONSTANTS.crouch_distance * crouch
+}
+
+// The crouch amount the rig shows. Krunker's server sends remote players'
+// crouch as Math.round(crouchVal), so their model is only ever standing or
+// fully crouched; a partial value (from interpolating between snapshots)
+// would show bent legs on a standing body. Rendered-you uses its own value.
+player_rig_crouch :: proc(player: ^shared.Player) -> f32 {
+	return player.render_you ? player.crouch_val : math.round(clamp(player.crouch_val, 0, 1))
+}
+
 player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	if player.mesh == nil {
 		return
 	}
 
 	player_mesh := cast(^Player_Mesh)player.mesh
+	crouch_val := player_rig_crouch(player)
 
 	third_person := player_uses_third_person_camera(player)
 	local_viewmodel := player.render_you && !third_person && !is_preview && g_client != nil && g_client.me == player
@@ -526,7 +546,7 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	}
 	aim_mlt: f32 = player.weapon.animate_while_aiming ? 0.0 : aim_val_mlt
 	anim_mlt := (1.0 - (1.0 - shared.GAME_CONSTANTS.aim_anim_mlt) * aim_val_mlt) * shared.GAME_CONSTANTS.anim_mlt * weapon_bobbing_mlt
-	anim_mlt_crouch := 1.0 - player.crouch_val * 0.8
+	anim_mlt_crouch := 1.0 - crouch_val * 0.8
 	anim_mlt_lean := player.render_you ? (1.0 - aim_val_mlt) * shared.GAME_CONSTANTS.anim_mlt : 0.0
 	recoil_y_mlt := (1.0 - aim_val_mlt) * shared.GAME_CONSTANTS.anim_mlt * ballistic_motion_mlt
 	recoil_z_mlt := (1.0 - (player.weapon.recoil_z_mlt != 0 ? player.weapon.recoil_z_mlt : 0.5) * aim_mlt) * ballistic_motion_mlt
@@ -541,7 +561,7 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	}
 
 	land_bob_ya := player.land_bob_y * (player.weapon.land_bob != 0 ? player.weapon.land_bob : 1.0) * 0.1
-	bob_crouch_mlt := 1.0 - player.crouch_val * 0.5
+	bob_crouch_mlt := 1.0 - crouch_val * 0.5
 	jump_rotate := player.jump_rotate * bob_crouch_mlt * anim_mlt_lean * weapon_bobbing_mlt
 
 	if player.jump_rotate_mlt != jump_rotate {
@@ -591,19 +611,19 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 		player_mesh.anchor.rotation.y = player.direction.y + step_yaw
 	}
 
-	step_half -= step_half * player.crouch_val * shared.GAME_CONSTANTS.crouch_anim_mlt
-	step_anim -= step_anim * player.crouch_val * shared.GAME_CONSTANTS.crouch_anim_mlt
+	step_half -= step_half * crouch_val * shared.GAME_CONSTANTS.crouch_anim_mlt
+	step_anim -= step_anim * crouch_val * shared.GAME_CONSTANTS.crouch_anim_mlt
 
-	if !player.render_you {
-		for i in 0 ..< 4 {
-			if i < 2 {
-				if player_mesh.legs[i] != nil {
-					player_mesh.legs[i].transform.rotation.x = step_anim * (i == 1 ? 1.0 : -1.0) * 7.0
-				}
-			} else {
-				if player_mesh.crouched_legs[i - 2] != nil {
-					player_mesh.crouched_legs[i - 2].anchor.rotation.x = step_anim * (i == 3 ? 1.0 : -1.0) * 7.0 + -0.6
-				}
+	// Krunker strides every leg mesh it built (remote and third-person you):
+	// rotation.x = stepAnim * 9 * side, bent legs tucked a further -0.6.
+	for i in 0 ..< 4 {
+		if i < 2 {
+			if player_mesh.legs[i] != nil {
+				player_mesh.legs[i].transform.rotation.x = step_anim * (i == 1 ? 1.0 : -1.0) * 9.0
+			}
+		} else {
+			if player_mesh.crouched_legs[i - 2] != nil {
+				player_mesh.crouched_legs[i - 2].anchor.rotation.x = step_anim * (i == 3 ? 1.0 : -1.0) * 9.0 + -0.6
 			}
 		}
 	}
@@ -690,19 +710,19 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 
 	arm_anchor.rotation.z = (jump_rotate +
 		player.lean_anim.z * 0.7 * anim_rotate_mlt +
-		player.weapon.crouch_lean * left_hand_mlt * player.crouch_val * anim_mlt_lean * anim_mlt) * movement_mlt +
+		player.weapon.crouch_lean * left_hand_mlt * crouch_val * anim_mlt_lean * anim_mlt) * movement_mlt +
 		aim_lean + player.view_kick[1] * recoil_mlt
 
 	arm_anchor.position.x = player.recoil.x * recoil_aim_mlt +
 		(-player.jump_rotate_mlt * anim_mlt_lean * 1.3 +
-		(player.lean_anim.z * 0.35 - player.weapon.crouch_rotation * left_hand_mlt * player.crouch_val * anim_mlt_lean + step_anim * 0.5 * anim_mlt_crouch * anim_mlt_lean) * (1.0 - aim_val_mlt) * anim_mlt) * movement_mlt +
+		(player.lean_anim.z * 0.35 - player.weapon.crouch_rotation * left_hand_mlt * crouch_val * anim_mlt_lean + step_anim * 0.5 * anim_mlt_crouch * anim_mlt_lean) * (1.0 - aim_val_mlt) * anim_mlt) * movement_mlt +
 		weapon_offset.x - (weapon_offset.x - player.weapon.origin.x * left_hand_mlt) * aim_val
 
 	arm_anchor.position.y = player.recoil.z * recoil_aim_mlt +
 		player.view_kick[2] * recoil_mlt +
 		(math.sin(player.idle_anim) * 0.02 * idle_anim +
 		jump_bob_y + land_bob_y * 0.5 - bob_anim_y * 1.5 +
-		(step_half * 0.85 - player.weapon.crouch_drop * player.crouch_val * anim_mlt_lean) * anim_mlt) * movement_mlt -
+		(step_half * 0.85 - player.weapon.crouch_drop * crouch_val * anim_mlt_lean) * anim_mlt) * movement_mlt -
 		(player.weapon.bomb ? player.interact_progress * 3.0 : 0.0) +
 		weapon_offset.y - (weapon_offset.y - player.weapon.origin.y + aim_offset_y) * aim_val
 
@@ -728,7 +748,7 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 		arms.left.pivot.position.y -= pose[shared.MELEE_L_ARM] * 0.27
 		arms.left.pivot.rotation.y += pose[shared.MELEE_L_ARM] * 0.1
 		arms.left.pivot.position.x -= pose[shared.MELEE_L_ARM] * 0.3
-		arms.right.pivot.rotation.z += player.crouch_val * 0.12 - step_half_rotate + player.jump_bob_y * 0.2
+		arms.right.pivot.rotation.z += crouch_val * 0.12 - step_half_rotate + player.jump_bob_y * 0.2
 		if arms.weapon_right != nil {
 			arms.weapon_right.visible = player.can_throw && viewmodel_visible
 			arms.weapon_right.transform.position = {0.9, -0.95, 0.72}
@@ -762,8 +782,8 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	if local_viewmodel { client_apply_inspect_pose(g_client, arms) }
 
 	if !player.render_you || third_person {
-		crouch_distance := shared.GAME_CONSTANTS.crouch_distance * player.crouch_val
-		crouch_lean := shared.GAME_CONSTANTS.crouch_lean * player.crouch_val
+		crouch_distance := shared.GAME_CONSTANTS.crouch_distance * crouch_val
+		crouch_lean := shared.GAME_CONSTANTS.crouch_lean * crouch_val
 
 		player_mesh.body_anchor.rotation.y = 0.0
 		player_mesh.body_anchor.rotation.z = 0.0
@@ -781,7 +801,7 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 			}
 
 			for mesh in leg.meshes {
-				mesh.visible = player.crouch_val == 0
+				mesh.visible = crouch_val == 0
 			}
 		}
 
@@ -790,11 +810,12 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 				continue
 			}
 
-			leg.upper.visible = player.crouch_val != 0
-			leg.joint.visible = player.crouch_val != 0
+			leg.anchor.position.y = player_crouched_leg_hip_y(crouch_val)
+			leg.upper.visible = crouch_val != 0
+			leg.joint.visible = crouch_val != 0
 
 			for mesh in leg.lower.meshes {
-				mesh.visible = player.crouch_val != 0
+				mesh.visible = crouch_val != 0
 			}
 		}
 	}

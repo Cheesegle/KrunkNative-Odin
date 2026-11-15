@@ -1,6 +1,7 @@
 package menu
 
 import "core:fmt"
+import "core:math"
 import clay "../third_party/clay"
 
 SETTINGS_ORANGE :: clay.Color{239, 110, 24, 255}
@@ -358,16 +359,45 @@ settings_fps_row :: proc(state: ^State) {
 	}
 }
 
-settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05) {
+// Curved sliders: a slider's position is |value|^(1/curve) of its range, so
+// with curve > 1 small magnitudes get more of the bar (curve 2: the first 20%
+// of a 0-100 slider covers 0-4). Ranges spanning zero curve symmetrically
+// around it. Dragging a curved slider snaps to its step. curve <= 1 is linear
+// and unsnapped, as before.
+slider_progress :: proc(value, minimum, maximum, curve: f32) -> f32 {
+	if maximum <= minimum { return 0 }
+	if curve <= 1 { return clamp((value - minimum) / (maximum - minimum), 0, 1) }
+	if minimum < 0 && maximum > 0 {
+		t := value < 0 ? -math.pow(clamp(value / minimum, 0, 1), 1 / curve) : math.pow(clamp(value / maximum, 0, 1), 1 / curve)
+		return (t + 1) * 0.5
+	}
+	return math.pow(clamp((value - minimum) / (maximum - minimum), 0, 1), 1 / curve)
+}
+
+slider_value_at :: proc(progress, minimum, maximum, curve, step: f32) -> f32 {
+	p := clamp(progress, 0, 1)
+	if curve <= 1 { return minimum + p * (maximum - minimum) }
+	value: f32
+	if minimum < 0 && maximum > 0 {
+		t := p * 2 - 1
+		value = t < 0 ? -math.pow(-t, curve) * -minimum : math.pow(t, curve) * maximum
+	} else {
+		value = minimum + math.pow(p, curve) * (maximum - minimum)
+	}
+	if step > 0 { value = math.round(value / step) * step }
+	return clamp(value, minimum, maximum)
+}
+
+settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05, curve: f32 = 1) {
 	if !settings_search_show(state, label) { return }
 	s := state.scale
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, s)
 		id := clay.ID(name)
-		register(state, {id = id, enabled = true, slider = true, action = action, slider_min = minimum, slider_max = maximum, slider_step = step})
+		register(state, {id = id, enabled = true, slider = true, action = action, slider_min = minimum, slider_max = maximum, slider_step = step, slider_curve = curve})
 		if clay.UI(id)({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(44*s)}, childAlignment = {y = .Center}}, border = {color = WHITE, width = clay.BorderOutside(state.focus == id.id ? 1 : 0)}}) {
 			fill_id := clay.ID(fmt.tprintf("%sFill", name))
-			progress := clamp((value-minimum)/(maximum-minimum), 0.001, 0.999)
+			progress := clamp(slider_progress(value, minimum, maximum, curve), 0.001, 0.999)
 			if clay.UI(fill_id)({layout = {sizing = {width = clay.SizingPercent(progress), height = clay.SizingFixed(4*s)}}, backgroundColor = SETTINGS_ORANGE}) {
 				if clay.UI(clay.ID(fmt.tprintf("%sThumb", name)))({layout = {sizing = {width = clay.SizingFixed(12*s), height = clay.SizingFixed(28*s)}}, backgroundColor = SETTINGS_ORANGE, cornerRadius = clay.CornerRadiusAll(3*s), floating = {attachTo = .ElementWithId, parentId = fill_id.id, zIndex = 11, pointerCaptureMode = .Passthrough, clipTo = .AttachedParent, attachment = {element = .CenterCenter, parent = .RightCenter}}}) {}
 			}

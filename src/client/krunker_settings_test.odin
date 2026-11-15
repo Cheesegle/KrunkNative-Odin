@@ -20,7 +20,7 @@ when ODIN_TEST {
 		values := krunker_test_values()
 		result, error := menuui.krunker_settings_import(&values, KRUNKER_SAMPLE_EXPORT)
 		testing.expect_value(t, error, "")
-		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 43, ignored = 7})
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 44, ignored = 6})
 		testing.expect(t, abs(values.sensitivity-1.6) < 0.0001 && !values.advanced_sensitivity && values.invert_mouse && values.mouse_dpi == 1600, "sensitivity, inversion and DPI")
 		testing.expect(t, values.fov == 110 && values.show_fps && values.trails == menuui.Trail_Settings{hide_others = true, hide_yours = false}, "fov, FPS and trails")
 		testing.expect(t, values.audio_volumes == [4]f32{0.5, 1, 0.7, 0.3}, "master, footsteps and UI volume; effects untouched")
@@ -34,7 +34,7 @@ when ODIN_TEST {
 		b := values.bindings
 		testing.expect(t, b[.FORWARD] == {'Z', 265} && b[.BACKWARD] == {'S', 264} && b[.LEFT] == {'Q', 263} && b[.RIGHT] == {'D', 262}, "moveKeys and sparse nulls")
 		testing.expect(t, b[.CROUCH] == {'C', 0} && b[.FIRE] == {-1, 0} && b[.AIM] == {-3, 0} && b[.RELOAD] == {'F', 0} && b[.INSPECT] == {'G', 0} && b[.SECONDARY] == {-4, 0}, "named binds")
-		testing.expect(t, b[.MELEE] == {'Q', 0} && b[.JUMP] == {32, 0} && b[.MENU] == {256, 0}, "scroll-wheel melee is skipped; absent binds stay unchanged")
+		testing.expect(t, b[.MELEE] == {menuui.BINDING_SCROLL, 0} && b[.JUMP] == {32, 0} && b[.MENU] == {256, 0}, "scroll-wheel melee (20000) imports as Scroll; absent binds stay unchanged")
 	}
 
 	@(test)
@@ -79,14 +79,15 @@ when ODIN_TEST {
 		pairs := [?][2]i64{{87, 'W'}, {48, '0'}, {32, 32}, {13, 257}, {9, 258}, {8, 259}, {16, 340}, {17, 341}, {18, 342}, {20, 280},
 			{37, 263}, {38, 265}, {39, 262}, {40, 264}, {46, 261}, {96, 320}, {105, 329}, {107, 334}, {112, 290}, {123, 301},
 			{186, 59}, {187, 61}, {188, 44}, {189, 45}, {190, 46}, {191, 47}, {219, 91}, {220, 92}, {221, 93}, {222, 39},
-			{-1, 0}, {10001, -1}, {10002, -3}, {10003, -2}, {10004, -4}, {10005, -5}}
+			{-1, 0}, {10001, -1}, {10002, -3}, {10003, -2}, {10004, -4}, {10005, -5},
+			{20000, i64(menuui.BINDING_SCROLL)}} // Krunker's wheel bind (wr(): e == 20000 -> "SCROLL").
 		for pair in pairs {
 			code, ok := menuui.krunker_key_to_binding(pair[0])
 			testing.expectf(t, ok && i64(code) == pair[1], "Krunker %d -> %d, got %d", pair[0], pair[1], code)
 			js, back := menuui.binding_to_krunker_key(code)
 			testing.expectf(t, back && js == pair[0], "GLFW %d -> Krunker %d, got %d", code, pair[0], js)
 		}
-		for rejected in ([?]i64{20000, 27, 192, 0, 255, 99999}) {
+		for rejected in ([?]i64{27, 192, 0, 255, 99999, 19999, 20001}) {
 			_, ok := menuui.krunker_key_to_binding(rejected)
 			testing.expectf(t, !ok, "Krunker code %d has no Krodin binding", rejected)
 		}
@@ -102,7 +103,7 @@ when ODIN_TEST {
 		text := menuui.krunker_settings_export(source)
 		defer delete(text)
 		testing.expect(t, strings.has_prefix(text, `{"showTrails":false,"showFPS":true,"crosshairSho":5,`) && strings.contains(text, `"crosshairColor":"#00ff00"`) &&
-			strings.contains(text, `"fov":110,`) && strings.contains(text, `"moveKeys":[90,null,81]`) && strings.contains(text, `"aim1Key":10002`), "export uses Krunker's keys and value encodings")
+			strings.contains(text, `"fov":110,`) && strings.contains(text, `"moveKeys":[90,null,81]`) && strings.contains(text, `"aim1Key":10002`) && strings.contains(text, `"meleeKey":20000`), "export uses Krunker's keys and value encodings")
 		target := krunker_test_values()
 		target.fov, target.bindings[.MELEE] = 60, {'M', 0}
 		result, import_error := menuui.krunker_settings_import(&target, text)
@@ -110,9 +111,14 @@ when ODIN_TEST {
 		testing.expect(t, result.ignored == 0 && result.imported > 0, "a Krodin export imports without ignored keys")
 		testing.expect(t, target.fov == source.fov && target.sensitivity == source.sensitivity && target.invert_mouse == source.invert_mouse && target.show_fps == source.show_fps && target.trails == source.trails, "general settings round trip")
 		testing.expect(t, target.audio_volumes == source.audio_volumes && target.viewmodel == source.viewmodel && target.crosshair == source.crosshair && target.visuals == source.visuals, "audio, viewmodel, crosshair and saturation round trip")
-		expected := source.bindings
-		expected[.MELEE] = {'M', 0}
-		testing.expect(t, target.bindings == expected, "changed binds round trip; Q melee equals Krunker's default, is not exported, and the target's bind stays (Krunker semantics)")
+		testing.expect(t, target.bindings == source.bindings && target.bindings[.MELEE] == {menuui.BINDING_SCROLL, 0}, "changed binds round trip, including Scroll melee exported as 20000")
+		source_q := source
+		source_q.bindings[.MELEE] = {'Q', 0}
+		q_text := menuui.krunker_settings_export(source_q)
+		defer delete(q_text)
+		target.bindings[.MELEE] = {'M', 0}
+		menuui.krunker_settings_import(&target, q_text)
+		testing.expect(t, target.bindings[.MELEE] == {'M', 0}, "Q melee equals Krunker's default, is not exported, and the target's bind stays (Krunker semantics)")
 		target.bindings[.MELEE] = source.bindings[.MELEE]
 		again := menuui.krunker_settings_export(target)
 		defer delete(again)
@@ -134,7 +140,7 @@ when ODIN_TEST {
 		client.menu.import_length = copy(client.menu.import_buffer[:], KRUNKER_SAMPLE_EXPORT)
 		action := menuui.activate(&client.menu, {action = {kind = .SETTINGS_IMPORT}})
 		testing.expect(t, action.kind == .SETTINGS_IMPORT && !client.menu.import_open && client.menu.page == .SETTINGS, "a successful import closes the popup and keeps Settings open")
-		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 43 Krunker settings. Ignored 7 unsupported.")
+		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 44 Krunker settings. Ignored 6 unsupported.")
 		menu_apply_action(&client, action)
 		testing.expect(t, abs(client.camera.fov-110*math.PI/180) < 0.000001 && abs(client.sensitivity-1.6) < 0.0001 && client.invert_mouse && client.show_fps && client.settings_dirty, "import commits the draft like Save")
 		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && client.audio_settings == Audio_Settings{0.5, 1, 0.7, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")

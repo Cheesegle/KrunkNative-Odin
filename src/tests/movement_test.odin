@@ -290,7 +290,7 @@ main :: proc() {
 		fmt.eprintln("Menu tests failed")
 		os.exit(1)
 	}
-	if !test_fuzzy_matcher() || !test_settings_search() || !test_menu_fps_limit_setting() {
+	if !test_fuzzy_matcher() || !test_settings_search() || !test_menu_fps_limit_setting() || !test_slider_curve() || !test_dropdown_scroll() {
 		fmt.eprintln("Settings search tests failed")
 		os.exit(1)
 	}
@@ -303,7 +303,7 @@ main :: proc() {
 	if !test_sandstorm_palms() {
 		os.exit(1)
 	}
-	if !test_sandstorm_hidden_colliders() || !test_collision_index_matches_full_scan() {
+	if !test_sandstorm_hidden_colliders() || !test_site_signs_not_solid() || !test_collision_index_matches_full_scan() {
 		os.exit(1)
 	}
 	if !test_net_send_queue() {

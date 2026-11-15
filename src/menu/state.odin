@@ -95,7 +95,7 @@ Input :: struct {
 	up, down_key: bool,
 	binding_pressed: i32,
 }
-Control :: struct { id: clay.ElementId, action: Action, enabled, slider, number: bool, slider_min, slider_max, slider_step: f32 }
+Control :: struct { id: clay.ElementId, action: Action, enabled, slider, number: bool, slider_min, slider_max, slider_step, slider_curve: f32 }
 State :: struct {
 	page: Page,
 	ctx: ^clay.Context,
@@ -123,6 +123,8 @@ State :: struct {
 	binding_reserved: bool,
 	settings_dropdown: Settings_Dropdown,
 	dropdown_return_focus: u32,
+	// The dropdown option last scrolled into view; 0 when the popup opens.
+	dropdown_revealed_focus: u32,
 	number_edit: Settings_Number,
 	number_control: Control,
 	number_buffer: [24]u8,
@@ -323,7 +325,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 			if control.slider && input.down {
 				progress := clamp((input.pointer[0] - data.boundingBox.x) / data.boundingBox.width, 0, 1)
 				action := control.action
-				action.value = control.slider_min + progress * (control.slider_max - control.slider_min)
+				action.value = slider_value_at(progress, control.slider_min, control.slider_max, control.slider_curve, control.slider_step)
 				return activate(state, {action = action})
 			}
 			if !input.down && state.previous.down && over {
@@ -360,6 +362,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.settings_dropdown = Settings_Dropdown(control.action.index)
 		data := clay.GetScrollContainerData(clay.ID("SettingsOptions"))
 		if data.found { data.scrollPosition^ = {} }
+		state.dropdown_revealed_focus = 0
 		state.dropdown_return_focus = control.id.id
 		index: i32
 		switch state.settings_dropdown {

@@ -14,7 +14,11 @@ binding_visible :: proc(action: Binding_Action) -> bool {
 
 // Positive values are portable GLFW key codes. Mouse buttons use -(button+1).
 // Zero means unbound; neither the menu nor saved preferences store OS scancodes.
+// BINDING_SCROLL is the mouse wheel (either direction). It reuses Krunker's
+// own wheel bind code (keyCode 20000), far above GLFW_KEY_LAST (348), so it
+// can never collide with a key or a mouse button and never reaches glfw.GetKey.
 Bindings :: [Binding_Action][2]i32
+BINDING_SCROLL :: i32(20000)
 BINDING_NAMES := [Binding_Action]string{
 	.FORWARD = "Forward", .BACKWARD = "Backward", .LEFT = "Left", .RIGHT = "Right", .JUMP = "Jump", .CROUCH = "Crouch / slide",
 	.AIM = "Aim down sights", .FIRE = "Fire", .RELOAD = "Reload", .SECONDARY = "Secondary / primary", .MELEE = "Melee / primary", .MENU = "Menu / resume", .FULLSCREEN = "Fullscreen",
@@ -31,7 +35,7 @@ default_bindings :: proc() -> Bindings {
 }
 
 binding_valid :: proc(code: i32) -> bool {
-	return code == 0 || (code >= -8 && code <= -1) || code == 32 || code == 39 || (code >= 44 && code <= 57) || code == 59 || code == 61 ||
+	return code == 0 || code == BINDING_SCROLL || (code >= -8 && code <= -1) || code == 32 || code == 39 || (code >= 44 && code <= 57) || code == 59 || code == 61 ||
 		(code >= 65 && code <= 93) || code == 161 || code == 162 || (code >= 256 && code <= 269) ||
 		(code >= 280 && code <= 284) || (code >= 290 && code <= 314) || (code >= 320 && code <= 336) || (code >= 340 && code <= 348)
 }
@@ -42,6 +46,7 @@ binding_label :: proc(code: i32) -> string {
 	if code >= 320 && code <= 329 { return fmt.tprintf("Numpad %d", code-320) }
 	switch code {
 	case 0: return "Unbound"
+	case BINDING_SCROLL: return "Scroll"
 	case -1: return "Left Mouse"
 	case -2: return "Right Mouse"
 	case -3: return "Middle Mouse"
