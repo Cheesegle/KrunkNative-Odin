@@ -16,6 +16,7 @@ Client_Settings :: struct {
 	advanced_sensitivity, invert_mouse: bool,
 	fov: f32,
 	show_fps, vsync: bool,
+	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS; 0 (the default) is the monitor's refresh rate.
 	perf_overlay: bool, // The debug performance window (F3).
 	bindings: menuui.Bindings,
 	hud: menuui.HUD_Settings,
@@ -42,6 +43,7 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	if result.fullscreen_width <= 0 || result.fullscreen_height <= 0 { result.fullscreen_width, result.fullscreen_height = 0, 0 }
 	result.visuals = menuui.visual_settings_validate(result.visuals)
 	result.quality = menuui.quality_settings_validate(result.quality)
+	result.menu_fps_limit = menuui.menu_fps_limit_validate(result.menu_fps_limit)
 	result.viewmodel = menuui.viewmodel_settings_validate(result.viewmodel)
 	result.crosshair = menuui.crosshair_settings_validate(result.crosshair)
 	defaults := menuui.default_bindings()
@@ -69,7 +71,7 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 	return {version = 1, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
-		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, bindings = client.bindings, hud = client.hud_settings,
+		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings}
 }
