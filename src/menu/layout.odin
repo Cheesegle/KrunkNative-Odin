@@ -115,9 +115,16 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 		}
 	}
 	commands := clay.EndLayout(max(0, delta))
-	if state.settings_dropdown != .NONE {
+	// Reveal the focused option once when the popup opens or focus moves to
+	// another option (it needs this frame's layout). Doing it every frame
+	// snapped the list back to the focused option and fought the scroll wheel.
+	if state.settings_dropdown != .NONE && state.focus != state.dropdown_revealed_focus {
 		for control in state.controls[:state.control_count] {
-			if control.id.id == state.focus { focus_visible(control, state.page); break }
+			if control.id.id == state.focus {
+				focus_visible(control, state.page)
+				state.dropdown_revealed_focus = state.focus
+				break
+			}
 		}
 	}
 	return commands

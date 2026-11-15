@@ -123,6 +123,8 @@ State :: struct {
 	binding_reserved: bool,
 	settings_dropdown: Settings_Dropdown,
 	dropdown_return_focus: u32,
+	// The dropdown option last scrolled into view; 0 when the popup opens.
+	dropdown_revealed_focus: u32,
 	number_edit: Settings_Number,
 	number_control: Control,
 	number_buffer: [24]u8,
@@ -360,6 +362,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.settings_dropdown = Settings_Dropdown(control.action.index)
 		data := clay.GetScrollContainerData(clay.ID("SettingsOptions"))
 		if data.found { data.scrollPosition^ = {} }
+		state.dropdown_revealed_focus = 0
 		state.dropdown_return_focus = control.id.id
 		index: i32
 		switch state.settings_dropdown {
