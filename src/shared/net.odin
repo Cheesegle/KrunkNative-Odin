@@ -7,6 +7,9 @@ PACKET_HEADER_SIZE :: 7
 PROTOCOL_VERSION :: 10 // 10: wall-jump count appended to player state
 PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 110
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
+// victim, killer, weapon (i32 each) + flags. Older clients skip the unknown
+// packet type by its payload length, so this needs no PROTOCOL_VERSION bump.
+PACKET_KILL_FEED_PAYLOAD_SIZE :: 13
 MAX_PLAYERS_PER_MATCH :: 32
 // The server broadcasts one snapshot per N simulation ticks.
 SNAPSHOT_RATE_DIVISOR :: 2
@@ -73,6 +76,7 @@ Packet_Type :: enum u8 {
 	BULLET_IMPACT = 8,
 	TEAM_REQUEST = 9,
 	LOBBY_STATE = 10,
+	KILL_FEED = 11,
 }
 
 Packet_Header :: struct {
@@ -668,4 +672,36 @@ player_send_event :: proc() {
 
 game_broadcast :: proc() {
 	// SHIM
+}
+
+packet_serialize_kill_feed :: proc(buf: []byte, event: ^Kill_Event) -> int {
+	if event == nil || len(buf) < PACKET_HEADER_SIZE + PACKET_KILL_FEED_PAYLOAD_SIZE { return 0 }
+	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
+	buf[4] = u8(Packet_Type.KILL_FEED)
+	endian.put_u16(buf[5:7], .Little, u16(PACKET_KILL_FEED_PAYLOAD_SIZE))
+	offset := PACKET_HEADER_SIZE
+	endian.put_u32(buf[offset:offset + 4], .Little, transmute(u32)event.victim_uid)
+	endian.put_u32(buf[offset + 4:offset + 8], .Little, transmute(u32)event.killer_uid)
+	endian.put_u32(buf[offset + 8:offset + 12], .Little, transmute(u32)event.weapon_id)
+	buf[offset + 12] = event.headshot ? 1 : 0
+	return PACKET_HEADER_SIZE + PACKET_KILL_FEED_PAYLOAD_SIZE
+}
+
+packet_deserialize_kill_feed :: proc(buf: []byte) -> (event: Kill_Event, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .KILL_FEED || header.payload_len != u16(PACKET_KILL_FEED_PAYLOAD_SIZE) ||
+	   len(buf) != PACKET_HEADER_SIZE + PACKET_KILL_FEED_PAYLOAD_SIZE {
+		return {}, false
+	}
+	offset := PACKET_HEADER_SIZE
+	victim, _ := endian.get_u32(buf[offset:offset + 4], .Little)
+	killer, _ := endian.get_u32(buf[offset + 4:offset + 8], .Little)
+	weapon, _ := endian.get_u32(buf[offset + 8:offset + 12], .Little)
+	event.victim_uid, event.killer_uid, event.weapon_id = transmute(i32)victim, transmute(i32)killer, transmute(i32)weapon
+	event.headshot = buf[offset + 12] & 1 != 0
+	if event.victim_uid < 0 || event.killer_uid < -1 || buf[offset + 12] > 1 ||
+	   (event.weapon_id != -1 && (event.weapon_id < 0 || int(event.weapon_id) >= len(WEAPONS_LIST) || WEAPONS_LIST[event.weapon_id] == nil)) {
+		return {}, false
+	}
+	return event, true
 }

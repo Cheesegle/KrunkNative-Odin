@@ -111,6 +111,33 @@ overlay_match_render :: proc(client: ^Client) {
 	ui_fill_text(ui, white, rotation, (ui.width-ui_measure_text(ui, rotation, 24*s))*0.5, overlay_numeric_baseline(countdown_y, 32*s, 24*s), 24*s)
 }
 
+overlay_icon_filter :: proc(icon: u32) {
+	if icon == 0 { return }
+	gl.BindTexture(gl.TEXTURE_2D, icon)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	g_active_texture = 0
+}
+
+// HUD silhouettes (textures/weapons or textures/melee), shared by the loadout
+// list and the killfeed. Returns 0 when the icon is missing.
+overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.Weapon) {
+	if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { return 0, nil }
+	weapon := client.game.weapons[weapon_id]
+	if weapon == nil { return 0, nil }
+	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
+	icon, cached := weapon_icons[weapon_id]
+	if !cached {
+		folder := "melee" if weapon.melee else "weapons"
+		path := shared.concat(shared.assets_path(), fmt.tprintf("textures/%s/%s.png", folder, weapon.icon))
+		icon = load_texture(path)
+		delete(path)
+		weapon_icons[weapon_id] = icon
+		overlay_icon_filter(icon)
+	}
+	return icon, weapon
+}
+
 overlay_loadout_render :: proc(client: ^Client, right, bottom: f32) {
 	if client.me == nil { return }
 	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
@@ -132,20 +159,7 @@ overlay_loadout_render :: proc(client: ^Client, right, bottom: f32) {
 		if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { continue }
 		weapon := client.game.weapons[weapon_id]
 		if weapon == nil { continue }
-		icon, cached := weapon_icons[weapon_id]
-		if !cached {
-			folder := "melee" if weapon.melee else "weapons"
-			path := shared.concat(shared.assets_path(), fmt.tprintf("textures/%s/%s.png", folder, weapon.icon))
-			icon = load_texture(path)
-			delete(path)
-			weapon_icons[weapon_id] = icon
-			if icon != 0 {
-				gl.BindTexture(gl.TEXTURE_2D, icon)
-				gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-				gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-				g_active_texture = 0
-			}
-		}
+		icon, _ := overlay_weapon_icon(client, weapon_id)
 		active := i32(slot) == client.me.loadout_index
 		color := shared.Vec4{1, 1, 1, 1} if active else shared.Vec4{0.8, 0.8, 0.8, 0.6}
 		top := bottom - f32(len(client.me.loadout)) * row_height + row * row_height
@@ -223,6 +237,8 @@ overlay_ammo_render :: proc(client: ^Client) {
 overlay_render :: proc(client: ^Client, delta: f32) {
 	scoped := overlay_scope_active(client)
 	if scoped { overlay_scope_render(client.ui) }
+	// Under the HUD, as Krunker draws its blood overlay and hit indicators.
+	client_damage_render(client, delta)
 	white := shared.Vec4{1.0, 1.0, 1.0, 1.0}
 	background_color := shared.Vec4{0.0, 0.0, 0.0, 0.4}
 
@@ -309,15 +325,10 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	crosshair := client_crosshair_values(client)
 	if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair)) }
 
-	if color, visible := krunker_client_hit_color(client, glfw.GetTime()); visible {
-		// A compact confirmation ring. Damage is still owned by the server.
-		s := client.ui.scale
-		cx, cy := client.ui.width*0.5, client.ui.height*0.5
-		for sign in ([2]f32{-1, 1}) {
-			ui_fill_rect(client.ui, color, cx + sign*10*s-2*s, cy-12*s, 4*s, 7*s)
-			ui_fill_rect(client.ui, color, cx + sign*10*s-2*s, cy+5*s, 4*s, 7*s)
-		}
-	}
+	// Server-confirmed hits; Krunker draws the marker even with the board open.
+	hitmarker := client_hitmarker_values(client)
+	hit_marker_tick(&client.hit_marker, hitmarker, delta)
+	hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale)
 	if client.krunker.connected {
 		progress := client.krunker_world.interact_progress
 		if client.krunker_world.interact_manual_visible { progress = client.krunker_world.interact_manual_progress }
@@ -355,6 +366,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	}
 
 	overlay_match_render(client)
+	kill_feed_render(client)
 	if client.scoreboard_open {
 		// Keep clear of the round/objective HUD at the top center.
 		board := client_scoreboard(client)
@@ -363,6 +375,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 }
 
 overlay_fini :: proc() {
+	kill_feed_fini()
 	for _, icon in weapon_icons {
 		texture_release(icon)
 	}

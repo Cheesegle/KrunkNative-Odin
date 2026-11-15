@@ -55,13 +55,19 @@ client_audio_update_listener :: proc(client: ^Client) {
 
 client_audio_tick :: proc(client: ^Client, delta: f32) {
 	client_audio_update_listener(client)
-	for event in client.game.presentation_events { client_audio_present(client, event) }
+	for event in client.game.presentation_events {
+		client_hit_marker_present(client, event)
+		client_damage_present(client, event)
+		client_audio_present(client, event)
+	}
+	client_hit_marker_tick_live(client)
+	client_damage_tick_live(client)
 	clear(&client.game.presentation_events)
 	if client.audio != nil && client.krunker.connected {
 		world := &client.krunker_world
 		if world.hit_revision != client.audio.hit_revision {
 			client.audio.hit_revision = world.hit_revision
-			if world.hit_revision > 0 { audio_play_effect(client.audio, world.hit_lethal ? "headshot_0" : "hit_0", gain = 0.7, priority = 4) }
+			if world.hit_revision > 0 { audio_play_effect(client.audio, world.hit_headshot ? "crit_0" : "hit_0", gain = 0.7, priority = 4) }
 		}
 	}
 	if client.audio_settings_dirty {

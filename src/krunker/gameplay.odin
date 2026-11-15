@@ -92,6 +92,7 @@ krunker_world_init_match :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.interact_manual_visible = false
 	state.lives = 0
 	state.hit_revision, state.last_hit_at = 0, 0
+	state.damage_revision = 0
 	state.winner_team, state.end_result = -1, -1
 	state.end_received = false
 	// A new match starts with an empty board until the next UPDATE_LEADERS.
@@ -469,7 +470,8 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		// Hit confirmation is presentation only. Health arrives separately in h.
 		if len(packet) < 5 { return false }
 		if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
-		state.last_hit_at, state.hit_lethal = state.received_at, krunker_world_bool(packet[4])
+		// DO_DAMAGE (sid, damage, headshot, kill, ...), handled by the browser D4e.
+		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, krunker_world_bool(packet[3]), krunker_world_bool(packet[4])
 		state.hit_revision += 1
 		return true
 	case "6":

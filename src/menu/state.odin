@@ -8,13 +8,25 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
-HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool }
+// hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
+// (1..10, default 8), with 0 (a file without the key) meaning the default.
+HUD_Settings :: struct {
+	hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool,
+	hide_kill_feed: bool,
+	kill_feed_limit: i32,
+}
+KILL_FEED_DEFAULT_LIMIT :: 8
+KILL_FEED_MAX_LIMIT :: 10
+kill_feed_limit :: proc(settings: HUD_Settings) -> int {
+	if settings.kill_feed_limit <= 0 { return KILL_FEED_DEFAULT_LIMIT }
+	return int(min(settings.kill_feed_limit, KILL_FEED_MAX_LIMIT))
+}
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
 	fullscreen_index: i32, // Index into View.fullscreen_options.
@@ -33,6 +45,8 @@ Settings_Values :: struct {
 	viewmodel: Viewmodel_Settings,
 	trails: Trail_Settings,
 	crosshair: Crosshair_Settings,
+	hitmarker: Hitmarker_Settings,
+	damage: Damage_Settings,
 }
 Class :: struct { id: i32, name, weapon: string, health: i32, speed: f32, wall_jump, available: bool, reason: string, used, limit: int, portrait, weapon_icon: rawptr }
 Secondary :: struct { id: i32, name: string, icon: rawptr }
@@ -78,6 +92,8 @@ View :: struct {
 	viewmodel: Viewmodel_Settings,
 	trails: Trail_Settings,
 	crosshair: Crosshair_Settings,
+	hitmarker: Hitmarker_Settings,
+	damage: Damage_Settings,
 	max_anisotropy: f32,
 	fov: f32,
 	sensitivity, mouse_dpi: f32,
@@ -135,11 +151,12 @@ State :: struct {
 	number_buffer: [24]u8,
 	number_length: int,
 	number_replace, number_invalid, number_changed: bool,
-	color_edit: i32, // 0 = none, 1 = crosshair, 2 = shadow.
+	color_edit: i32, // 0 = none; otherwise a settings_color_value field.
 	color_buffer: [16]u8,
 	color_length: int,
 	color_replace, color_invalid: bool,
 	crosshair_preview: Crosshair_Preview,
+	damage_preview: Damage_Preview,
 	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
 	// can make it several kilobytes, so the field holds up to 64 KiB.
 	import_open, import_overflow: bool,
@@ -180,7 +197,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
 			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
-			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair)}
+			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage)}
 		state.settings_active = true
 	}
 	state.settings_resolution_count = i32(len(view.resolution_options))
@@ -405,7 +422,6 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .DISPLAY_MODE: index = state.settings_draft.display_mode
 		case .MONITOR: index = state.settings_draft.monitor_index
 		case .RESOLUTION: index = state.settings_draft.display_mode == 2 ? state.settings_draft.fullscreen_index : state.settings_draft.resolution_index
-		case .TEXTURE_FILTER: index = state.settings_draft.quality.smooth_textures ? 1 : 0
 		case .LIGHTING: index = clamp(state.settings_draft.quality.lighting, 0, 3)
 		case .SHADOW_QUALITY: index = clamp(state.settings_draft.quality.shadow_quality, 0, 1)
 		case .CROSSHAIR_TYPE: index = 0
@@ -501,13 +517,15 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 2: state.settings_draft.visuals.night_mode = !state.settings_draft.visuals.night_mode
 			}
 			return {}
+		case .KILL_FEED_LIMIT:
+			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_limit = i32(clamp(value + 0.5, 1, KILL_FEED_MAX_LIMIT)) } // Skips NaN.
+			return {}
 		case .NIGHT_STRENGTH:
 			if value := control.action.value; value == value { state.settings_draft.visuals.night_strength = clamp(value, 0, 1) } // Skips NaN.
 			return {}
 		case .VISUAL_RESET:
 			state.settings_draft.visuals = DEFAULT_VISUAL_SETTINGS
 			return {}
-		case .TEXTURE_FILTER: state.settings_draft.quality.smooth_textures = control.action.index == 1; return {}
 		case .ANISOTROPY: state.settings_draft.quality.anisotropy = ANISOTROPY_LEVELS[clamp(control.action.index, 0, 4)]; return {}
 		case .LIGHTING: state.settings_draft.quality.lighting = clamp(control.action.index, 0, 3); return {}
 		case .SHADOW_QUALITY: state.settings_draft.quality.shadow_quality = clamp(control.action.index, 0, 1); return {}
@@ -540,6 +558,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 3: state.settings_draft.hud.hide_ping = !state.settings_draft.hud.hide_ping
 			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
+			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
 			}
 			return {}
 		case .RESOLUTION:
@@ -584,6 +603,25 @@ activate :: proc(state: ^State, control: Control) -> Action {
 				state.settings_draft.crosshair.toggles[toggle] = !state.settings_draft.crosshair.toggles[toggle]
 			}
 			return {}
+		case .HITMARKER_VALUE:
+			if control.action.index >= 0 && control.action.index < i32(len(Hitmarker_Control)) {
+				state.settings_draft.hitmarker.values[Hitmarker_Control(control.action.index)] = control.action.value
+				state.settings_draft.hitmarker = hitmarker_settings_validate(state.settings_draft.hitmarker)
+			}
+			return {}
+		case .HITMARKER_TOGGLE: state.settings_draft.hitmarker.show = !state.settings_draft.hitmarker.show; return {}
+		case .DAMAGE_VALUE:
+			if control.action.index >= 0 && control.action.index < i32(len(Damage_Control)) {
+				state.settings_draft.damage.values[Damage_Control(control.action.index)] = control.action.value
+				state.settings_draft.damage = damage_settings_validate(state.settings_draft.damage)
+			}
+			return {}
+		case .DAMAGE_TOGGLE:
+			if control.action.index >= 0 && control.action.index < i32(len(Damage_Toggle)) {
+				toggle := Damage_Toggle(control.action.index)
+				state.settings_draft.damage.toggles[toggle] = !state.settings_draft.damage.toggles[toggle]
+			}
+			return {}
 		case .AUDIO_VOLUME: state.settings_draft.audio_volumes[control.action.index] = control.action.value; return {}
 		case .FPS: state.settings_draft.show_fps = !state.settings_draft.show_fps; return {}
 		}
@@ -624,8 +662,8 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .HOME { container = "ClassStrip" }
 		if page == .CLASSES { container = "ClassPicker" }
 	}
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))

@@ -171,6 +171,11 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 						ordered_remove(&client.game.impacts, 0)
 					}
 					append(&client.game.impacts, impact)
+					client_hit_marker_native_impact(client, impact)
+				}
+			case .KILL_FEED:
+				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
+					shared.game_push_kill_event(&client.game, event)
 				}
 			}
 			nc.recv_len -= packet_size

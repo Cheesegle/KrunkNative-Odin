@@ -66,8 +66,8 @@ client_update_graphics :: proc(client: ^Client) {
 	quality = menuui.quality_settings_validate(quality)
 	if client.graphics_sampler_ready && client.graphics_quality == quality { return }
 	client.graphics_quality, client.graphics_sampler_ready = quality, true
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, quality.smooth_textures ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_NEAREST)
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, quality.smooth_textures ? gl.LINEAR : gl.NEAREST)
+	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST) // always Sharp: Krunker's pixelated look
+	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 	if client.max_anisotropy >= 2 {
 		gl.SamplerParameterf(client.graphics_sampler, 0x84FE, clamp(f32(quality.anisotropy), 1, client.max_anisotropy)) // TEXTURE_MAX_ANISOTROPY_EXT
 	}

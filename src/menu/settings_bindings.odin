@@ -75,7 +75,6 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	if state.settings_dropdown == .NONE { return }
 	s := state.scale
 	mode_labels := [3]string{"Windowed", "Borderless", "Fullscreen"}
-	filter_labels := [2]string{"Sharp", "Smooth"}
 	anisotropy_labels := [5]string{"Off", "2x", "4x", "8x", "16x"}
 	crosshair_labels := [2]string{"Precision", "Image (coming later)"}
 	shadow_quality_labels := [2]string{SHADOW_QUALITY_LABELS[.KRUNKER], SHADOW_QUALITY_LABELS[.SHARP]}
@@ -88,7 +87,6 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .DISPLAY_MODE: labels, anchor, action = mode_labels[:], "DisplayMode", .DISPLAY_MODE
 	case .MONITOR: labels, anchor, action = view.monitor_names, "Monitor", .MONITOR
 	case .RESOLUTION: labels, anchor, action = settings_resolution_options(state, view), "Resolution", .RESOLUTION_SELECT
-	case .TEXTURE_FILTER: labels, anchor, action = filter_labels[:], "TextureFiltering", .TEXTURE_FILTER
 	case .LIGHTING: labels, anchor, action = lighting_labels[:], "Lighting", .LIGHTING
 	case .SHADOW_QUALITY: labels, anchor, action = shadow_quality_labels[:], "ShadowQuality", .SHADOW_QUALITY
 	case .CROSSHAIR_TYPE: labels, anchor, action = crosshair_labels[:], "CrosshairType", .CROSSHAIR_TYPE

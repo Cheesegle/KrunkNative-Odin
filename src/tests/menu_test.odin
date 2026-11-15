@@ -319,7 +319,7 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_frame(&state, view, {})
 		}
 	}
-	if count != 29 { fmt.println("Missing editable slider values", count); return false }
+	if count != 35 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker sliders.
 	menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(menuui.Settings_Tab.GAMEPLAY)}})
 	menu_test_frame(&state, view, {})
 	gap: menuui.Control
@@ -502,7 +502,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.GAMEPLAY)))
 	menu_test_frame(&state, view, {})
-	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+4+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
+	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+4+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle)+1+len(menuui.Hitmarker_Color)+2*len(menuui.Hitmarker_Control) { fmt.println("Gameplay must expose global viewmodel, trails, crosshair and hitmarker controls with editable numbers"); return false }
 	state.focus = clay.ID("FieldOfView").id
 	menu_test_frame(&state, view, {right=true})
 	if state.settings_draft.fov != 95 { fmt.println("FOV keyboard adjustment must start from the current draft angle"); return false }
@@ -578,12 +578,7 @@ test_graphics_menu :: proc() -> bool {
 	if state.focus != clay.ID("ResetVisuals").id || box.y < panel.y-1 || box.y+box.height > panel.y+panel.height+1 { fmt.println("Reset visuals must remain reachable by keyboard"); return false }
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.VIDEO)))
 	menu_test_frame(&state, view, {})
-	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("TextureFiltering").id { menuui.focus_visible(control, .SETTINGS) } }
-	menu_test_frame(&state, view, {})
-	menu_test_click(&state, view, clay.ID("TextureFiltering"))
-	menu_test_frame(&state, view, {})
-	menu_test_click(&state, view, clay.ID("SettingsOption", 1))
-	menu_test_frame(&state, view, {})
+	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("TextureFiltering").id { fmt.println("Texture filtering was removed; textures are always Sharp"); return false } }
 	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("Anisotropy").id { menuui.focus_visible(control, .SETTINGS) } }
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("Anisotropy"))
@@ -592,7 +587,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_click(&state, view, clay.ID("SettingsOption", 2))
 	menu_test_frame(&state, view, {})
 	value := menu_test_click(&state, view, clay.ID("SettingsSave"))
-	if value.kind != .SETTINGS_SAVE || !state.settings_draft.quality.smooth_textures || state.settings_draft.quality.anisotropy != 4 || abs(state.settings_draft.visuals.values[.GAMMA]-1.05)>0.001 { fmt.println("Graphics changes must survive tab switches and Save"); return false }
+	if value.kind != .SETTINGS_SAVE || state.settings_draft.quality.anisotropy != 4 || abs(state.settings_draft.visuals.values[.GAMMA]-1.05)>0.001 { fmt.println("Graphics changes must survive tab switches and Save"); return false }
 	fmt.println("Visuals, Gameplay FOV, graphics scrolling, supported quality choices and staging tests OK")
 	return true
 }

@@ -209,6 +209,13 @@ player_kill :: proc(player: ^Player, killer: ^Player, kill_info: ^Player_Kill_In
 		player.respawn_timer = max(0.0, player.game.config.respawn_delay)
 	}
 
+	if player.game != nil {
+		event := Kill_Event{victim_uid = player.uid, killer_uid = -1, weapon_id = -1}
+		if killer != nil { event.killer_uid = killer.uid }
+		if kill_info != nil { event.weapon_id, event.headshot = kill_info.weapon_id, kill_info.headshot }
+		game_push_kill_event(player.game, event)
+	}
+
 	if killer != nil && killer != player {
 		killer.kills += 1
 		killer.death_streak = 0
@@ -236,14 +243,14 @@ player_apply_damage :: proc(victim, attacker: ^Player, amount: f32, weapon_id: i
 	previous_health := victim.health
 	victim.health = max(0.0, victim.health - final_damage)
 	if victim.health < previous_health {
-		player_emit_presentation(victim, .DAMAGE)
+		player_emit_presentation(victim, .DAMAGE, attacker != victim ? attacker : nil)
 		if attacker != nil && attacker != victim {
-			game_emit_presentation(victim.game, {kind = .HIT, uid = attacker.uid, headshot = headshot})
+			game_emit_presentation(victim.game, {kind = .HIT, uid = attacker.uid, headshot = headshot, lethal = victim.health == 0})
 		}
 	}
 	victim.last_damage_time = victim.game.now
 	if victim.health == 0 {
-		info := Player_Kill_Info{weapon_id = weapon_id}
+		info := Player_Kill_Info{weapon_id = weapon_id, headshot = headshot}
 		player_kill(victim, attacker, &info, false)
 	}
 	return true

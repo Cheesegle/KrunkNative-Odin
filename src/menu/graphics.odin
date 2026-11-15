@@ -25,7 +25,6 @@ DEFAULT_NIGHT_STRENGTH :: 0.7
 // (shadowsDynamic), all default off, and "Lighting" (lighting): 0 Low,
 // 1 Normal (default), 2 High, 3 Physical.
 Quality_Settings :: struct {
-	smooth_textures: bool,
 	anisotropy:      i32, // 0 = off; otherwise 2, 4, 8 or 16.
 	shadows, soft_shadows, high_res_shadows, dynamic_shadows: bool,
 	lighting:        i32,
@@ -116,13 +115,6 @@ settings_visuals :: proc(state: ^State) {
 
 settings_quality :: proc(state: ^State, view: View) {
 	settings_section(state, "Quality")
-	if settings_search_show(state, "Texture filtering") {
-		if clay.UI(clay.ID("TextureFilteringRow"))(settings_row(state)) {
-			settings_label("Texture filtering", state.scale)
-			spacer()
-			settings_dropdown_field(state, state.settings_draft.quality.smooth_textures ? "Smooth" : "Sharp", "TextureFiltering", .TEXTURE_FILTER)
-		}
-	}
 	if settings_search_show(state, "Anisotropic filtering") {
 		if clay.UI(clay.ID("AnisotropyRow"))(settings_row(state)) {
 			settings_label("Anisotropic filtering", state.scale)
@@ -131,7 +123,7 @@ settings_quality :: proc(state: ^State, view: View) {
 			settings_dropdown_field(state, label, "Anisotropy", .ANISOTROPY, view.max_anisotropy >= 2)
 		}
 	}
-	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
+	settings_note(state, "Anisotropic filtering improves textures viewed at an angle.")
 	quality := state.settings_draft.quality
 	settings_toggle_row(state, "Shadows", "QualityShadows", quality.shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SHADOWS)})
 	settings_toggle_row(state, "Soft Shadows", "QualitySoftShadows", quality.soft_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SOFT_SHADOWS)})
@@ -164,14 +156,19 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 		values.fov = fov_validate(view.fov)
 		values.viewmodel = viewmodel_settings_validate(view.viewmodel)
 		values.crosshair = crosshair_settings_validate(view.crosshair)
+		values.hitmarker = hitmarker_settings_validate(view.hitmarker)
+		values.damage = damage_settings_validate(view.damage)
 	}
 	#partial switch action.kind {
 	case .AUDIO_VOLUME: return values.audio_volumes[action.index]
 	case .FOV: return values.fov
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
+	case .HITMARKER_VALUE: return values.hitmarker.values[Hitmarker_Control(action.index)]
+	case .DAMAGE_VALUE: return values.damage.values[Damage_Control(action.index)]
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
+	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
 	}
 	return values.sensitivity
 }
