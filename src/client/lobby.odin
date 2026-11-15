@@ -231,14 +231,16 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 	for resolution, i in DISPLAY_RESOLUTIONS { resolution_options[i] = fmt.tprintf("%d x %d", resolution.width, resolution.height) }
 	window_resolution := client_window_resolution(client)
 	fullscreen_sizes: []Display_Resolution
-	if client.window != nil { fullscreen_sizes = monitor_resolutions(client_monitor(client.monitor_index)) }
+	cached_monitor_names: []string
+	if client.window != nil {
+		cache := client_monitor_cache(client)
+		fullscreen_sizes, cached_monitor_names = cache.sizes[:], cache.names[:]
+	}
 	fullscreen_options := make([]string, len(fullscreen_sizes), context.temp_allocator)
 	fullscreen_index := client_fullscreen_index(fullscreen_sizes, client.fullscreen_resolution)
 	for size, i in fullscreen_sizes { fullscreen_options[i] = fmt.tprintf("%d x %d", size.width, size.height) }
 	monitor_names := make([dynamic]string, context.temp_allocator)
-	if client.window != nil {
-		for monitor, i in glfw.GetMonitors() { append(&monitor_names, fmt.tprintf("%d: %s", i+1, glfw.GetMonitorName(monitor))) }
-	}
+	for name, i in cached_monitor_names { append(&monitor_names, fmt.tprintf("%d: %s", i+1, name)) }
 	view := menuui.View{
 		live_class_changes = krunker_client_live_class_window(client, glfw.GetTime()),
 		presentation = client_lobby_presentation(client), ranked = client.krunker.connected && client.krunker_world.is_ranked,

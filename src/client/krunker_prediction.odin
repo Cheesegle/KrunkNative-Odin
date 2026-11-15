@@ -83,7 +83,7 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		append(&state.input_commands, command)
 		// Keep client-only impulse metadata produced by prediction for replay.
 		append(&client.predicted_inputs, command)
-		if len(client.predicted_inputs) > KRUNKER_MAX_PREDICTED_INPUTS { ordered_remove(&client.predicted_inputs, 0) }
+		client_cap_predicted_inputs(client, KRUNKER_MAX_PREDICTED_INPUTS)
 		state.command_direction = client.me.direction
 		state.render_current = {client.me.position, client.me.aim_val}
 		state.input_sequence += 1

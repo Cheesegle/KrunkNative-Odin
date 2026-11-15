@@ -499,8 +499,18 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 		}
 		append(&map_inst.objects, obj)
 	}
+	map_index_collision_objects(map_inst)
 
 	return map_inst, true
+}
+
+// Objects with no collision can never touch a player; skip them in movement.
+map_index_collision_objects :: proc(map_inst: ^Map) {
+	clear(&map_inst.collision_objects)
+	for obj, i in map_inst.objects {
+		if obj.collision_type != .NONE { append(&map_inst.collision_objects, i32(i)) }
+	}
+	map_inst.collision_indexed = true
 }
 
 // NOTE: client-side only — populates textures/geometry for each object's mesh.
@@ -535,6 +545,7 @@ map_destroy :: proc(map_inst: ^Map) {
 		free(o)
 	}
 	delete(map_inst.objects)
+	delete(map_inst.collision_objects)
 
 	delete(map_inst.colors)
 

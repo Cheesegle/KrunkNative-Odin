@@ -164,3 +164,14 @@ client_poll_events :: proc() {
 	}
 	glfw.PollEvents()
 }
+
+// Idle-frame wait. Raw WM_INPUT still reaches native_mouse_window_proc while
+// GLFW dispatches messages, so buffered mouse motion is not lost.
+client_wait_events :: proc(timeout: f64) {
+	mouse := &g_native_mouse
+	if mouse.previous_proc != nil {
+		native_mouse_sync(mouse)
+		if mouse.active { native_mouse_drain(mouse) }
+	}
+	glfw.WaitEventsTimeout(timeout)
+}

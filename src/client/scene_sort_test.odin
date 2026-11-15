@@ -35,4 +35,23 @@ when ODIN_TEST {
 		scene_sort_transparent(scene)
 		testing.expect(t, len(scene.transparent_meshes) == 1 && scene.transparent_meshes[0] == &meshes[0], "empty and singleton scenes must remain valid")
 	}
+	@(test)
+	scene_remove_mesh_removes_only_that_mesh :: proc(t: ^testing.T) {
+		scene := scene_init()
+		defer scene_fini(scene)
+		meshes: [5]Mesh
+		for &mesh in meshes { scene_add_mesh(scene, &mesh) }
+		scene_remove_mesh(scene, &meshes[4])
+		scene_remove_mesh(scene, &meshes[1])
+		scene_remove_mesh(scene, &meshes[0])
+		other: Mesh
+		scene_remove_mesh(scene, &other)
+		testing.expect(t, len(scene.meshes) == 2 && scene.meshes[0] == &meshes[2] && scene.meshes[1] == &meshes[3] && scene.mesh_count == 2,
+			"removal must drop exactly the given mesh, keep the rest in order and ignore unknown meshes")
+		scene_remove_mesh(scene, &meshes[3])
+		scene_remove_mesh(scene, &meshes[2])
+		testing.expect(t, len(scene.meshes) == 0 && scene.mesh_count == 0, "removing every mesh must leave an empty scene")
+		scene_remove_mesh(scene, &meshes[2])
+		testing.expect(t, len(scene.meshes) == 0, "removing from an empty scene must be a no-op")
+	}
 }
