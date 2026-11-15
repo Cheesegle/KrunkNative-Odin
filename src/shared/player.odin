@@ -243,7 +243,7 @@ player_apply_damage :: proc(victim, attacker: ^Player, amount: f32, weapon_id: i
 	previous_health := victim.health
 	victim.health = max(0.0, victim.health - final_damage)
 	if victim.health < previous_health {
-		player_emit_presentation(victim, .DAMAGE)
+		player_emit_presentation(victim, .DAMAGE, attacker != victim ? attacker : nil)
 		if attacker != nil && attacker != victim {
 			game_emit_presentation(victim.game, {kind = .HIT, uid = attacker.uid, headshot = headshot, lethal = victim.health == 0})
 		}

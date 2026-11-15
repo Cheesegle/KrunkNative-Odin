@@ -151,6 +151,8 @@ ui_init :: proc() -> ^UI {
 	gl.EnableVertexAttribArray(0)
 	gl.EnableVertexAttribArray(1)
 
+	ui.vignette = damage_vignette_texture()
+
 	return ui
 }
 
@@ -462,6 +464,7 @@ ui_fini :: proc(ui: ^UI) {
 	}
 	if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
 	if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
+	if ui.vignette != 0 { gl.DeleteTextures(1, &ui.vignette) }
 	material_fini(&ui.material.base)
 	material_fini(&ui.text_material.base)
 	delete(g_font_data)

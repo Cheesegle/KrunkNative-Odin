@@ -57,9 +57,11 @@ client_audio_tick :: proc(client: ^Client, delta: f32) {
 	client_audio_update_listener(client)
 	for event in client.game.presentation_events {
 		client_hit_marker_present(client, event)
+		client_damage_present(client, event)
 		client_audio_present(client, event)
 	}
 	client_hit_marker_tick_live(client)
+	client_damage_tick_live(client)
 	clear(&client.game.presentation_events)
 	if client.audio != nil && client.krunker.connected {
 		world := &client.krunker_world

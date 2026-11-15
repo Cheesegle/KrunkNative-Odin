@@ -138,13 +138,14 @@ crosshair_parse_color :: proc(text: string) -> (value: u32, ok: bool) {
 }
 
 // The draft color an edit field names: 1 crosshair, 2 crosshair shadow, then
-// HITMARKER_COLOR_FIELDS. Unknown fields are nil.
+// HITMARKER_COLOR_FIELDS and DAMAGE_COLOR_FIELDS. Unknown fields are nil.
 settings_color_value :: proc(values: ^Settings_Values, field: i32) -> ^u32 {
 	switch field {
 	case 1: return &values.crosshair.color
 	case 2: return &values.crosshair.shadow_color
 	}
 	for color in Hitmarker_Color { if HITMARKER_COLOR_FIELDS[color] == field { return &values.hitmarker.colors[color] } }
+	for color in Damage_Color { if DAMAGE_COLOR_FIELDS[color] == field { return &values.damage.colors[color] } }
 	return nil
 }
 

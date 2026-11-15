@@ -132,6 +132,10 @@ Krunker_World_State :: struct {
 	hit_revision: u64,
 	hit_lethal: bool,
 	hit_headshot: bool,
+	// CHANGE_HEALTH drops of the local player with the attacker's x/z, for
+	// Krunker's hit indicators (browser JP).
+	damage_revision: u64,
+	damage_source: [2]f32,
 	winner_team, end_result: i32,
 	// END was applied for this match; gsc can end the match before it arrives.
 	end_received: bool,

@@ -24,6 +24,7 @@ Krunker_Key :: enum {
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
 	SATURATION, FEED_LIMIT,
+	SHOW_HIT_INDICATORS, HIT_INDICATOR_COLOR, USE_DAMAGE_OVERLAY,
 }
 Krunker_Value_Kind :: enum { NUMBER, SWITCH, COLOR }
 Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min, max: f64 }
@@ -86,6 +87,10 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.LEFT_HAND = {"leftHand", .SWITCH, 0, 0, 0},
 	.SATURATION = {"saturationn", .NUMBER, 1, 0, 3}, // Krunker's spelling.
 	.FEED_LIMIT = {"feedLimit", .NUMBER, KILL_FEED_DEFAULT_LIMIT, 1, KILL_FEED_MAX_LIMIT},
+	// Damage feedback (krunkbox current.analysis.js near lines 251334 and 254710).
+	.SHOW_HIT_INDICATORS = {"showHitInd", .SWITCH, 1, 0, 0},
+	.HIT_INDICATOR_COLOR = {"hitColor", .COLOR, 0xff3f3f, 0, 0},
+	.USE_DAMAGE_OVERLAY = {"useDamageOverlay", .SWITCH, 1, 0, 0},
 }
 KRUNKER_CROSSHAIR_PRECISION :: 5
 KRUNKER_VIEWMODEL := [Viewmodel_Control]Krunker_Key{
@@ -318,6 +323,10 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string) -> (resu
 		values = {.OPACITY = f32(numbers[.HITMARKER_OPACITY]), .LENGTH = f32(numbers[.HITMARKER_LENGTH]), .THICKNESS = f32(numbers[.HITMARKER_THICKNESS]), .SPACING = f32(numbers[.HITMARKER_SPACING]), .ANIM_SIZE = f32(numbers[.HITMARKER_ANIM_SIZE]), .FADE = f32(numbers[.HITMARKER_FADE])},
 		colors = {.NORMAL = colors[.HITMARKER_COLOR], .KILL = colors[.HITMARKER_KILL_COLOR], .HEADSHOT = hitmarker_settings_validate(values.hitmarker).colors[.HEADSHOT]},
 	})
+	// Krodin's own damage values are kept; Krunker's three keys are applied.
+	draft.damage = damage_settings_validate(draft.damage)
+	draft.damage.toggles[.OVERLAY], draft.damage.toggles[.INDICATORS] = switches[.USE_DAMAGE_OVERLAY], switches[.SHOW_HIT_INDICATORS]
+	draft.damage.colors[.INDICATOR] = colors[.HIT_INDICATOR_COLOR]
 
 	known := make(map[string]bool, allocator = context.temp_allocator)
 	for setting in KRUNKER_SETTINGS { known[setting.key] = true }
@@ -403,6 +412,9 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	colors[.HITMARKER_COLOR], colors[.HITMARKER_KILL_COLOR] = hitmarker.colors[.NORMAL], hitmarker.colors[.KILL]
 	numbers[.HITMARKER_OPACITY], numbers[.HITMARKER_LENGTH], numbers[.HITMARKER_THICKNESS] = f64(hitmarker.values[.OPACITY]), f64(hitmarker.values[.LENGTH]), f64(hitmarker.values[.THICKNESS])
 	numbers[.HITMARKER_SPACING], numbers[.HITMARKER_ANIM_SIZE], numbers[.HITMARKER_FADE] = f64(hitmarker.values[.SPACING]), f64(hitmarker.values[.ANIM_SIZE]), f64(hitmarker.values[.FADE])
+	damage := damage_settings_validate(values.damage)
+	switches[.USE_DAMAGE_OVERLAY], switches[.SHOW_HIT_INDICATORS] = damage.toggles[.OVERLAY], damage.toggles[.INDICATORS]
+	colors[.HIT_INDICATOR_COLOR] = damage.colors[.INDICATOR]
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
 	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))

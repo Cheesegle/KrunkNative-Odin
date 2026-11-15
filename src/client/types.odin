@@ -192,6 +192,7 @@ UI :: struct {
 	width:         f32,
 	height:        f32,
 	scale:         f32,
+	vignette:      u32, // The damage overlay texture.
 }
 
 Glyph_Cache_Entry :: struct {

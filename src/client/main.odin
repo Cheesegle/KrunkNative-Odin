@@ -57,6 +57,8 @@ Client :: struct {
 	crosshair_settings: menuui.Crosshair_Settings,
 	hitmarker_settings: menuui.Hitmarker_Settings,
 	hit_marker: Hit_Marker,
+	damage_settings: menuui.Damage_Settings,
+	damage_feedback: Damage_Feedback,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
 	scoreboard_open: bool,
@@ -1557,6 +1559,7 @@ main :: proc() {
 	client.trail_settings = preferences.trails
 	client.crosshair_settings = preferences.crosshair
 	client.hitmarker_settings = preferences.hitmarker
+	client.damage_settings = preferences.damage
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
@@ -1654,7 +1657,8 @@ main :: proc() {
 		if client.audio_settings_dirty { audio_settings_save(client.audio_settings) }
 		audio_destroy(client.audio)
 	}
-	// Hitmarkers read HIT events even when audio is unavailable.
+	// Hitmarkers and damage feedback read HIT and DAMAGE events even when
+	// audio is unavailable.
 	client.game.presentation_enabled = true
 
 	if len(options.class_name) > 0 {

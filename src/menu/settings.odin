@@ -34,6 +34,7 @@ settings_window :: proc(state: ^State, view: View) {
 				}
 				spacer()
 				if state.settings_tab == .GAMEPLAY { settings_crosshair_preview(state) }
+				if state.settings_tab == .HUD && !settings_searching(state) { settings_damage_preview(state) }
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("KRODIN", 16, s, SETTINGS_MUTED) }
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
@@ -127,6 +128,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
 		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
+		settings_damage(state)
 	}
 }
 
@@ -228,7 +230,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 	case .HUD:
-		draft.hud, draft.show_fps = defaults.hud, defaults.show_fps
+		draft.hud, draft.show_fps, draft.damage = defaults.hud, defaults.show_fps, defaults.damage
 	}
 }
 

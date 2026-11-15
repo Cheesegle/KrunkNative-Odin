@@ -237,6 +237,8 @@ overlay_ammo_render :: proc(client: ^Client) {
 overlay_render :: proc(client: ^Client, delta: f32) {
 	scoped := overlay_scope_active(client)
 	if scoped { overlay_scope_render(client.ui) }
+	// Under the HUD, as Krunker draws its blood overlay and hit indicators.
+	client_damage_render(client, delta)
 	white := shared.Vec4{1.0, 1.0, 1.0, 1.0}
 	background_color := shared.Vec4{0.0, 0.0, 0.0, 0.4}
 

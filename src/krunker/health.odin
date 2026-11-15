@@ -15,6 +15,16 @@ krunker_world_apply_health :: proc(state: ^Krunker_World_State, packet: []Krunke
 	}
 	if sid < 0 { return false }
 	player := krunker_world_upsert_player(state, sid)
+	// h is (health, sid, x, z, silent, reset max). A local drop that is not
+	// silent and names a position adds a hit indicator toward it.
+	if sid == state.local_sid && f32(health) < player.health && len(packet) > 4 && !(len(packet) > 5 && krunker_world_bool(packet[5])) {
+		x, x_ok := krunker_world_number(packet[3])
+		z, z_ok := krunker_world_number(packet[4])
+		if x_ok && z_ok && !math.is_nan(x) && !math.is_nan(z) && !math.is_inf(x) && !math.is_inf(z) {
+			state.damage_source = {f32(x), f32(z)}
+			state.damage_revision += 1
+		}
+	}
 	player.health = f32(health)
 	if player.health > player.max_health || len(packet) > 6 && krunker_world_bool(packet[6]) {
 		player.max_health = max(1, player.health)
