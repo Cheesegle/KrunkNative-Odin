@@ -67,7 +67,7 @@ when ODIN_TEST {
 		cache_count := len(audio.samples)
 		testing.expect(t, !missing.ready && audio_load_sample(audio, missing_path) == missing && len(audio.samples) == cache_count,
 			"missing assets must fail once and remain cached without repeated loads")
-		testing.expect(t, !audio_play_effect(audio, "weapon_4", position = {9999, 0, 0}, spatial = true), "inaudible distant effects must not take voices")
+		testing.expect(t, !audio_play_effect(audio, "weapon_4", position = {20000, 0, 0}, spatial = true), "inaudible distant effects must not take voices")
 		client := Client{audio = audio, krunker = {connected = true}, krunker_world = {hit_revision = 1}}
 		before := audio.serial
 		client_audio_tick(&client, 0)

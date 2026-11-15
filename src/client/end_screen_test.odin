@@ -61,6 +61,96 @@ when ODIN_TEST {
 		testing.expect(t, len(world.end_entries) == 0 && world.end_timer_text == "" && !client_match_ended(&client))
 	}
 
+	// The browser server sends END as (gameState, didWin, endData, winner,
+	// endIndex, reward, bpData, extra). Team winners come from getWinTeam,
+	// which returns the for..in key of teamScores: a string ("1"/"2"). A tied
+	// or winnerless match sends didWin -1 and winner -1; FFA always sends -1
+	// as the team winner and a boolean didWin.
+	@(test)
+	end_screen_live_end_packets_resolve_result :: proc(t: ^testing.T) {
+		Case :: struct {
+			name: string,
+			mode: i32,
+			local_team: i32,
+			did_win, winner, end_index: kproto.Krunker_Msgpack_Value,
+			result: End_Result,
+			winner_team: i32,
+		}
+		cases := []Case{
+			{"team win", 1, 2, true, "2", kproto.Krunker_Msgpack_Nil{}, .VICTORY, 2},
+			{"team loss", 1, 2, false, "1", kproto.Krunker_Msgpack_Nil{}, .DEFEAT, 1},
+			{"team draw", 1, 1, i64(-1), i64(-1), kproto.Krunker_Msgpack_Nil{}, .DRAW, 0},
+			{"team win, numeric winner", 2, 1, true, i64(1), i64(0), .VICTORY, 1},
+			{"team abandoned without a winner", 1, 1, false, kproto.Krunker_Msgpack_Nil{}, i64(3), .DEFEAT, 0},
+			{"ffa win", 0, 0, true, i64(-1), kproto.Krunker_Msgpack_Nil{}, .VICTORY, 0},
+			{"ffa loss", 0, 0, false, i64(-1), kproto.Krunker_Msgpack_Nil{}, .DEFEAT, 0},
+		}
+		for c in cases {
+			client: Client
+			client.krunker.connected = true
+			world := &client.krunker_world
+			kproto.krunker_world_init_match(world, []kproto.Krunker_Msgpack_Value{"init"})
+			world.local_sid, world.mode_index, world.rounds_total = 7, c.mode, 1
+			kproto.krunker_world_upsert_player(world, 7).team = c.local_team
+			kproto.krunker_world_upsert_player(world, 8).team = c.local_team == 0 ? 0 : 3-c.local_team
+			// gsc 4 (POST_MATCH) precedes END in the logged lobbies.
+			testing.expect(t, gameplay_packet(world, "gsc", i64(4)), c.name)
+			data := []kproto.Krunker_Msgpack_Map_Entry{
+				{key = "tms", value = []kproto.Krunker_Msgpack_Value{[]kproto.Krunker_Msgpack_Value{i64(1), i64(1), kproto.Krunker_Msgpack_Nil{}}, []kproto.Krunker_Msgpack_Value{i64(2), i64(2), kproto.Krunker_Msgpack_Nil{}}}},
+				{key = "ed", value = []kproto.Krunker_Msgpack_Value{}},
+			}
+			packet := []kproto.Krunker_Msgpack_Value{"end", i64(0), c.did_win, data, c.winner, c.end_index, i64(0), kproto.Krunker_Msgpack_Nil{}, []kproto.Krunker_Msgpack_Map_Entry{}}
+			testing.expectf(t, kproto.krunker_world_apply_packet(world, packet), "%s: END must apply", c.name)
+			screen := client_end_screen(&client)
+			testing.expectf(t, screen.result == c.result && screen.winner_team == c.winner_team, "%s: got %v winner %d, want %v winner %d", c.name, screen.result, screen.winner_team, c.result, c.winner_team)
+			kproto.krunker_world_reset(world)
+		}
+		// The final round of a multi-round match is counted from the string winner.
+		world: kproto.Krunker_World_State
+		defer kproto.krunker_world_reset(&world)
+		kproto.krunker_world_init_match(&world, []kproto.Krunker_Msgpack_Value{"init"})
+		world.rounds_total, world.match.round_wins = 3, {0, 1, 1}
+		testing.expect(t, gameplay_packet(&world, "end", i64(0), true, []kproto.Krunker_Msgpack_Map_Entry{}, "2", kproto.Krunker_Msgpack_Nil{}))
+		testing.expect(t, world.match.round_wins == [3]u32{0, 1, 2} && world.winner_team == 2)
+		testing.expect(t, !gameplay_packet(&world, "end", i64(0), true, []kproto.Krunker_Msgpack_Map_Entry{}, "x", kproto.Krunker_Msgpack_Nil{}), "a malformed winner is still rejected")
+	}
+
+	// gsc POST_MATCH ends the match before END arrives (and END may be lost
+	// or undecodable); the title must not default to DRAW then.
+	@(test)
+	end_screen_without_end_packet_uses_tracked_totals :: proc(t: ^testing.T) {
+		client: Client
+		client.krunker.connected = true
+		world := &client.krunker_world
+		defer kproto.krunker_world_reset(world)
+		kproto.krunker_world_init_match(world, []kproto.Krunker_Msgpack_Value{"init"})
+		world.local_sid, world.mode_index = 7, 1
+		kproto.krunker_world_upsert_player(world, 7).team = 1
+		kproto.krunker_world_upsert_player(world, 8).team = 2
+		world.match.team_scores = {0, 40, 25}
+		testing.expect(t, gameplay_packet(world, "gsc", i64(4)) && client_match_ended(&client))
+		screen := client_end_screen(&client)
+		testing.expectf(t, screen.result == .VICTORY && screen.winner_team == 1, "got %v winner %d", screen.result, screen.winner_team)
+	}
+
+	// A native/local match that ends through the simulation's own round logic.
+	@(test)
+	end_screen_native_match_end_has_winner :: proc(t: ^testing.T) {
+		client := Client{local_practice = true}
+		defer delete(client.game.players)
+		players := [2]shared.Player{{uid = 1, team = 2, score = 300, is_you = true}, {uid = 2, team = 1, score = 100}}
+		for &player in players { append(&client.game.players, &player) }
+		client.game.ready = true
+		client.game.match = {phase = .LIVE, rounds_to_win = 2, round_wins = {0, 0, 1}, team_scores = {0, 100, 300}}
+		shared.game_resolve_round(&client.game, 0)
+		testing.expect(t, client.game.match.phase == .ENDED && client_match_ended(&client))
+		screen := client_end_screen(&client)
+		testing.expectf(t, screen.result == .VICTORY && screen.winner_team == 2, "got %v winner %d", screen.result, screen.winner_team)
+		players[0].team, players[1].team = 1, 2
+		screen = client_end_screen(&client)
+		testing.expectf(t, screen.result == .DEFEAT && screen.winner_team == 2, "got %v winner %d", screen.result, screen.winner_team)
+	}
+
 	@(test)
 	end_screen_resolves_native_winner :: proc(t: ^testing.T) {
 		match := shared.Match_State{team_scores = {0, 300, 120}}
