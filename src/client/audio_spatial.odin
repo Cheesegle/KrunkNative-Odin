@@ -22,6 +22,7 @@ Audio_Listener :: struct {
 // Parameters handed from the game thread to the mixer thread.
 Spatial_Params :: struct {
 	spatial, stereo_source: bool,
+	hrtf: bool,                // Binaural rendering instead of equal-power panning.
 	gain: f32,                 // Distance gain including Krunker's 3D volume.
 	azimuth, elevation: f32,   // Degrees; WebAudio convention, +azimuth = right.
 }
@@ -37,7 +38,9 @@ Spatial_Node :: struct {
 	params: Spatial_Params,
 	seen_reset: u32,
 	mix: [4]f32,                 // outL = m0*inL + m1*inR, outR = m2*inL + m3*inR.
-	primed: bool,
+	primed, rendering_hrtf: bool,
+	hrtf_set: ^Hrtf_Set,         // Shared, immutable after load; nil when unavailable.
+	hrtf: Hrtf_Voice,
 }
 
 @(private="file") spatial_node_channels := [1]u32{2}
@@ -47,7 +50,8 @@ Spatial_Node :: struct {
 	outputBusCount = 1,
 }
 
-spatial_node_init :: proc(engine: ^ma.engine, node: ^Spatial_Node) -> bool {
+spatial_node_init :: proc(engine: ^ma.engine, node: ^Spatial_Node, hrtf_set: ^Hrtf_Set = nil) -> bool {
+	node.hrtf_set = hrtf_set
 	config := ma.node_config_init()
 	config.vtable = &spatial_node_vtable
 	config.pInputChannels = &spatial_node_channels[0]
@@ -148,16 +152,27 @@ spatial_target_matrix :: proc "contextless" (params: Spatial_Params) -> [4]f32 {
 spatial_node_process :: proc "c" (base: ^ma.node, frames_in: ^[^]f32, frame_count_in: ^u32, frames_out: ^[^]f32, frame_count_out: ^u32) {
 	context = runtime.default_context()
 	node := cast(^Spatial_Node)base
-	input, output := frames_in^, frames_out^
-	count := int(frame_count_out^)
+	spatial_node_render(node, frames_in^, frames_out^, int(frame_count_out^))
+}
+
+spatial_node_render :: proc "contextless" (node: ^Spatial_Node, input, output: [^]f32, count: int) {
+	snap := false
 	if params, reset, ok := spatial_node_read(node); ok {
 		node.params = params
 		if reset != node.seen_reset {
 			node.seen_reset = reset
-			node.mix = spatial_target_matrix(params)
+			snap = true
 		}
 	}
+	if node.params.spatial && node.params.hrtf && node.hrtf_set != nil {
+		// Entering binaural mode (new sound or a settings change) starts clean.
+		hrtf_voice_process(&node.hrtf, node.hrtf_set, node.params, snap || !node.rendering_hrtf, input, output, count)
+		node.rendering_hrtf = true
+		return
+	}
 	target := spatial_target_matrix(node.params)
+	if snap || node.rendering_hrtf { node.mix = target }
+	node.rendering_hrtf = false
 	if !node.params.spatial && node.mix == target {
 		copy(output[:count*2], input[:count*2])
 		return

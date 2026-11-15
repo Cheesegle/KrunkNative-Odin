@@ -24,7 +24,7 @@ when ODIN_TEST {
 	audio_decodes_assets_and_mixes_stereo :: proc(t: ^testing.T) {
 		config := shared.config_load_gameplay()
 		defer shared.config_destroy_gameplay(config)
-		audio := audio_create(config.weapons, {1, 1, 1, 1}, true)
+		audio := audio_create(config.weapons, {1, 1, 1, 1, .HRTF}, true)
 		if !testing.expect(t, audio != nil, "offline audio engine must initialize without a physical output") { return }
 		defer audio_destroy(audio)
 		for path, sample in audio.samples {
@@ -48,11 +48,11 @@ when ODIN_TEST {
 		testing.expect(t, audio_play_effect(audio, "weapon_4", position = {30, 0, -10}, spatial = true))
 		turned_left, turned_right := audio_test_energy(t, audio)
 		testing.expect(t, turned_left > 0.01 && turned_left > turned_right * 1.1, "turning around must reverse stereo direction")
-		audio_set_settings(audio, {0, 1, 1, 1})
+		audio_set_settings(audio, {0, 1, 1, 1, .HRTF})
 		muted_left, muted_right := audio_test_energy(t, audio)
 		testing.expect(t, muted_left + muted_right < 0.000001, "master mute must silence active voices immediately")
 		testing.expect(t, !audio_play_effect(audio, "weapon_4"), "muted effects must not consume new voices")
-		audio_set_settings(audio, {1, 1, 0, 1})
+		audio_set_settings(audio, {1, 1, 0, 1, .HRTF})
 		testing.expect(t, !audio_play_effect(audio, "step_0", .FOOTSTEPS), "footstep mute must be independent")
 		testing.expect(t, audio_play_effect(audio, "hit_0"), "footstep mute must preserve other effects")
 		audio_stop_all(audio)
@@ -122,7 +122,7 @@ when ODIN_TEST {
 		testing.expect(t, audio_settings_save(settings, path) && audio_settings_load(path) == settings, "volume settings must survive restarting")
 		testing.expect(t, os.write_entire_file(path, string(`{"master":5,"effects":-1,"footsteps":0.4,"ui":0}`)) == nil)
 		loaded := audio_settings_load(path)
-		testing.expect(t, loaded == Audio_Settings{1, 0, 0.4, 0}, "settings must clamp out-of-range values")
+		testing.expect(t, loaded == Audio_Settings{1, 0, 0.4, 0, .HRTF}, "settings must clamp out-of-range values")
 		testing.expect(t, os.write_entire_file(path, string("invalid json")) == nil)
 		testing.expect(t, audio_settings_load(path) == DEFAULT_AUDIO_SETTINGS, "invalid settings must fall back safely")
 		custom := shared.Weapon{sound = "mods/custom/fire.wav"}

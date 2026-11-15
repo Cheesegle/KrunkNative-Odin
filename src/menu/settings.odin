@@ -107,6 +107,14 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		ids := [4]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume"}
 		for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
 		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
+		if settings_search_show(state, "Spatial audio") {
+			if clay.UI(clay.ID("SpatialAudioRow"))(settings_row(state)) {
+				settings_label("Spatial audio", state.scale)
+				spacer()
+				settings_dropdown_field(state, SPATIAL_AUDIO_LABELS[Spatial_Audio_Mode(clamp(values.spatial_audio, 0, 1))], "SpatialAudio", .SPATIAL_AUDIO)
+			}
+		}
+		settings_note(state, "Spatial audio: HRTF (Krunker's default) places sounds in front, behind, above and below on headphones. Stereo only pans left and right.")
 	case .HUD:
 		settings_section(state, "Match")
 		settings_toggle_row(state, "Timer", "HudTimer", !values.hud.hide_timer, {kind = .HUD_TOGGLE})

@@ -4,12 +4,17 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 
-Audio_Settings :: struct { master, effects, footsteps, ui: f32 }
-DEFAULT_AUDIO_SETTINGS :: Audio_Settings{master = 0.8, effects = 1, footsteps = 0.8, ui = 0.6}
+// Stereo: WebAudio equal-power panning. HRTF: binaural (headphones), the
+// panning model Krunker uses (Howler's PannerNode default, panningModel 'HRTF').
+Spatial_Mode :: enum u8 { HRTF, STEREO }
+Audio_Settings :: struct { master, effects, footsteps, ui: f32, spatial: Spatial_Mode }
+DEFAULT_AUDIO_SETTINGS :: Audio_Settings{master = 0.8, effects = 1, footsteps = 0.8, ui = 0.6, spatial = .HRTF}
 AUDIO_SETTINGS_PATH :: "audio-settings.json"
 
 audio_settings_clamp :: proc(settings: Audio_Settings) -> Audio_Settings {
-	return {clamp(settings.master, 0, 1), clamp(settings.effects, 0, 1), clamp(settings.footsteps, 0, 1), clamp(settings.ui, 0, 1)}
+	spatial := settings.spatial
+	if spatial < min(Spatial_Mode) || spatial > max(Spatial_Mode) { spatial = DEFAULT_AUDIO_SETTINGS.spatial }
+	return {clamp(settings.master, 0, 1), clamp(settings.effects, 0, 1), clamp(settings.footsteps, 0, 1), clamp(settings.ui, 0, 1), spatial}
 }
 
 audio_settings_load :: proc(path: string = AUDIO_SETTINGS_PATH) -> Audio_Settings {
@@ -25,7 +30,7 @@ audio_settings_load :: proc(path: string = AUDIO_SETTINGS_PATH) -> Audio_Setting
 }
 
 audio_settings_save :: proc(settings: Audio_Settings, path: string = AUDIO_SETTINGS_PATH) -> bool {
-	data, err := json.marshal(audio_settings_clamp(settings))
+	data, err := json.marshal(audio_settings_clamp(settings), {use_enum_names = true})
 	if err != nil { return false }
 	defer delete(data)
 	if os.write_entire_file(path, data) != nil {

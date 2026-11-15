@@ -31,6 +31,7 @@ Audio_System :: struct {
 	settings: Audio_Settings,
 	listener: Audio_Listener,
 	nodes_ready: bool,
+	hrtf: ^Hrtf_Set,
 	serial, hit_revision: u64,
 	variation: u32,
 }
@@ -59,10 +60,10 @@ audio_load_sample :: proc(audio: ^Audio_System, path: string) -> ^Audio_Sample {
 	return sample
 }
 
-audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_device: bool = false) -> ^Audio_System {
+audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_device: bool = false, sample_rate: u32 = 48000) -> ^Audio_System {
 	audio := new(Audio_System)
 	config := ma.engine_config_init()
-	config.channels, config.sampleRate = 2, 48000
+	config.channels, config.sampleRate = 2, sample_rate
 	config.noDevice = b32(no_device)
 	result := ma.engine_init(&config, &audio.engine)
 	if result != .SUCCESS {
@@ -71,9 +72,10 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 		return nil
 	}
 	audio.samples = make(map[string]^Audio_Sample)
+	audio.hrtf = hrtf_load(ma.engine_get_sample_rate(&audio.engine))
 	audio.nodes_ready = true
 	for &voice in audio.voices {
-		if !spatial_node_init(&audio.engine, &voice.node) { audio.nodes_ready = false }
+		if !spatial_node_init(&audio.engine, &voice.node, audio.hrtf) { audio.nodes_ready = false }
 	}
 	if !audio.nodes_ready { fmt.eprintln("[Audio] Spatial mixer unavailable; positional effects are disabled.") }
 	audio.listener = {forward = {0, 0, -1}}
@@ -106,6 +108,7 @@ audio_destroy :: proc(audio: ^Audio_System) {
 	if audio == nil { return }
 	for &voice in audio.voices { if voice.sample != nil { ma.sound_uninit(&voice.sound) } }
 	for &voice in audio.voices { spatial_node_uninit(&voice.node) }
+	hrtf_destroy(audio.hrtf)
 	for path, sample in audio.samples {
 		if sample.ready { ma.sound_uninit(&sample.sound) }
 		free(sample)
@@ -129,6 +132,7 @@ audio_set_settings :: proc(audio: ^Audio_System, settings: Audio_Settings) {
 	if audio == nil { return }
 	audio.settings = settings
 	ma.engine_set_volume(&audio.engine, settings.master)
+	audio_update_spatial_voices(audio)
 	for &voice in audio.voices {
 		if voice.sample != nil { ma.sound_set_volume(&voice.sound, voice.gain * audio_channel_gain(settings, voice.channel)) }
 	}
@@ -153,8 +157,18 @@ audio_update_spatial_voices :: proc(audio: ^Audio_System) {
 	if !audio.nodes_ready { return }
 	for &voice in audio.voices {
 		if voice.sample == nil || !voice.spatial || !bool(ma.sound_is_playing(&voice.sound)) { continue }
-		spatial_node_publish(&voice.node, audio_spatial_params(audio.listener, voice.position, voice.ref_distance, voice.stereo_source), false)
+		spatial_node_publish(&voice.node, audio_voice_params(audio, &voice), false)
 	}
+}
+
+audio_voice_params :: proc(audio: ^Audio_System, voice: ^Audio_Voice) -> Spatial_Params {
+	if !voice.spatial { return {} }
+	params := audio_spatial_params(audio.listener, voice.position, voice.ref_distance, voice.stereo_source)
+	params.hrtf = audio.settings.spatial == .HRTF && audio.hrtf != nil
+	// Binaural rendering feeds each ear one channel of a stereo effect; the
+	// equal-power panner passes both at unity when the source is ahead.
+	if params.hrtf && params.stereo_source { params.gain *= math.SQRT_TWO }
+	return params
 }
 
 audio_spatial_params :: proc(listener: Audio_Listener, position: shared.Vec3, ref_distance: f32, stereo_source: bool) -> Spatial_Params {
@@ -212,8 +226,7 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	// A reused voice must not inherit the previous sound's direction or filter
 	// state; the reset flag makes the mixer snap instead of ramping from it.
 	if audio.nodes_ready {
-		params := spatial ? audio_spatial_params(audio.listener, position, ref_distance, voice.stereo_source) : Spatial_Params{}
-		spatial_node_publish(&voice.node, params, true)
+		spatial_node_publish(&voice.node, audio_voice_params(audio, voice), true)
 	}
 	return ma.sound_start(&voice.sound) == .SUCCESS
 }

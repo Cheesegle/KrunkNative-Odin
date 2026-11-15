@@ -24,7 +24,7 @@ $stage = Join-Path $work $name
 
 $binaries = @("krodin_client.exe", "krodin_server.exe", "krodin_browser.exe",
     "WebView2Loader.dll", "WebView2-LICENSE.txt", "WebView2-NOTICE.txt")
-$extras = @("VERSION", "assets/css/fonts/Rajdhani-OFL.txt")
+$extras = @("VERSION", "assets/css/fonts/Rajdhani-OFL.txt", "assets/hrtf/LICENSE-MIT-KEMAR.txt")
 # Only game data may come from the sweep manifest; anything else is a bug.
 $allowedRoots = @("assets/", "krunker-configs/")
 # User-specific, secret or test files that must never ship.

@@ -143,7 +143,7 @@ when ODIN_TEST {
 		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 44 Krunker settings. Ignored 6 unsupported.")
 		menu_apply_action(&client, action)
 		testing.expect(t, abs(client.camera.fov-110*math.PI/180) < 0.000001 && abs(client.sensitivity-1.6) < 0.0001 && client.invert_mouse && client.show_fps && client.settings_dirty, "import commits the draft like Save")
-		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && client.audio_settings == Audio_Settings{0.5, 1, 0.7, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
+		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && client.audio_settings == Audio_Settings{0.5, 1, 0.7, 0.3, .HRTF} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
 		testing.expect(t, client_settings_snapshot(&client).viewmodel == client.viewmodel_settings, "imported viewmodel persists with the client settings")
 	}
 }

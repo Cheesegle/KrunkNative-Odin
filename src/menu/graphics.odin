@@ -35,6 +35,9 @@ Quality_Settings :: struct {
 }
 Shadow_Quality :: enum i32 { KRUNKER, SHARP }
 SHADOW_QUALITY_LABELS := [Shadow_Quality]string{.KRUNKER = "Krunker", .SHARP = "Sharp"}
+// Mirrors the client's Spatial_Mode; HRTF first so the zero value is Krunker's model.
+Spatial_Audio_Mode :: enum i32 { HRTF, STEREO }
+SPATIAL_AUDIO_LABELS := [Spatial_Audio_Mode]string{.HRTF = "HRTF (headphones)", .STEREO = "Stereo"}
 Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
 DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
 LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
