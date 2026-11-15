@@ -246,6 +246,10 @@ Input :: struct {
 	swap:     u8,
 	// Client-only replay metadata; never encoded into network input packets.
 	predicted_weapon_impulse: Vec3,
+	// Predicted ramp snap target after this command. Live snapshots omit it,
+	// so reconciliation restores it from the acknowledged command.
+	predicted_ramp_fix: f32,
+	predicted_has_ramp_fix: bool,
 	// Live Krunker lag compensation metadata, captured when a shot actually
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,

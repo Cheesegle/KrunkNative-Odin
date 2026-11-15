@@ -313,7 +313,8 @@ main :: proc() {
 	if !test_sandstorm_palms() {
 		os.exit(1)
 	}
-	if !test_sandstorm_hidden_colliders() || !test_site_signs_not_solid() || !test_collision_index_matches_full_scan() {
+	if !test_sandstorm_hidden_colliders() || !test_site_signs_not_solid() || !test_collision_index_matches_full_scan() ||
+	   !test_no_collision_ramps() || !test_ramp_surface_matches_krunker() {
 		os.exit(1)
 	}
 	if !test_net_send_queue() {

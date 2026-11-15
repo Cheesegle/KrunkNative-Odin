@@ -404,9 +404,10 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 
 		// Visibility (`v`) is independent of collision. Maps use hidden blocks
 		// as solid collision volumes beneath non-colliding decorative meshes.
-		// The browser derives noCol from `l` / `col`, never from `v`.
-		no_collisions := (has_l && !is_nullish(l_val) && (!json_is_number(l_val) || get_json_f32(l_val) != 0)) ||
-		                 (has_col && !is_nullish(col_val) && (!json_is_number(col_val) || get_json_f32(col_val) != 0))
+		// The browser derives noCol from `l` / `col`, never from `v`, as
+		// `noCol: s.l || s.col`: JavaScript truthiness, so Stalk Factory's
+		// editor-written `col: false` stays solid.
+		no_collisions := (has_l && json_is_truthy(l_val)) || (has_col && json_is_truthy(col_val))
 		is_border := has_bo && !is_nullish(bo_val) && (!json_is_number(bo_val) || get_json_f32(bo_val) != 0)
 
 		switch prefab_id {
@@ -421,7 +422,14 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 		// invisible slabs players could stand on.
 		case i32(Prefab.SPHERE), i32(Prefab.POINT_LIGHT), i32(Prefab.LIGHT_CONE), i32(Prefab.SOUND_EMITTER), i32(Prefab.PARTICLES), i32(Prefab.LIQUID), i32(Prefab.SPECTATE_CAM), i32(Prefab.EVENT), i32(Prefab.SIGN), i32(Prefab.SHOWCASE), i32(Prefab.RUNE):
 			obj.collision_type = .NONE
-		case i32(Prefab.GATE), i32(Prefab.TRIGGER), i32(Prefab.TERMINAL), i32(Prefab.DEPOSIT_BOX), i32(Prefab.OBJECTIVE), i32(Prefab.BOMB_SITE), i32(Prefab.FLAG), i32(Prefab.WEAPON_PICKUP), i32(Prefab.RAMP), i32(Prefab.PREMIUM_ZONE), i32(Prefab.VERIFIED_ZONE), i32(Prefab.SCORE_ZONE), i32(Prefab.DEATH_ZONE), i32(Prefab.CHECK_POINT), i32(Prefab.TELEPORTER), i32(Prefab.LADDER):
+		// The browser's RAMP loader passes `noCol: s.l || s.col` to addRamp, which
+		// then creates no collision object at all (krunkbox current.analysis.js,
+		// `O == "RAMP"` and `this.addRamp`). Maps use such ramps as visual trim,
+		// e.g. Site's 1-unit lip above the ramp at (94, 32, 147). Solid copies made
+		// prediction climb surfaces the server does not have.
+		case i32(Prefab.RAMP):
+			obj.collision_type = no_collisions ? Collision_Type.NONE : Collision_Type.BOX
+		case i32(Prefab.GATE), i32(Prefab.TRIGGER), i32(Prefab.TERMINAL), i32(Prefab.DEPOSIT_BOX), i32(Prefab.OBJECTIVE), i32(Prefab.BOMB_SITE), i32(Prefab.FLAG), i32(Prefab.WEAPON_PICKUP), i32(Prefab.PREMIUM_ZONE), i32(Prefab.VERIFIED_ZONE), i32(Prefab.SCORE_ZONE), i32(Prefab.DEATH_ZONE), i32(Prefab.CHECK_POINT), i32(Prefab.TELEPORTER), i32(Prefab.LADDER):
 			obj.collision_type = .BOX
 		case:
 			if prefab_id < 0 || prefab_id > i32(Prefab.KNIGHT) {
@@ -605,6 +613,19 @@ map_face_mask_native :: proc(raw: u32) -> u32 {
 		(((raw >> 5) & 1) << 3) |
 		(((raw >> 3) & 1) << 4) |
 		(((raw >> 2) & 1) << 5)
+}
+
+// JavaScript truthiness of a map JSON value.
+json_is_truthy :: proc(val: json.Value) -> bool {
+	switch v in val {
+	case json.Null: return false
+	case json.Boolean: return bool(v)
+	case json.Integer: return v != 0
+	case json.Float: return v != 0 && v == v
+	case json.String: return len(v) > 0
+	case json.Array, json.Object: return true
+	}
+	return false
 }
 
 is_nullish :: proc(val: json.Value) -> bool {
