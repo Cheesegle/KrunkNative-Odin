@@ -404,9 +404,10 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 
 		// Visibility (`v`) is independent of collision. Maps use hidden blocks
 		// as solid collision volumes beneath non-colliding decorative meshes.
-		// The browser derives noCol from `l` / `col`, never from `v`.
-		no_collisions := (has_l && !is_nullish(l_val) && (!json_is_number(l_val) || get_json_f32(l_val) != 0)) ||
-		                 (has_col && !is_nullish(col_val) && (!json_is_number(col_val) || get_json_f32(col_val) != 0))
+		// The browser derives noCol from `l` / `col`, never from `v`, as
+		// `noCol: s.l || s.col`: JavaScript truthiness, so Stalk Factory's
+		// editor-written `col: false` stays solid.
+		no_collisions := (has_l && json_is_truthy(l_val)) || (has_col && json_is_truthy(col_val))
 		is_border := has_bo && !is_nullish(bo_val) && (!json_is_number(bo_val) || get_json_f32(bo_val) != 0)
 
 		switch prefab_id {
@@ -421,7 +422,14 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 		// invisible slabs players could stand on.
 		case i32(Prefab.SPHERE), i32(Prefab.POINT_LIGHT), i32(Prefab.LIGHT_CONE), i32(Prefab.SOUND_EMITTER), i32(Prefab.PARTICLES), i32(Prefab.LIQUID), i32(Prefab.SPECTATE_CAM), i32(Prefab.EVENT), i32(Prefab.SIGN), i32(Prefab.SHOWCASE), i32(Prefab.RUNE):
 			obj.collision_type = .NONE
-		case i32(Prefab.GATE), i32(Prefab.TRIGGER), i32(Prefab.TERMINAL), i32(Prefab.DEPOSIT_BOX), i32(Prefab.OBJECTIVE), i32(Prefab.BOMB_SITE), i32(Prefab.FLAG), i32(Prefab.WEAPON_PICKUP), i32(Prefab.RAMP), i32(Prefab.PREMIUM_ZONE), i32(Prefab.VERIFIED_ZONE), i32(Prefab.SCORE_ZONE), i32(Prefab.DEATH_ZONE), i32(Prefab.CHECK_POINT), i32(Prefab.TELEPORTER), i32(Prefab.LADDER):
+		// The browser's RAMP loader passes `noCol: s.l || s.col` to addRamp, which
+		// then creates no collision object at all (krunkbox current.analysis.js,
+		// `O == "RAMP"` and `this.addRamp`). Maps use such ramps as visual trim,
+		// e.g. Site's 1-unit lip above the ramp at (94, 32, 147). Solid copies made
+		// prediction climb surfaces the server does not have.
+		case i32(Prefab.RAMP):
+			obj.collision_type = no_collisions ? Collision_Type.NONE : Collision_Type.BOX
+		case i32(Prefab.GATE), i32(Prefab.TRIGGER), i32(Prefab.TERMINAL), i32(Prefab.DEPOSIT_BOX), i32(Prefab.OBJECTIVE), i32(Prefab.BOMB_SITE), i32(Prefab.FLAG), i32(Prefab.WEAPON_PICKUP), i32(Prefab.PREMIUM_ZONE), i32(Prefab.VERIFIED_ZONE), i32(Prefab.SCORE_ZONE), i32(Prefab.DEATH_ZONE), i32(Prefab.CHECK_POINT), i32(Prefab.TELEPORTER), i32(Prefab.LADDER):
 			obj.collision_type = .BOX
 		case:
 			if prefab_id < 0 || prefab_id > i32(Prefab.KNIGHT) {
@@ -489,17 +497,42 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 			map_inst.max_dim.z = obj.position.z + obj.scale.z * 0.5
 		}
 
-		if obj.objective || obj.score_zone {
+		if obj.objective {
 			// Objective UIDs have their own namespace, separate from object
-			// indices. Authored objId is one-based, as in the browser loader.
+			// indices. Krunker's loader passes `{objId: parseInt(s.obi)}` to
+			// addObjective, which clamps the one-based authored id to 1..10;
+			// without one it takes the next free uid after earlier objectives.
+			// Hardpoint rotates by uid, so object order must not decide it.
+			authored: i32
+			if id, has := raw_obj["obi"]; has {
+				authored = i32(get_json_f32(id))
+			} else if id, has_legacy := raw_obj["objId"]; has_legacy {
+				authored = i32(get_json_f32(id))
+			}
+			if authored != 0 {
+				obj.objective_id = clamp(authored, 1, 10) - 1
+			} else {
+				uid, count: i32
+				found := false
+				for previous in map_inst.objects {
+					if !previous.objective { continue }
+					count += 1
+					if previous.objective_id > uid {
+						uid = previous.objective_id + 1
+						found = true
+					} else if previous.objective_id == uid {
+						uid += 1
+					}
+				}
+				obj.objective_id = found ? uid : count
+			}
+		} else if obj.score_zone {
+			// Score zones are a separate list in Krunker (manager.scorezones).
 			count: i32
 			for previous in map_inst.objects {
-				if previous.objective || previous.score_zone { count += 1; obj.objective_id = max(obj.objective_id, previous.objective_id + 1) }
+				if previous.score_zone { count += 1 }
 			}
-			obj.objective_id = max(obj.objective_id, count)
-			if id, authored := raw_obj["objId"]; authored {
-				if n := get_json_f32(id); n != 0 { obj.objective_id = i32(clamp(n, 1, 10)) - 1 }
-			}
+			obj.objective_id = count
 		}
 		append(&map_inst.objects, obj)
 	}
@@ -607,6 +640,19 @@ map_face_mask_native :: proc(raw: u32) -> u32 {
 		(((raw >> 2) & 1) << 5)
 }
 
+// JavaScript truthiness of a map JSON value.
+json_is_truthy :: proc(val: json.Value) -> bool {
+	switch v in val {
+	case json.Null: return false
+	case json.Boolean: return bool(v)
+	case json.Integer: return v != 0
+	case json.Float: return v != 0 && v == v
+	case json.String: return len(v) > 0
+	case json.Array, json.Object: return true
+	}
+	return false
+}
+
 is_nullish :: proc(val: json.Value) -> bool {
 	#partial switch v in val {
 	case json.Null:
@@ -632,10 +678,24 @@ map_object_blocks_sight :: proc(object: ^Object) -> bool {
 	return true
 }
 
+// Cost: a loaded map scans only its collision index (no-collision objects
+// never block), and a box whose bounds miss the segment's bounding box is
+// rejected before the flag checks and the slab test. On bastion this is about
+// 6x cheaper than testing every object (~1.8 us instead of ~12.8 us for an
+// unblocked ray; see healthbar_visibility_cost_on_bastion).
 map_can_see :: proc(map_inst: ^Map, from, to: Vec3) -> bool {
 	if map_inst == nil { return true }
 	segment := to - from
-	for object in map_inst.objects {
+	lo := Vec3{min(from.x, to.x), min(from.y, to.y), min(from.z, to.z)}
+	hi := Vec3{max(from.x, to.x), max(from.y, to.y), max(from.z, to.z)}
+	count := map_inst.collision_indexed ? len(map_inst.collision_objects) : len(map_inst.objects)
+	for i in 0 ..< count {
+		object := map_inst.objects[map_inst.collision_indexed ? int(map_inst.collision_objects[i]) : i]
+		if object == nil { continue }
+		half_x, half_z := object.scale.x*0.5, object.scale.z*0.5
+		if object.position.x - half_x > hi.x || object.position.x + half_x < lo.x ||
+			object.position.z - half_z > hi.z || object.position.z + half_z < lo.z ||
+			object.position.y > hi.y || object.position.y + object.scale.y < lo.y { continue }
 		if !map_object_blocks_sight(object) { continue }
 		if t, _, hit := ray_box_hit(from, segment, object.position, object.scale); hit && t < 1 { return false }
 	}

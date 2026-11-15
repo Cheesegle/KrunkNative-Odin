@@ -4,6 +4,7 @@ import "core:math/rand"
 
 game_clear_players :: proc(game: ^Game) {
 	clear(&game.presentation_events)
+	clear(&game.kill_events)
 	clear(&game.projectiles)
 	delete(game.players)
 	game.players = nil
@@ -31,16 +32,43 @@ game_init_match :: proc(game: ^Game) {
 		return
 	}
 
+	// Hardpoint sites are Krunker's manager.objectives. Maps without any
+	// fall back to their score zones, which keep their own namespace.
+	has_objectives := false
+	for object in game.map_inst.objects {
+		if object.objective { has_objectives = true; break }
+	}
 	for object, index in game.map_inst.objects {
-		if object.score_zone || object.objective {
+		if has_objectives ? object.objective : object.score_zone {
 			append(&game.objective_indices, i32(index))
 		}
 	}
+	// Order by uid (stable): Krunker rotates through uids, not object order.
+	for i in 1..<len(game.objective_indices) {
+		for j := i; j > 0 && game.map_inst.objects[game.objective_indices[j - 1]].objective_id > game.map_inst.objects[game.objective_indices[j]].objective_id; j -= 1 {
+			game.objective_indices[j - 1], game.objective_indices[j] = game.objective_indices[j], game.objective_indices[j - 1]
+		}
+	}
 
+	game_reset_objective(game)
+}
+
+// active_zone holds the objective uid, as on the Krunker wire.
+game_set_objective_slot :: proc(game: ^Game, slot: int) {
+	object_index := game.objective_indices[slot]
+	game.match.objective.active_zone = game.map_inst.objects[object_index].objective_id
+	game.match.objective.active_object_index = object_index
+	game.match.objective.owner_team = 0
+	game.match.objective.contested = false
+	game.match.objective.score_accumulator = 0
+	game.match.objective.rotation_remaining = max(1.0, game.config.objective_rotation_time)
+}
+
+// Krunker's gameStart sets activeObjective = -1 and calls nextObjective,
+// which selects uid 0 (the lowest uid here, if a map skips 0).
+game_reset_objective :: proc(game: ^Game) {
 	if len(game.objective_indices) > 0 {
-		game.match.objective.active_zone = 0
-		game.match.objective.active_object_index = game.objective_indices[0]
-		game.match.objective.rotation_remaining = max(1.0, game.config.objective_rotation_time)
+		game_set_objective_slot(game, 0)
 	}
 }
 
@@ -76,14 +104,7 @@ game_resolve_round :: proc(game: ^Game, round_winner: i32) {
 		map_reset(game.map_inst)
 	}
 
-	if len(game.objective_indices) > 0 {
-		game.match.objective.active_zone = 0
-		game.match.objective.active_object_index = game.objective_indices[0]
-		game.match.objective.owner_team = 0
-		game.match.objective.contested = false
-		game.match.objective.score_accumulator = 0
-		game.match.objective.rotation_remaining = max(1.0, game.config.objective_rotation_time)
-	}
+	game_reset_objective(game)
 
 	for player in game.players {
 		if player != nil {
@@ -97,13 +118,16 @@ game_rotate_objective :: proc(game: ^Game) {
 		return
 	}
 
-	next := (game.match.objective.active_zone + 1) % i32(len(game.objective_indices))
-	game.match.objective.active_zone = next
-	game.match.objective.active_object_index = game.objective_indices[next]
-	game.match.objective.owner_team = 0
-	game.match.objective.contested = false
-	game.match.objective.score_accumulator = 0
-	game.match.objective.rotation_remaining = max(1.0, game.config.objective_rotation_time)
+	// getNextObjective: the objective whose uid is activeObjective + 1,
+	// otherwise wrap to the first.
+	next := 0
+	for object_index, slot in game.objective_indices {
+		if game.map_inst.objects[object_index].objective_id == game.match.objective.active_zone + 1 {
+			next = slot
+			break
+		}
+	}
+	game_set_objective_slot(game, next)
 }
 
 game_update_objective :: proc(game: ^Game, delta: f32) {
@@ -299,7 +323,7 @@ game_tick :: proc(game: ^Game, now, delta: f32) {
 						continue
 					}
 
-					kill_info := Player_Kill_Info{}
+					kill_info := Player_Kill_Info{weapon_id = -1}
 
 					nuke_reward += 50
 					player_kill(player, game.nuke_player, &kill_info, true)
@@ -359,6 +383,7 @@ game_destroy :: proc(game: ^Game) {
 
 	game_clear_players(game)
 	delete(game.impacts)
+	delete(game.kill_events)
 	delete(game.presentation_events)
 	delete(game.projectiles)
 	delete(game.objective_indices)

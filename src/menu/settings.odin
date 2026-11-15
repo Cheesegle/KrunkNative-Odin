@@ -34,6 +34,7 @@ settings_window :: proc(state: ^State, view: View) {
 				}
 				spacer()
 				if state.settings_tab == .GAMEPLAY { settings_crosshair_preview(state) }
+				if state.settings_tab == .HUD && !settings_searching(state) { settings_damage_preview(state) }
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("KRODIN", 16, s, SETTINGS_MUTED) }
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
@@ -42,7 +43,8 @@ settings_window :: proc(state: ^State, view: View) {
 					spacer()
 					// Krunker's header holds a 220px search field (settSearch, placeholder generic.search).
 					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(232*s)}, padding = {right = u16(12*s)}}}) { settings_search_field(state) }
-					// Krunker's settings header places Export, then Import (settings.export/settings.import).
+					// Krunker's settings header places Reset, Export, then Import (settings.reset/settings.export/settings.import).
+					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s)}, padding = {right = u16(12*s)}}}) { settings_button(state, "Reset", "SettingsReset", {kind = .SETTINGS_RESET_OPEN}, enabled = settings_reset_available(state)) }
 					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s)}}}) { settings_button(state, "Export", "SettingsExport", {kind = .SETTINGS_EXPORT}) }
 					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(132*s), height = clay.SizingFixed(48*s)}, padding = {left = u16(12*s)}}}) { settings_button(state, "Import", "SettingsImport", {kind = .SETTINGS_IMPORT_OPEN}) }
 				}
@@ -69,6 +71,7 @@ settings_window :: proc(state: ^State, view: View) {
 	}
 	settings_dropdown_menu(state, view)
 	settings_import_popup(state)
+	settings_reset_popup(state)
 }
 
 // One tab's sections and rows. Search lays out every tab through this too; the
@@ -101,6 +104,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_viewmodel(state)
 		settings_trails(state)
 		settings_crosshair(state)
+		settings_hitmarker(state)
 	case .AUDIO:
 		settings_section(state, "Volume")
 		labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}
@@ -128,6 +132,11 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Players")
 		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
 		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+		settings_section(state, "Killfeed")
+		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
+		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
+		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
+		settings_damage(state)
 	}
 }
 
@@ -166,6 +175,70 @@ settings_import_popup :: proc(state: ^State) {
 		}
 		if state.settings_message_length > 0 && state.settings_message_error { text(settings_message(state), 16, s, {255, 100, 100, 255}) }
 		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Import", "ImportConfirm", {kind = .SETTINGS_IMPORT}, selected = true) }
+	}
+}
+
+settings_reset_available :: proc(state: ^State) -> bool { return state.settings_defaults != {} }
+
+// Krunker's resetSettings: confirm("Are you sure you want to reset all your
+// settings?"), then every setting and key bind returns to its default. Here
+// the reset fills the draft only: Save applies and persists it, Cancel in the
+// footer discards it. "Reset <tab> only" is a Krodin extra.
+settings_reset_popup :: proc(state: ^State) {
+	if !state.reset_open { return }
+	s := state.scale
+	state.control_count = 0 // Settings behind the popup ignore Tab and the mouse.
+	if clay.UI(clay.ID("ResetPopup"))({
+		layout = {sizing = {width = clay.SizingFixed(640*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(28*s)), childGap = u16(16*s), childAlignment = {x = .Center}},
+		backgroundColor = SETTINGS_DARK, cornerRadius = clay.CornerRadiusAll(8*s), border = {color = SETTINGS_LINE, width = clay.BorderOutside(1)},
+		floating = {attachTo = .ElementWithId, parentId = clay.ID("Overlay").id, zIndex = 20, attachment = {element = .CenterCenter, parent = .CenterCenter}},
+	}) {
+		text("Reset Settings", 28, s)
+		text("Are you sure you want to reset all your settings?", 19, s)
+		text("Every tab returns to its default, key binds included.", 17, s, SETTINGS_MUTED)
+		text("Save keeps the reset; Cancel restores your settings.", 17, s, SETTINGS_MUTED)
+		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Reset all settings", "ResetConfirm", {kind = .SETTINGS_RESET}, selected = true) }
+		if !settings_searching(state) {
+			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, fmt.tprintf("Reset %s only", SETTINGS_TABS[state.settings_tab]), "ResetTab", {kind = .SETTINGS_RESET, index = 1}) }
+		}
+		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Keep my settings", "ResetCancel", {kind = .SETTINGS_RESET_CLOSE}) }
+	}
+}
+
+// Escape or a click outside the popup closes it without changing anything.
+settings_reset_interact :: proc(state: ^State, input: Input) -> bool {
+	if input.escape && !state.previous.escape || input.down && !state.previous.down && !clay.PointerOver(clay.ID("ResetPopup")) {
+		state.reset_open, state.pressed, state.focus = false, 0, clay.ID("SettingsReset").id
+		return true
+	}
+	return false // The buttons use the normal press/release and keyboard handling.
+}
+
+// Restores the settings one tab shows. Rows shared between tabs (display and
+// master volume on Main, Show FPS on Main and HUD) reset from either tab.
+settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, tab: Settings_Tab) {
+	switch tab {
+	case .MAIN:
+		draft.mouse_dpi, draft.sensitivity, draft.ads_sensitivity = defaults.mouse_dpi, defaults.sensitivity, defaults.ads_sensitivity
+		draft.invert_mouse, draft.advanced_sensitivity = defaults.invert_mouse, defaults.advanced_sensitivity
+		draft.audio_volumes[0] = defaults.audio_volumes[0]
+		draft.display_mode, draft.resolution_index, draft.fullscreen_index = defaults.display_mode, defaults.resolution_index, defaults.fullscreen_index
+		draft.show_fps = defaults.show_fps
+	case .INPUT:
+		draft.bindings = defaults.bindings
+	case .VIDEO:
+		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
+		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
+		draft.vsync, draft.menu_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.quality
+	case .VISUALS:
+		draft.visuals = defaults.visuals
+	case .GAMEPLAY:
+		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
+		draft.hitmarker = defaults.hitmarker
+	case .AUDIO:
+		draft.audio_volumes = defaults.audio_volumes
+	case .HUD:
+		draft.hud, draft.show_fps, draft.damage = defaults.hud, defaults.show_fps, defaults.damage
 	}
 }
 

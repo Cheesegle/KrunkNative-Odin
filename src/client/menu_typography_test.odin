@@ -217,7 +217,7 @@ when ODIN_TEST {
 				testing.expect(t, state.errors == 0, "menu layout reported an error")
 				if scenario >= 46 {
 					heading := clay.GetElementData(clay.ID("SettingsHeading")).boundingBox
-					for id in ([]string{"SettingsSearch", "SettingsExport", "SettingsImport"}) {
+					for id in ([]string{"SettingsSearch", "SettingsReset", "SettingsExport", "SettingsImport"}) {
 						box := clay.GetElementData(clay.ID(id)).boundingBox
 						testing.expectf(t, box.width > 0 && box.x >= heading.x && box.x+box.width <= heading.x+heading.width+1 && box.y >= heading.y && box.y+box.height <= heading.y+heading.height+1, "%s must fit in the settings header at %v", id, size)
 					}
@@ -237,6 +237,11 @@ when ODIN_TEST {
 							testing.expect(t, box.width > 200*state.scale && box.height >= 44*state.scale && box.x >= overlay.x && box.x+box.width <= overlay.x+overlay.width,
 								"both binding columns must fit horizontally and remain large enough to click")
 							continue // The full action list scrolls vertically.
+						}
+						if control.action.kind == .UNBIND_KEY {
+							testing.expect(t, box.width >= 40*state.scale && box.height >= 44*state.scale && box.x >= overlay.x && box.x+box.width <= overlay.x+overlay.width,
+								"each binding slot's unbind button must fit horizontally and remain large enough to click")
+							continue
 						}
 						if state.settings_dropdown == .NONE && (menuui.settings_searching(&state) || state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
 							testing.expect(t, box.width > 0 && box.height > 0 && box.x >= overlay.x-1 && box.x+box.width <= overlay.x+overlay.width+1, "scrolling settings must fit horizontally")

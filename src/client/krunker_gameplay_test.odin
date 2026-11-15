@@ -7,6 +7,7 @@ import "core:strings"
 import "core:testing"
 import shared "../shared"
 import kproto "../krunker"
+import menuui "../menu"
 
 when ODIN_TEST {
 	gameplay_packet :: proc(world: ^kproto.Krunker_World_State, args: ..kproto.Krunker_Msgpack_Value) -> bool {
@@ -102,10 +103,11 @@ when ODIN_TEST {
 		gameplay_packet(world, "7", []kproto.Krunker_Msgpack_Value{i64(7), i64(350), i64(5), i64(2)})
 		testing.expect(t, world.players[0].deaths == 2)
 		testing.expect(t, gameplay_packet(world, i64(4), i64(99), f64(25), false, true))
-		color, visible := krunker_client_hit_color(&client, 10.2)
-		testing.expect(t, visible && color.x == 1 && color.y == 0.25 && world.hit_lethal)
-		_, expired := krunker_client_hit_color(&client, 10.4)
-		testing.expect(t, !expired && world.players[0].health == 100, "hit UI must expire without applying damage locally")
+		client.hitmarker_settings = menuui.DEFAULT_HITMARKER_SETTINGS
+		client_hit_marker_tick_live(&client)
+		testing.expect(t, client.hit_marker.active && client.hit_marker.color == 0xff0000 && world.hit_lethal && !world.hit_headshot, "a lethal confirmation shows the kill hitmarker")
+		hit_marker_tick(&client.hit_marker, client.hitmarker_settings, 0.4)
+		testing.expect(t, !client.hit_marker.active && world.players[0].health == 100, "hit UI must expire without applying damage locally")
 	}
 
 	@(test)
@@ -200,7 +202,7 @@ when ODIN_TEST {
 	@(test)
 	krunker_authored_objective_ids_survive_map_loading :: proc(t: ^testing.T) {
 		path := "bin/objective-wire-ids-test.json"
-		data := `{"name":"Wire IDs","spawns":[{"x":0,"y":0,"z":0}],"objects":[{"p":[0,0,0],"s":[10,10,10],"id":0},{"p":[0,0,0],"s":[10,10,10],"id":17,"objId":"5"},{"p":[0,0,0],"s":[10,10,10],"id":17}]}`
+		data := `{"name":"Wire IDs","spawns":[{"x":0,"y":0,"z":0}],"objects":[{"p":[0,0,0],"s":[10,10,10],"id":0},{"p":[0,0,0],"s":[10,10,10],"id":17,"obi":"5"},{"p":[0,0,0],"s":[10,10,10],"id":17}]}`
 		// Use enum values to keep the fixture independent of prefab numbering.
 		value, err := json.parse_string(data)
 		if !testing.expect(t, err == .None) { return }

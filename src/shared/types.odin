@@ -246,6 +246,10 @@ Input :: struct {
 	swap:     u8,
 	// Client-only replay metadata; never encoded into network input packets.
 	predicted_weapon_impulse: Vec3,
+	// Predicted ramp snap target after this command. Live snapshots omit it,
+	// so reconciliation restores it from the acknowledged command.
+	predicted_ramp_fix: f32,
+	predicted_has_ramp_fix: bool,
 	// Live Krunker lag compensation metadata, captured when a shot actually
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,
@@ -436,9 +440,16 @@ Player :: struct {
 	has_ramp_fix:                    bool,
 	idle_anim:                       f32,
 	hp_chase:                        f32,
-	// Krunker `canBSeen`: client-side nameplate visibility, refreshed every
-	// 200 ms from teams and a line-of-sight test (see healthbars.odin).
+	// Client-side nameplate visibility (healthbars.odin). can_be_seen is the
+	// latest team/lobby/line-of-sight result; nameplate_alpha eases toward it
+	// and is what the renderer uses. nameplate_seen_at is the client time of
+	// the last visible check (for the hold before fading out). The state is
+	// per life: nameplate_tracked is cleared on death, respawn and creation.
 	can_be_seen:                     bool,
+	nameplate_tracked:               bool,
+	nameplate_in_view:               bool,
+	nameplate_alpha:                 f32,
+	nameplate_seen_at:               f32,
 	position:                        Vec3,
 	last_position:                   Vec3,
 	velocity:                        Vec3,
@@ -542,7 +553,18 @@ Game_Config :: struct {
 Player_Kill_Info :: struct {
 	streak:    i32,
 	weapon_id: i32,
+	headshot:  bool,
 }
+
+// One killfeed line, produced by the authoritative simulation (player_kill)
+// and sent to native clients as a KILL_FEED packet. killer_uid is -1 for
+// environmental deaths (falling out of the map); weapon_id is -1 when there
+// is no weapon to show (nukes).
+Kill_Event :: struct {
+	victim_uid, killer_uid, weapon_id: i32,
+	headshot: bool,
+}
+KILL_EVENTS_CAPACITY :: 64
 
 Bullet_Hit_Kind :: enum u8 { Miss, World, Player }
 
@@ -653,6 +675,7 @@ Game :: struct {
 	player_count: i32,
 	players:      [dynamic]^Player,
 	impacts:      [dynamic]Bullet_Impact,
+	kill_events:  [dynamic]Kill_Event,
 	presentation_enabled: bool,
 	presentation_events: [dynamic]Presentation_Event,
 	projectiles:  [dynamic]Projectile,

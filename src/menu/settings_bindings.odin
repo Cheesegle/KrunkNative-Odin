@@ -4,7 +4,7 @@ import clay "../third_party/clay"
 
 settings_bindings :: proc(state: ^State) {
 	s := state.scale
-	settings_note(state, state.binding_reserved ? "Backtick is reserved for map rotation. Choose another key." : "Select a slot, then press a key or mouse button. Escape cancels. Delete clears the slot.")
+	settings_note(state, state.binding_reserved ? "Backtick is reserved for map rotation. Choose another key." : "Select a slot, then press a key or mouse button. Escape cancels. X, right-click or Delete unbinds a slot.")
 	if !settings_searching(state) {
 		if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(36*s)}, childGap = u16(24*s)}}) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(304*s)}}}) {}
@@ -29,11 +29,31 @@ settings_bindings :: proc(state: ^State) {
 				index := i32(action)*2+i32(slot)
 				code := state.settings_draft.bindings[action][slot]
 				capturing := state.binding_capture == index+1
-				settings_button(state, capturing ? "Press a key..." : binding_label(code), "Binding", {kind = .BIND_KEY, index = index}, selected = capturing || slot == 0 && code != 0)
+				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(6*s), childAlignment = {y = .Center}}}) {
+					settings_button(state, capturing ? "Press a key..." : binding_label(code), "Binding", {kind = .BIND_KEY, index = index}, selected = capturing || slot == 0 && code != 0)
+					settings_unbind_button(state, index, code != 0)
+				}
 			}
 		}
 	}
 	settings_note(state, "Escape always remains available for opening and closing menus.")
+}
+
+// Krunker's Key binds rows carry a red "Unbind" icon (unbindCont, which
+// stores -1 and shows "UNBOUND") beside each slot. Unbound slots keep the
+// button in place, disabled, so both columns stay aligned.
+settings_unbind_button :: proc(state: ^State, index: i32, enabled: bool) {
+	s := state.scale
+	id := clay.ID("Unbind", u32(index))
+	register(state, {id = id, action = {kind = .UNBIND_KEY, index = index}, enabled = enabled})
+	color := clay.Color{57, 54, 64, 255}
+	if enabled && clay.PointerOver(id) { color = {190, 48, 48, 255} }
+	if enabled && state.pressed == id.id { color = {150, 36, 36, 255} }
+	if clay.UI(id)({
+		layout = {sizing = {width = clay.SizingFixed(44*s), height = clay.SizingFixed(48*s)}, childAlignment = {x = .Center, y = .Center}},
+		backgroundColor = color, cornerRadius = clay.CornerRadiusAll(3*s),
+		border = {color = state.focus == id.id ? WHITE : SETTINGS_LINE, width = clay.BorderOutside(state.focus == id.id ? 2 : 1)},
+	}) { text("X", 21, s, enabled ? clay.Color{255, 120, 120, 255} : SETTINGS_LINE) }
 }
 
 settings_dropdown_field :: proc(state: ^State, label, name: string, dropdown: Settings_Dropdown, enabled: bool = true) {
@@ -55,7 +75,6 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	if state.settings_dropdown == .NONE { return }
 	s := state.scale
 	mode_labels := [3]string{"Windowed", "Borderless", "Fullscreen"}
-	filter_labels := [2]string{"Sharp", "Smooth"}
 	anisotropy_labels := [5]string{"Off", "2x", "4x", "8x", "16x"}
 	crosshair_labels := [2]string{"Precision", "Image (coming later)"}
 	shadow_quality_labels := [2]string{SHADOW_QUALITY_LABELS[.KRUNKER], SHADOW_QUALITY_LABELS[.SHARP]}
@@ -69,7 +88,6 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .DISPLAY_MODE: labels, anchor, action = mode_labels[:], "DisplayMode", .DISPLAY_MODE
 	case .MONITOR: labels, anchor, action = view.monitor_names, "Monitor", .MONITOR
 	case .RESOLUTION: labels, anchor, action = settings_resolution_options(state, view), "Resolution", .RESOLUTION_SELECT
-	case .TEXTURE_FILTER: labels, anchor, action = filter_labels[:], "TextureFiltering", .TEXTURE_FILTER
 	case .LIGHTING: labels, anchor, action = lighting_labels[:], "Lighting", .LIGHTING
 	case .SHADOW_QUALITY: labels, anchor, action = shadow_quality_labels[:], "ShadowQuality", .SHADOW_QUALITY
 	case .SPATIAL_AUDIO: labels, anchor, action = spatial_labels[:], "SpatialAudio", .SPATIAL_AUDIO

@@ -49,11 +49,16 @@ Client :: struct {
 	scroll_press: bool,
 	scroll_press_time: f64, // GetTime of the last latched press (50 ms throttle).
 	hud_settings: menuui.HUD_Settings,
+	kill_feed: Kill_Feed,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
 	trail_settings: menuui.Trail_Settings,
 	crosshair_settings: menuui.Crosshair_Settings,
+	hitmarker_settings: menuui.Hitmarker_Settings,
+	hit_marker: Hit_Marker,
+	damage_settings: menuui.Damage_Settings,
+	damage_feedback: Damage_Feedback,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
 	scoreboard_open: bool,
@@ -148,10 +153,17 @@ Client :: struct {
 	last_perf_overlay_key: bool,
 	perf:           Perf_Stats,
 	debug_ui:       ^Debug_UI,
+	// Debug window "Rendering" toggles and their line buffers (developer builds).
+	debug_render:   Debug_Render,
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
-	healthbar_visibility_checked_at: f32,
+	// Nameplate visibility scheduler (healthbars.odin): the client time of the
+	// last update, the round-robin cursor into game.players and the fractional
+	// line-of-sight checks carried to the next frame.
+	healthbar_visibility_time:   f32,
+	healthbar_visibility_cursor: int,
+	healthbar_visibility_budget: f32,
 	viewport_width: i32,
 	viewport_height: i32,
 }
@@ -1083,6 +1095,7 @@ client_tick_impacts :: proc(client: ^Client, delta: f32) {
 		client_add_tracer(client, &impact)
 		client_add_bullet_hole(client, &impact)
 	}
+	when KRODIN_DEV { debug_render_record_impacts(client, glfw.GetTime()) }
 	clear(&client.game.impacts)
 	client_tick_bullet_holes(client, delta)
 	client_tick_tracers(client, delta)
@@ -1415,6 +1428,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
+	client_tick_kill_feed(client, delta)
 	client_tick_projectiles(client)
 	krunker_client_tick_explosions(client, delta)
 
@@ -1471,6 +1485,8 @@ client_render_world :: proc(client: ^Client) {
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	// Hitbox/collision wireframes, depth-tested against the world just drawn.
+	when KRODIN_DEV { debug_render_after_world(client) }
 	client.camera.fov = saved_fov
 
 	phase_mark(.RENDER_VIEWMODEL)
@@ -1481,6 +1497,7 @@ client_render_world :: proc(client: ^Client) {
 	g_shadow_viewmodel_pass = true
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	g_shadow_viewmodel_pass = false
+	when KRODIN_DEV { debug_render_after_viewmodel(client) }
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
@@ -1541,6 +1558,8 @@ main :: proc() {
 	client.viewmodel_settings = preferences.viewmodel
 	client.trail_settings = preferences.trails
 	client.crosshair_settings = preferences.crosshair
+	client.hitmarker_settings = preferences.hitmarker
+	client.damage_settings = preferences.damage
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
@@ -1612,6 +1631,7 @@ main :: proc() {
 
 	glfw.SwapInterval(client.vsync ? 1 : 0)
 	client_apply_display_settings(client)
+	defer software_cursor_fini()
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	client.scene = scene_init()
@@ -1637,7 +1657,9 @@ main :: proc() {
 		if client.audio_settings_dirty { audio_settings_save(client.audio_settings) }
 		audio_destroy(client.audio)
 	}
-	client.game.presentation_enabled = client.audio != nil
+	// Hitmarkers and damage feedback read HIT and DAMAGE events even when
+	// audio is unavailable.
+	client.game.presentation_enabled = true
 
 	if len(options.class_name) > 0 {
 		client.selected_class = i32(shared.class_config_index(options.class_name))
@@ -1687,6 +1709,7 @@ main :: proc() {
 		g_draw_calls = 0
 		phase_frame_begin()
 
+		software_cursor_update(client.window)
 		phase_mark(.TICK)
 		client_tick(client, now, delta)
 		gl_check("frame")
@@ -1704,6 +1727,7 @@ main :: proc() {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))
 		}
+		software_cursor_render(client)
 		swap_start := glfw.GetTime()
 		phase_mark(.SWAP_BUFFERS)
 		glfw.SwapBuffers(client.window)
@@ -1743,6 +1767,7 @@ main :: proc() {
 	scene_fini(client.scene)
 	overlay_fini()
 	debug_ui_fini(client)
+	when KRODIN_DEV { debug_render_fini(&client.debug_render) }
 	ui_fini(client.ui)
 	resource_cache_fini()
 	delete(menu_portraits)

@@ -19,6 +19,7 @@ with the browser game.
   - Key binds, sensitivity in cm/360, video, visuals, viewmodel, crosshair and audio.
   - Fuzzy settings search.
   - Import and export of Krunker settings text.
+  - Reset to defaults (all settings, or just the current tab), with a confirmation step.
 
 ## Requirements
 
@@ -93,7 +94,7 @@ Settings are saved to `client-settings.json` and `audio-settings.json` in the wo
 
 ## Controls
 
-These are the default bindings. Rebind them in **Settings → Key binds**.
+These are the default bindings. Rebind them in **Settings → Key binds**: select a slot and press a key or mouse button (Escape cancels). To unbind a slot, click its **X**, right-click it, or focus it and press Delete or Backspace.
 
 | Input | Action |
 | --- | --- |
@@ -153,6 +154,7 @@ later ones are broad and may change.
   - [x] Key binds, cm/360 sensitivity, video, visuals, viewmodel, Precision crosshair, trails and audio.
   - [x] Fuzzy settings search.
   - [x] Krunker settings import/export.
+  - [x] Reset settings to defaults.
 - [x] Fixed the fullscreen resolution picker and the mid-round class-change softlock.
 
 ### Phase 1: Playable core

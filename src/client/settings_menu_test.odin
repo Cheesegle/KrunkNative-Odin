@@ -60,7 +60,7 @@ when ODIN_TEST {
 		client.menu.settings_draft = {sensitivity = 1.235, mouse_dpi = 1600, show_fps = true, audio_volumes = {0.5, 0.7, 0.9, 0.2}, spatial_audio = 1, bindings = bindings, hud = {hide_timer = true, hide_game_score = true}}
 		client.menu.settings_draft.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 		client.menu.settings_draft.visuals.values[.GAMMA] = 1.2
-		client.menu.settings_draft.quality = {smooth_textures = true, anisotropy = 4}
+		client.menu.settings_draft.quality = {anisotropy = 4}
 		client.menu.settings_draft.fov = 105
 		client.menu.settings_draft.ads_sensitivity = 0.75
 		client.menu.settings_draft.advanced_sensitivity, client.menu.settings_draft.invert_mouse = true, true
@@ -86,7 +86,7 @@ when ODIN_TEST {
 			"Save must apply all audio channels and the spatial mode, and schedule their persistence")
 		testing.expect(t, client.bindings == bindings && client.hud_settings.hide_timer && !client.hud_settings.hide_round_score && client.hud_settings.hide_game_score && client.settings_dirty,
 			"Save must apply both bindings and each HUD preference, and persist the changes")
-		testing.expect(t, client.visual_settings.values[.GAMMA] == 1.2 && client.quality_settings == menuui.Quality_Settings{smooth_textures = true, anisotropy = 4},
+		testing.expect(t, client.visual_settings.values[.GAMMA] == 1.2 && client.quality_settings == menuui.Quality_Settings{anisotropy = 4},
 			"Save must commit graphics settings alongside the other categories")
 	}
 
@@ -103,7 +103,7 @@ when ODIN_TEST {
 		settings.monitor_index, settings.display_mode, settings.resolution_index, settings.vsync = 1, 2, 2, true
 		settings.visuals.values[.GAMMA], settings.visuals.values[.AMBIENT] = 1.25, 0.75
 		settings.visuals.hide_cats, settings.visuals.hide_extra_props = true, true
-		settings.quality = {smooth_textures=true, anisotropy=8}
+		settings.quality = {anisotropy=8}
 		settings.trails = {hide_others=true, hide_yours=true}
 		settings.crosshair.values[.OPACITY], settings.crosshair.values[.GAP] = 0.4, -3
 		settings.crosshair.color, settings.crosshair.shadow_color = 0x12ab34, 0x101020

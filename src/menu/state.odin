@@ -8,13 +8,25 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, SPATIAL_AUDIO }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
-HUD_Settings :: struct { hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool }
+// hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
+// (1..10, default 8), with 0 (a file without the key) meaning the default.
+HUD_Settings :: struct {
+	hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool,
+	hide_kill_feed: bool,
+	kill_feed_limit: i32,
+}
+KILL_FEED_DEFAULT_LIMIT :: 8
+KILL_FEED_MAX_LIMIT :: 10
+kill_feed_limit :: proc(settings: HUD_Settings) -> int {
+	if settings.kill_feed_limit <= 0 { return KILL_FEED_DEFAULT_LIMIT }
+	return int(min(settings.kill_feed_limit, KILL_FEED_MAX_LIMIT))
+}
 Settings_Values :: struct {
 	display_mode, resolution_index, monitor_index: i32,
 	fullscreen_index: i32, // Index into View.fullscreen_options.
@@ -34,6 +46,8 @@ Settings_Values :: struct {
 	viewmodel: Viewmodel_Settings,
 	trails: Trail_Settings,
 	crosshair: Crosshair_Settings,
+	hitmarker: Hitmarker_Settings,
+	damage: Damage_Settings,
 }
 Class :: struct { id: i32, name, weapon: string, health: i32, speed: f32, wall_jump, available: bool, reason: string, used, limit: int, portrait, weapon_icon: rawptr }
 Secondary :: struct { id: i32, name: string, icon: rawptr }
@@ -79,6 +93,8 @@ View :: struct {
 	viewmodel: Viewmodel_Settings,
 	trails: Trail_Settings,
 	crosshair: Crosshair_Settings,
+	hitmarker: Hitmarker_Settings,
+	damage: Damage_Settings,
 	max_anisotropy: f32,
 	fov: f32,
 	sensitivity, mouse_dpi: f32,
@@ -87,11 +103,16 @@ View :: struct {
 	audio_volumes: [4]f32,
 	spatial_audio: i32, // Spatial_Audio_Mode: 0 HRTF (Krunker), 1 Stereo.
 	show_fps: bool,
+	// What Reset restores: the client's defaults for a missing settings file
+	// (client_settings_defaults through client_settings_validate, plus the
+	// audio defaults). Reset stays disabled while this is the zero value.
+	settings_defaults: Settings_Values,
 }
 Input :: struct {
 	pointer: clay.Vector2,
 	down, tab, shift, enter, escape, left, right: bool,
 	backspace, clear_text, paste: bool,
+	delete_key, right_down: bool, // Delete and the right mouse button unbind a key bind slot.
 	text: string,
 	scroll: clay.Vector2,
 	up, down_key: bool,
@@ -132,14 +153,18 @@ State :: struct {
 	number_buffer: [24]u8,
 	number_length: int,
 	number_replace, number_invalid, number_changed: bool,
-	color_edit: i32, // 0 = none, 1 = crosshair, 2 = shadow.
+	color_edit: i32, // 0 = none; otherwise a settings_color_value field.
 	color_buffer: [16]u8,
 	color_length: int,
 	color_replace, color_invalid: bool,
 	crosshair_preview: Crosshair_Preview,
+	damage_preview: Damage_Preview,
 	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
 	// can make it several kilobytes, so the field holds up to 64 KiB.
 	import_open, import_overflow: bool,
+	// Krunker's resetSettings asks confirm("settings.reset.confirm") first.
+	reset_open: bool,
+	settings_defaults: Settings_Values, // Copied from View every frame.
 	import_buffer: [65536]u8,
 	import_length: int,
 	settings_message: [160]u8,
@@ -162,17 +187,19 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.number_edit = .NONE
 		state.color_edit = 0
 		settings_import_close(state)
+		state.reset_open = false
 		state.settings_message_length = 0
 		state.search_length = 0
 		return
 	}
+	state.settings_defaults = view.settings_defaults
 	if !state.settings_active {
 		state.settings_resolution_selected = false
 		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, spatial_audio = view.spatial_audio, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
 			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
-			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair)}
+			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage)}
 		state.settings_active = true
 	}
 	state.settings_resolution_count = i32(len(view.resolution_options))
@@ -224,6 +251,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	if state.import_open {
 		if action, handled := settings_import_interact(state, input); handled { return action }
 	}
+	if state.reset_open && settings_reset_interact(state, input) { return {} }
 	if state.number_edit != .NONE && settings_number_interact(state, input) { return {} }
 	// Capture runs before menu shortcuts: Enter, Tab, arrows and mouse buttons
 	// can all be rebound without activating another control behind the listener.
@@ -255,6 +283,23 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	focused_index := -1
 	for control, i in state.controls[:state.control_count] {
 		if control.id.id == state.focus && control.enabled { focused_index = i }
+	}
+	// Outside capture, right-clicking a key bind slot, or pressing Delete or
+	// Backspace while one is focused, unbinds it without opening the listener.
+	if input.right_down && !state.previous.right_down {
+		for control in state.controls[:state.control_count] {
+			if control.action.kind != .BIND_KEY || !control.enabled { continue }
+			data := clay.GetElementData(control.id)
+			if data.found && contains(data.boundingBox, input.pointer) && clay.PointerOver(control.id) {
+				state.focus, state.pressed = control.id.id, 0
+				binding_unbind(state, control.action.index)
+				return {kind = .UNBIND_KEY, index = control.action.index}
+			}
+		}
+	}
+	if focused_index >= 0 && state.controls[focused_index].action.kind == .BIND_KEY && (input.delete_key && !state.previous.delete_key || input.backspace && !state.previous.backspace) {
+		binding_unbind(state, state.controls[focused_index].action.index)
+		return {kind = .UNBIND_KEY, index = state.controls[focused_index].action.index}
 	}
 	// With text or focus in the search field, Escape clears the search and leaves
 	// the field instead of closing Settings, as Escape only closes the import popup.
@@ -360,6 +405,13 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.pressed = 0
 		return {}
 	}
+	if control.action.kind == .UNBIND_KEY {
+		binding_unbind(state, control.action.index)
+		state.pressed = 0
+		// The X disables itself once the slot is empty; keep focus on the row.
+		state.focus = clay.ID("Binding", u32(control.action.index)).id
+		return control.action
+	}
 	if control.action.kind == .SETTINGS_DROPDOWN {
 		state.settings_dropdown = Settings_Dropdown(control.action.index)
 		data := clay.GetScrollContainerData(clay.ID("SettingsOptions"))
@@ -372,7 +424,6 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .DISPLAY_MODE: index = state.settings_draft.display_mode
 		case .MONITOR: index = state.settings_draft.monitor_index
 		case .RESOLUTION: index = state.settings_draft.display_mode == 2 ? state.settings_draft.fullscreen_index : state.settings_draft.resolution_index
-		case .TEXTURE_FILTER: index = state.settings_draft.quality.smooth_textures ? 1 : 0
 		case .LIGHTING: index = clamp(state.settings_draft.quality.lighting, 0, 3)
 		case .SHADOW_QUALITY: index = clamp(state.settings_draft.quality.shadow_quality, 0, 1)
 		case .SPATIAL_AUDIO: index = clamp(state.settings_draft.spatial_audio, 0, 1)
@@ -388,6 +439,29 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.import_open, state.import_length, state.import_overflow = true, 0, false
 		state.settings_message_length, state.pressed = 0, 0
 		state.focus = clay.ID("ImportConfirm").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_RESET_OPEN {
+		if !settings_reset_available(state) { return {} }
+		state.reset_open, state.pressed, state.settings_message_length = true, 0, 0
+		state.binding_capture, state.binding_reserved, state.settings_dropdown = 0, false, .NONE
+		state.focus = clay.ID("ResetConfirm").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_RESET_CLOSE {
+		state.reset_open, state.pressed, state.focus = false, 0, clay.ID("SettingsReset").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_RESET {
+		state.reset_open, state.pressed, state.focus = false, 0, clay.ID("SettingsReset").id
+		if !settings_reset_available(state) { return {} }
+		if control.action.index == 1 {
+			settings_reset_tab(&state.settings_draft, state.settings_defaults, state.settings_tab)
+			settings_set_message(state, fmt.tprintf("%s reset to defaults. Save keeps them; Cancel restores your settings.", SETTINGS_TABS[state.settings_tab]), false)
+		} else {
+			state.settings_draft = state.settings_defaults
+			settings_set_message(state, "All settings reset to defaults. Save keeps them; Cancel restores your settings.", false)
+		}
 		return {}
 	}
 	if control.action.kind == .SETTINGS_IMPORT {
@@ -423,6 +497,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.color_edit, state.color_invalid = 0, false
 		state.binding_reserved = false
 		settings_import_close(state)
+		state.reset_open = false
 		state.settings_message_length = 0
 		state.search_length = 0
 		return control.action if control.action.kind == .SETTINGS_SAVE else Action{}
@@ -445,13 +520,15 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 2: state.settings_draft.visuals.night_mode = !state.settings_draft.visuals.night_mode
 			}
 			return {}
+		case .KILL_FEED_LIMIT:
+			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_limit = i32(clamp(value + 0.5, 1, KILL_FEED_MAX_LIMIT)) } // Skips NaN.
+			return {}
 		case .NIGHT_STRENGTH:
 			if value := control.action.value; value == value { state.settings_draft.visuals.night_strength = clamp(value, 0, 1) } // Skips NaN.
 			return {}
 		case .VISUAL_RESET:
 			state.settings_draft.visuals = DEFAULT_VISUAL_SETTINGS
 			return {}
-		case .TEXTURE_FILTER: state.settings_draft.quality.smooth_textures = control.action.index == 1; return {}
 		case .ANISOTROPY: state.settings_draft.quality.anisotropy = ANISOTROPY_LEVELS[clamp(control.action.index, 0, 4)]; return {}
 		case .LIGHTING: state.settings_draft.quality.lighting = clamp(control.action.index, 0, 3); return {}
 		case .SHADOW_QUALITY: state.settings_draft.quality.shadow_quality = clamp(control.action.index, 0, 1); return {}
@@ -485,6 +562,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 3: state.settings_draft.hud.hide_ping = !state.settings_draft.hud.hide_ping
 			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
+			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
 			}
 			return {}
 		case .RESOLUTION:
@@ -529,6 +607,25 @@ activate :: proc(state: ^State, control: Control) -> Action {
 				state.settings_draft.crosshair.toggles[toggle] = !state.settings_draft.crosshair.toggles[toggle]
 			}
 			return {}
+		case .HITMARKER_VALUE:
+			if control.action.index >= 0 && control.action.index < i32(len(Hitmarker_Control)) {
+				state.settings_draft.hitmarker.values[Hitmarker_Control(control.action.index)] = control.action.value
+				state.settings_draft.hitmarker = hitmarker_settings_validate(state.settings_draft.hitmarker)
+			}
+			return {}
+		case .HITMARKER_TOGGLE: state.settings_draft.hitmarker.show = !state.settings_draft.hitmarker.show; return {}
+		case .DAMAGE_VALUE:
+			if control.action.index >= 0 && control.action.index < i32(len(Damage_Control)) {
+				state.settings_draft.damage.values[Damage_Control(control.action.index)] = control.action.value
+				state.settings_draft.damage = damage_settings_validate(state.settings_draft.damage)
+			}
+			return {}
+		case .DAMAGE_TOGGLE:
+			if control.action.index >= 0 && control.action.index < i32(len(Damage_Toggle)) {
+				toggle := Damage_Toggle(control.action.index)
+				state.settings_draft.damage.toggles[toggle] = !state.settings_draft.damage.toggles[toggle]
+			}
+			return {}
 		case .AUDIO_VOLUME: state.settings_draft.audio_volumes[control.action.index] = control.action.value; return {}
 		case .FPS: state.settings_draft.show_fps = !state.settings_draft.show_fps; return {}
 		}
@@ -543,6 +640,14 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		return {}
 	}
 	return control.action
+}
+
+// Clears one key bind slot (index = action*2 + slot) in the settings draft.
+// Zero is unbound: it never reads as held, saves as 0 and exports to Krunker as -1.
+binding_unbind :: proc(state: ^State, index: i32) {
+	if index < 0 || index >= i32(len(Binding_Action))*2 { return }
+	state.settings_draft.bindings[Binding_Action(index/2)][index%2] = 0
+	state.binding_capture, state.binding_reserved = 0, false
 }
 
 back_page :: proc(state: ^State) -> Page {
@@ -561,8 +666,8 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .HOME { container = "ClassStrip" }
 		if page == .CLASSES { container = "ClassPicker" }
 	}
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO { container = "SettingsOptions" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))
