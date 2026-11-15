@@ -150,7 +150,9 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 	gl.Disable(gl.SCISSOR_TEST)
 }
 
-hud_render :: proc(client: ^Client, delta: f32) {
+// pointer_blocked is set while the pointer is over (or dragging) the debug
+// window, so its clicks and scroll never reach the menu underneath.
+hud_render :: proc(client: ^Client, delta: f32, pointer_blocked := false) {
 	width, height := glfw.GetWindowSize(client.window)
 	x, y := glfw.GetCursorPos(client.window)
 	input := menuui.Input{
@@ -172,6 +174,7 @@ hud_render :: proc(client: ^Client, delta: f32) {
 		binding_pressed = client.binding_event,
 	}
 	client.binding_event = 0
+	if pointer_blocked { debug_ui_block_menu_input(&input) }
 	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0 || client.menu.import_open || menuui.settings_search_focused(&client.menu)) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
 	client.menu_scroll = {}
 	client.menu_text_length = 0

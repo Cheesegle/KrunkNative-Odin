@@ -43,6 +43,8 @@ make                   # client + server (Linux)
 make client            # or: server, test, check
 ```
 
+**Developer build:** `.\build.bat dev` (or `make dev`) builds `bin/krodin_client_dev.exe` with debug tools compiled in (`-define:KRODIN_DEV=true`): press `F3` (rebindable) or pass `--perf-overlay` for the debug performance window (FPS, 1% low, frame/CPU/GPU time, graph, draw calls). Normal and tester builds don't include it.
+
 An optimization level can follow the target (`none`, `minimal`, `size`, `speed`, or
 `aggressive`, the default), e.g. `.\build.bat client speed`.
 

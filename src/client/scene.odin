@@ -270,6 +270,7 @@ scene_draw_mesh :: proc(mesh: ^Mesh, camera: ^Camera, state: ^Scene_Draw_State) 
 	}
 
 	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	g_draw_calls += 1
 	g_draw_stats.draw_calls += 1
 }
 
@@ -330,6 +331,7 @@ scene_draw_batches :: proc(scene: ^Scene, camera: ^Camera, state: ^Scene_Draw_St
 		}
 		basic_bind_texture(batch.key.texture)
 		gl.DrawElements(gl.TRIANGLES, batch.index_count, gl.UNSIGNED_INT, rawptr(uintptr(batch.first_index) * size_of(u32)))
+		g_draw_calls += 1
 		g_draw_stats.draw_calls += 1
 		g_draw_stats.batch_draws += 1
 	}

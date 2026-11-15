@@ -177,6 +177,7 @@ ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
 	}
 
 	gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4)
+	g_draw_calls += 1
 }
 
 ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {

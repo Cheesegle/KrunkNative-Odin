@@ -131,6 +131,12 @@ Client :: struct {
 	projectile_meshes: [dynamic]^Mesh,
 	explosions: [dynamic]Krunker_Explosion_Flash,
 	show_fps:       bool,
+	// Debug performance window: stats ring, GPU timer queries and the
+	// lazily created microui context (nil until the window is first shown).
+	perf_overlay:   bool,
+	last_perf_overlay_key: bool,
+	perf:           Perf_Stats,
+	debug_ui:       ^Debug_UI,
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
@@ -320,6 +326,7 @@ Client_Options :: struct {
 	class_name: string,
 	show_help: bool,
 	show_fps:  bool,
+	perf_overlay: bool,
 	offline:   bool,
 	asset_sweep: string,
 	bench_maps: string, // Comma-separated; empty when not benchmarking.
@@ -338,6 +345,9 @@ print_client_help :: proc() {
 	fmt.println("  -m, --map <name>      Load a map by name (for example: burg)")
 	fmt.println("  -c, --class <name>    Spawn as the given class (for example: hunter)")
 	fmt.println("      --fps             Show an FPS meter")
+	when KRODIN_DEV {
+		fmt.println("      --perf-overlay    Start with the debug performance window open (F3)")
+	}
 	fmt.println("      --offline         Run the local authoritative simulation")
 	fmt.println("      --asset-sweep <manifest.txt>")
 	fmt.println("                        Load every map, model, icon and sound in a hidden")
@@ -400,6 +410,9 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.show_help = true
 		case "--fps", "--show-fps":
 			options.show_fps = true
+		case "--perf-overlay":
+			// Developer builds only (-define:KRODIN_DEV=true); release builds ignore it.
+			when KRODIN_DEV { options.perf_overlay = true }
 		case "--offline":
 			options.offline = true
 		case "--no-batching":
@@ -1171,6 +1184,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 
 	client.last_fullscreen_key = fullscreen_key
+	when KRODIN_DEV {
+		if client_perf_overlay_toggle_update(client) { client.settings_dirty = true }
+	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
 
 	escape_key := client_action_down(client, .MENU) || glfw.GetKey(client.window, glfw.KEY_ESCAPE) == glfw.PRESS
@@ -1326,6 +1342,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client_tick_textures(client, now)
 
+	// GPU time covers the world, view model and HUD, not the debug window.
+	when KRODIN_DEV { perf_overlay_gpu_begin(client) }
 	client_render_world(client)
 
 	// Overlay pass: bars use the world camera for projection only.
@@ -1334,14 +1352,22 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 
+	// The debug window takes its input before the menu so a click or scroll
+	// over it never reaches the Clay menu underneath; it is drawn last.
+	debug_pointer := false
+	when KRODIN_DEV { debug_pointer = client.perf_overlay && debug_ui_update(client) }
 	if end_screen_visible {
 		end_screen_render(client, glfw.GetTime())
 	} else if !client.mouse_state.locked {
-		hud_render(client, delta)
+		hud_render(client, delta, debug_pointer)
 	} else {
 		overlay_render(client, delta)
 	}
 	fps_render(client)
+	when KRODIN_DEV {
+		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
+		if client.perf_overlay { debug_ui_render(client) }
+	}
 }
 
 // World and viewmodel passes. The benchmark mode draws through this too, so its
@@ -1401,6 +1427,9 @@ main :: proc() {
 	g_client = client
 	preferences := client_settings_load()
 	client.show_fps = options.show_fps || preferences.show_fps
+	// The debug window exists only in developer builds; release builds never
+	// open it, even if a dev build saved it as open.
+	when KRODIN_DEV { client.perf_overlay = options.perf_overlay || preferences.perf_overlay }
 	client.display_mode = Display_Mode(preferences.display_mode)
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
@@ -1531,6 +1560,7 @@ main :: proc() {
 	free_all(context.temp_allocator)
 
 	last_tick := f32(glfw.GetTime())
+	last_frame_start := glfw.GetTime()
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
 		frame_start := glfw.GetTime()
@@ -1538,9 +1568,16 @@ main :: proc() {
 		delta := now - last_tick
 
 		last_tick = now
+		g_draw_calls = 0
 
 		client_tick(client, now, delta)
 		client_audio_tick(client, delta)
+		// CPU time is the tick and render submission; frame time includes the
+		// swap and event polling of the previous frame.
+		when KRODIN_DEV {
+			perf_overlay_record(client, f32((frame_start-last_frame_start)*1000), f32((glfw.GetTime()-frame_start)*1000))
+		}
+		last_frame_start = frame_start
 		if client.settings_dirty {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))
@@ -1577,6 +1614,7 @@ main :: proc() {
 	scene_fini(client.fps_scene)
 	scene_fini(client.scene)
 	overlay_fini()
+	debug_ui_fini(client)
 	ui_fini(client.ui)
 	resource_cache_fini()
 	delete(menu_portraits)
