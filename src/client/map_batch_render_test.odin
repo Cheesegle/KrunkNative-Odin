@@ -16,7 +16,7 @@ when ODIN_TEST {
 	// map_batch_plan keeps coincident same-facing faces in that order, but
 	// surfaces that only meet along a line cannot all keep it without undoing
 	// the batching. Such pixels lie on contact lines; allow a few per
-	// 1280x720 frame (32 = 0.0035%; at most 7 seen). Any pixel whose depth differs fails.
+	// 1280x720 frame (32 = 0.0035%; at most 23 seen, on Sandstorm). Any pixel whose depth differs fails.
 	BATCH_EQ_MAX_TIE_PIXELS :: 32
 
 	Batch_Eq_View :: struct {
