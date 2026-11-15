@@ -13,7 +13,12 @@ Visual_Settings :: struct {
 	color_override: [Visual_Color]bool,
 	colors: [Visual_Color][3]f32,
 	hide_cats, hide_extra_props: bool,
+	// Krodin's night mode (not in Krunker): a moonlit transform of each map's
+	// own lighting. night_strength 0..1 scales it; 0 or off renders as before.
+	night_mode:     bool,
+	night_strength: f32,
 }
+DEFAULT_NIGHT_STRENGTH :: 0.7
 // Krunker's Settings > Video quality options (game.deob.js settings list near
 // line 210198): "Shadows" (shadows, default on), its advanced "Soft Shadows"
 // (softShad), "High-Res Shadows" (highResShad) and "Dynamic Shadows"
@@ -35,7 +40,7 @@ DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Ligh
 LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
 Quality_Toggle :: enum { SHADOWS, SOFT_SHADOWS, HIGH_RES_SHADOWS, DYNAMIC_SHADOWS, SELF_SHADOW }
 
-DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}}
+DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}, night_strength = DEFAULT_NIGHT_STRENGTH}
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}
@@ -57,6 +62,8 @@ visual_settings_validate :: proc(settings: Visual_Settings) -> Visual_Settings {
 	result.values[.FOG_DISTANCE] = 1
 	result.color_override = {}
 	result.colors = DEFAULT_VISUAL_SETTINGS.colors
+	if math.is_nan(result.night_strength) || math.is_inf(result.night_strength) { result.night_strength = DEFAULT_NIGHT_STRENGTH }
+	result.night_strength = clamp(result.night_strength, 0, 1)
 	return result
 }
 
@@ -99,6 +106,10 @@ settings_visuals :: proc(state: ^State) {
 	settings_toggle_row(state, "Hide cats", "HideCats", state.settings_draft.visuals.hide_cats, {kind=.VISUAL_TOGGLE, index=0})
 	settings_toggle_row(state, "Hide extra props", "HideExtraProps", state.settings_draft.visuals.hide_extra_props, {kind=.VISUAL_TOGGLE, index=1})
 	settings_note(state, "Hide extra props removes loose rubble, planks, fabric and grass. Cats have their own toggle.")
+	settings_section(state, "Night")
+	settings_toggle_row(state, "Night mode", "NightMode", state.settings_draft.visuals.night_mode, {kind=.VISUAL_TOGGLE, index=2})
+	settings_slider(state, "Night strength", "NightStrength", state.settings_draft.visuals.night_strength, 0, 1, {kind = .NIGHT_STRENGTH})
+	settings_note(state, "Night mode turns every map into a moonlit night: a dark blue sky and fog, and dim, cool light. Map lights still glow. Night strength sets how dark it gets.")
 	settings_note(state, "Reset restores the original appearance of every map.")
 	if settings_search_show(state, "Reset visuals") { settings_button(state, "Reset visuals", "ResetVisuals", {kind = .VISUAL_RESET}) }
 }
@@ -160,6 +171,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
+	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	}
 	return values.sensitivity
 }
