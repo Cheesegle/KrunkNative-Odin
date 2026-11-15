@@ -1,7 +1,5 @@
 package shared
 
-import "core:math"
-
 ARM_SCALE :: 1.2
 ARM_INSET :: -0.1
 CHEST_WIDTH :: 2.6
@@ -101,7 +99,7 @@ GAME_CONSTANTS :: Game_Constants {
 	jump_push                         = 0.1,
 	crouch_jump                       = 0.25,
 	crouch_speed                      = 7.0,
-	crouch_lean                       = math.PI * -0.1,
+	crouch_lean                       = 0, // Krunker crouchLean: the lower body drops without tilting.
 	player_speed                      = 0.42,
 	slipping_speed                    = 0.3,
 	air_speed                         = 0.047,
