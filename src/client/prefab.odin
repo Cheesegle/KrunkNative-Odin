@@ -434,6 +434,41 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		return mesh
 	}
 
+	if prefab_id == int(shared.Prefab.SPHERE) {
+		// Krunker's addSphere: generated geometry with the object's texture
+		// (`t`/`tv`, WALL by default), colour, opacity and texture offsets;
+		// double-sided, no shadows, no collision (the prefab is noCol).
+		geometry := create_sphere_geo()
+		if geometry == nil {
+			texture_release(texture_id)
+			return nil
+		}
+
+		material := basic_material_init()
+		mesh := mesh_init(geometry, &material.base)
+
+		mesh.visible = visible
+		mesh.transform.position = object.position
+		mesh.transform.rotation = rotation
+		mesh.transform.scale = object.scale
+
+		material.texture = texture_id
+		material.color = color
+		material.color.w = opacity
+		material.emissive = emissive
+		// LINK and LIQUID are the registry's transparent textures.
+		material.base.transparent = opacity != 1.0 || tex_id == 12 || tex_id == 13
+		if tex_id == 12 || tex_id == 13 {
+			material.alpha_test = 0.02
+		}
+		apply_object_material_properties(material, object, obj_obj)
+		material.face_mask = 0x3f
+		material.use_face_tex_scaling = false
+		material.receive_shadow = false
+
+		return mesh
+	}
+
 	if prefab_id == int(shared.Prefab.RAMP) {
 		geometry := create_ramp_geo()
 		if geometry == nil {

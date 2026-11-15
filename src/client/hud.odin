@@ -170,6 +170,8 @@ hud_render :: proc(client: ^Client, delta: f32, pointer_blocked := false) {
 		scroll = client.menu_scroll,
 		text = string(client.menu_text[:client.menu_text_length]),
 		backspace = glfw.GetKey(client.window, glfw.KEY_BACKSPACE) == glfw.PRESS,
+		delete_key = glfw.GetKey(client.window, glfw.KEY_DELETE) == glfw.PRESS,
+		right_down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS,
 		clear_text = glfw.GetKey(client.window, glfw.KEY_LEFT_CONTROL) == glfw.PRESS && glfw.GetKey(client.window, glfw.KEY_A) == glfw.PRESS,
 		paste = glfw.GetKey(client.window, glfw.KEY_LEFT_CONTROL) == glfw.PRESS && glfw.GetKey(client.window, glfw.KEY_V) == glfw.PRESS,
 		up = glfw.GetKey(client.window, glfw.KEY_UP) == glfw.PRESS,

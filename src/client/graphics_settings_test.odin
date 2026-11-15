@@ -94,12 +94,15 @@ when ODIN_TEST {
 		client.menu.page, client.menu.settings_active = .SETTINGS, true
 		client.menu.settings_draft.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 		client.menu.settings_draft.visuals.values[.BRIGHTNESS] = 0.5
-		client.menu.settings_draft.quality = {smooth_textures=true, anisotropy=16}
+		client.menu.settings_draft.quality = {anisotropy=16}
 		client_update_graphics(&client)
 		scene_test_pixel(t, scene, &camera, 32,32, {32,32,32})
 		filter: i32
 		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, &filter)
-		testing.expect(t, filter == gl.LINEAR_MIPMAP_LINEAR && !client.quality_settings.smooth_textures, "quality changes must preview without modifying saved settings")
+		mag_filter: i32
+		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, &mag_filter)
+		testing.expect(t, filter == gl.NEAREST_MIPMAP_NEAREST && mag_filter == gl.NEAREST, "world textures must always use Sharp (nearest) filtering")
+		testing.expect(t, client.quality_settings.anisotropy != 16, "quality changes must preview without modifying saved settings")
 		scene_render(scene, &camera, 64,64, client.graphics_sampler)
 		bound: i32
 		gl.GetIntegerv(gl.SAMPLER_BINDING, &bound)

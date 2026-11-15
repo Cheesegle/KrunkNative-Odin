@@ -1218,7 +1218,7 @@ player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 
 		if player.game != nil && player.game.map_inst != nil {
 			for object in player.game.map_inst.objects {
-				if !object.active || object.no_shoot || object.collision_type == .NONE || object.score_zone || object.objective || object.team_zone || object.bomb_site || object.flag || object.trigger || object.premium || object.verified || object.teleporter || object.checkpoint || object.pickup {
+				if !map_object_blocks_shots(object) {
 					continue
 				}
 				t, _, hit := ray_box_hit(shot_origin, shot_dir, object.position, object.scale)
@@ -1233,15 +1233,9 @@ player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 						continue
 					}
 
-					body_height := max(0.1, target.height * 0.72)
-					body_origin := Vec3{target.position.x, target.position.y, target.position.z}
-					body_scale := Vec3{target.scale * 2.2, body_height, target.scale * 2.2}
-					body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body_origin, body_scale)
-
-					head_height := max(0.1, target.height - body_height)
-					head_origin := Vec3{target.position.x, target.position.y + body_height, target.position.z}
-					head_scale := Vec3{target.scale * 1.8, head_height, target.scale * 1.8}
-					head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head_origin, head_scale)
+					body, head := player_hitboxes(target, .MELEE)
+					body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body.origin, body.scale)
+					head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head.origin, head.scale)
 
 					hit_t := body_t
 					if head_hit && (!body_hit || head_t <= body_t) {
@@ -1321,7 +1315,7 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 			headshot := false
 
 			for object, object_index in player.game.map_inst.objects {
-				if !object.active || object.no_shoot || object.collision_type == .NONE || object.score_zone || object.objective || object.team_zone || object.bomb_site || object.flag || object.trigger || object.premium || object.verified || object.teleporter || object.checkpoint || object.pickup {
+				if !map_object_blocks_shots(object) {
 					continue
 				}
 				t, normal, hit := ray_box_hit(shot_origin, shot_dir, object.position, object.scale)
@@ -1351,15 +1345,9 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 					continue
 				}
 
-				body_height := max(0.1, target.height * 0.72)
-				body_origin := Vec3{target.position.x, target.position.y, target.position.z}
-				body_scale := Vec3{target.scale * 2.0, body_height, target.scale * 2.0}
-				body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body_origin, body_scale)
-
-				head_height := max(0.1, target.height - body_height)
-				head_origin := Vec3{target.position.x, target.position.y + body_height, target.position.z}
-				head_scale := Vec3{target.scale * 1.6, head_height, target.scale * 1.6}
-				head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head_origin, head_scale)
+				body, head := player_hitboxes(target, .SHOT)
+				body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body.origin, body.scale)
+				head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head.origin, head.scale)
 
 				hit_t := body_t
 				is_head := false
