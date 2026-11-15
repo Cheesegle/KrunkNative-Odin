@@ -16,10 +16,6 @@ menu_measure_text :: proc "c" (label: clay.StringSlice, config: ^clay.TextElemen
 	return {ui_measure_text(ui, string(label.chars[:label.length]), f32(config.fontSize)), f32(config.fontSize)}
 }
 
-menu_scroll :: proc "c" (window: glfw.WindowHandle, x, y: f64) {
-	if g_client != nil && !g_client.mouse_state.locked { g_client.menu_scroll += clay.Vector2{f32(x), f32(y)} }
-}
-
 client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.Join_Link) -> bool = krunker_ws_connect) {
 	if client.access.status == .PENDING { return }
 	kproto.network_log_begin()
