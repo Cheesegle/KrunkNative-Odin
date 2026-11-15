@@ -616,6 +616,7 @@ test_objective_combat_state :: proc() -> bool {
 	zone_b := shared.Object{
 		active = true,
 		objective = true,
+		objective_id = 1,
 		collision_type = .BOX,
 		position = {100, 0, 0},
 		scale = {20, 10, 20},

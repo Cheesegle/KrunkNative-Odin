@@ -200,7 +200,7 @@ when ODIN_TEST {
 	@(test)
 	krunker_authored_objective_ids_survive_map_loading :: proc(t: ^testing.T) {
 		path := "bin/objective-wire-ids-test.json"
-		data := `{"name":"Wire IDs","spawns":[{"x":0,"y":0,"z":0}],"objects":[{"p":[0,0,0],"s":[10,10,10],"id":0},{"p":[0,0,0],"s":[10,10,10],"id":17,"objId":"5"},{"p":[0,0,0],"s":[10,10,10],"id":17}]}`
+		data := `{"name":"Wire IDs","spawns":[{"x":0,"y":0,"z":0}],"objects":[{"p":[0,0,0],"s":[10,10,10],"id":0},{"p":[0,0,0],"s":[10,10,10],"id":17,"obi":"5"},{"p":[0,0,0],"s":[10,10,10],"id":17}]}`
 		// Use enum values to keep the fixture independent of prefab numbering.
 		value, err := json.parse_string(data)
 		if !testing.expect(t, err == .None) { return }

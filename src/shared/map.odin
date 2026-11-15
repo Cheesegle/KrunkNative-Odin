@@ -489,17 +489,42 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 			map_inst.max_dim.z = obj.position.z + obj.scale.z * 0.5
 		}
 
-		if obj.objective || obj.score_zone {
+		if obj.objective {
 			// Objective UIDs have their own namespace, separate from object
-			// indices. Authored objId is one-based, as in the browser loader.
+			// indices. Krunker's loader passes `{objId: parseInt(s.obi)}` to
+			// addObjective, which clamps the one-based authored id to 1..10;
+			// without one it takes the next free uid after earlier objectives.
+			// Hardpoint rotates by uid, so object order must not decide it.
+			authored: i32
+			if id, has := raw_obj["obi"]; has {
+				authored = i32(get_json_f32(id))
+			} else if id, has_legacy := raw_obj["objId"]; has_legacy {
+				authored = i32(get_json_f32(id))
+			}
+			if authored != 0 {
+				obj.objective_id = clamp(authored, 1, 10) - 1
+			} else {
+				uid, count: i32
+				found := false
+				for previous in map_inst.objects {
+					if !previous.objective { continue }
+					count += 1
+					if previous.objective_id > uid {
+						uid = previous.objective_id + 1
+						found = true
+					} else if previous.objective_id == uid {
+						uid += 1
+					}
+				}
+				obj.objective_id = found ? uid : count
+			}
+		} else if obj.score_zone {
+			// Score zones are a separate list in Krunker (manager.scorezones).
 			count: i32
 			for previous in map_inst.objects {
-				if previous.objective || previous.score_zone { count += 1; obj.objective_id = max(obj.objective_id, previous.objective_id + 1) }
+				if previous.score_zone { count += 1 }
 			}
-			obj.objective_id = max(obj.objective_id, count)
-			if id, authored := raw_obj["objId"]; authored {
-				if n := get_json_f32(id); n != 0 { obj.objective_id = i32(clamp(n, 1, 10)) - 1 }
-			}
+			obj.objective_id = count
 		}
 		append(&map_inst.objects, obj)
 	}
