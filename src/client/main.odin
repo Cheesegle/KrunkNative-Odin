@@ -63,6 +63,9 @@ Client :: struct {
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
 	bench_seconds: f32, // Benchmark mode only.
+	// Static map batching and frustum culling (map_batch.odin). On by default;
+	// `--no-batching` turns it off for A/B comparisons.
+	render_batching: bool,
 	settings_dirty, vsync: bool,
 	monitor_index: i32,
 
@@ -271,6 +274,7 @@ Client_Options :: struct {
 	bench_maps: string, // Comma-separated; empty when not benchmarking.
 	bench_seconds: f32,
 	bench_sizes: string, // Comma-separated WxH or "native".
+	no_batching: bool,
 }
 
 print_client_help :: proc() {
@@ -292,6 +296,7 @@ print_client_help :: proc() {
 	fmt.println("                        offscreen with an uncapped frame rate, once per")
 	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
 	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
+	fmt.println("      --no-batching     Draw every map object individually, without culling")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -346,6 +351,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.show_fps = true
 		case "--offline":
 			options.offline = true
+		case "--no-batching":
+			options.no_batching = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -503,6 +510,11 @@ client_load_map :: proc(client: ^Client) {
 			mesh.map_detail_visible = mesh.visible
 			scene_add_mesh(client.scene, mesh)
 		}
+	}
+
+	map_batch_destroy(client.scene)
+	if client.render_batching {
+		map_batch_build(client.scene, client.game.map_inst)
 	}
 }
 
@@ -844,6 +856,7 @@ client_unload_map :: proc(client: ^Client) {
 		return
 	}
 
+	map_batch_destroy(client.scene)
 	for object in client.game.map_inst.objects {
 		if object.mesh != nil {
 			mesh := cast(^Mesh)object.mesh
@@ -1283,6 +1296,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 client_render_world :: proc(client: ^Client) {
 	client_update_graphics(client)
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	g_draw_stats = {}
+	client.scene.batching_enabled = client.render_batching
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
@@ -1347,6 +1362,7 @@ main :: proc() {
 	client.crosshair_settings = preferences.crosshair
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
+	client.render_batching = !options.no_batching
 
 	client.camera.zoom = 1.0
 	client.camera.fov = preferences.fov * math.PI / 180

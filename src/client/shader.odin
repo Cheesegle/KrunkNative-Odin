@@ -1,10 +1,12 @@
 package main
 
 import "core:fmt"
+import "core:strings"
 import gl "vendor:OpenGL"
 import shared "../shared"
 
-shader_compile :: proc(vertex_shader_path, fragment_shader_path: string) -> u32 {
+// `defines` (for example a "#define BATCHED" line) is inserted after the #version line.
+shader_compile :: proc(vertex_shader_path, fragment_shader_path: string, defines := "") -> u32 {
 	vertex_shader, v_ok := shared.read_file(vertex_shader_path)
 	fragment_shader, f_ok := shared.read_file(fragment_shader_path)
 
@@ -15,8 +17,12 @@ shader_compile :: proc(vertex_shader_path, fragment_shader_path: string) -> u32 
 	defer delete(vertex_shader)
 	defer delete(fragment_shader)
 
-	v_src := string(vertex_shader)
-	f_src := string(fragment_shader)
+	v_src := shader_insert_defines(string(vertex_shader), defines)
+	f_src := shader_insert_defines(string(fragment_shader), defines)
+	defer if len(defines) > 0 {
+		delete(v_src)
+		delete(f_src)
+	}
 
 	vert := gl.CreateShader(gl.VERTEX_SHADER)
 	frag := gl.CreateShader(gl.FRAGMENT_SHADER)
@@ -81,4 +87,15 @@ shader_compile :: proc(vertex_shader_path, fragment_shader_path: string) -> u32 
 	}
 
 	return program
+}
+
+shader_insert_defines :: proc(source, defines: string) -> string {
+	if len(defines) == 0 {
+		return source
+	}
+	line_end := strings.index_byte(source, '\n')
+	if line_end < 0 {
+		return strings.concatenate({source, "\n", defines})
+	}
+	return strings.concatenate({source[:line_end + 1], defines, source[line_end + 1:]})
 }
