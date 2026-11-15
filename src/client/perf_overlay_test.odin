@@ -151,6 +151,47 @@ when ODIN_TEST {
 		return debug_ui_build(client, dbg)
 	}
 
+	// Left x of every caption text and right x of the value drawn after it, in draw order.
+	perf_test_cell_edges :: proc(dbg: ^Debug_UI) -> (captions: [dynamic]i32, value_rights: [dynamic]i32) {
+		captions = make([dynamic]i32, context.temp_allocator)
+		value_rights = make([dynamic]i32, context.temp_allocator)
+		command: ^mu.Command
+		after_caption := false
+		for variant in mu.next_command_iterator(&dbg.ctx, &command) {
+			text, ok := variant.(^mu.Command_Text)
+			if !ok { continue }
+			if text.str == "avg" || text.str == "max" || text.str == "1% low" {
+				append(&captions, text.pos.x)
+				after_caption = true
+			} else if after_caption {
+				append(&value_rights, text.pos.x + debug_ui_text_width(text.font, text.str))
+				after_caption = false
+			}
+		}
+		return
+	}
+
+	@(test)
+	debug_ui_stat_cells_do_not_shift :: proc(t: ^testing.T) {
+		client, dbg := perf_test_debug_ui()
+		defer { free(dbg); free(client) }
+		perf_test_frame(client, dbg, {})
+		captions_a, rights_a := perf_test_cell_edges(dbg)
+		// The current frame jumps from 8 ms (125 FPS) to 0.5 ms (2000 FPS): the
+		// current values gain a digit, but the avg/max/1% low cells must not move.
+		perf_push(&client.perf, 0.5, 0.1)
+		perf_test_frame(client, dbg, {})
+		captions_b, rights_b := perf_test_cell_edges(dbg)
+		testing.expect(t, len(captions_a) >= 5 && len(captions_a) == len(captions_b), "every row draws its captions")
+		testing.expect(t, len(rights_a) == len(captions_a) && len(rights_b) == len(captions_b), "each caption has a value after it")
+		for i in 0..<min(len(captions_a), len(captions_b)) {
+			testing.expectf(t, captions_a[i] == captions_b[i], "caption %d moved from %d to %d", i, captions_a[i], captions_b[i])
+		}
+		for i in 0..<min(len(rights_a), len(rights_b)) {
+			testing.expectf(t, rights_a[i] == rights_b[i], "value %d is not right-aligned in a fixed cell (%d vs %d)", i, rights_a[i], rights_b[i])
+		}
+	}
+
 	@(test)
 	debug_ui_is_display_only_while_playing :: proc(t: ^testing.T) {
 		client, dbg := perf_test_debug_ui()

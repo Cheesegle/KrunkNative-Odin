@@ -209,6 +209,24 @@ debug_ui_value :: proc(ctx: ^mu.Context, text: string, color: mu.Color) {
 	mu.draw_text(ctx, font, text, {r.x + ctx.style.padding, r.y + (r.h - ctx.text_height(font))/2}, color)
 }
 
+// One fixed-width stat cell: an optional caption ("avg", "max") pinned to the
+// left and the number right-aligned, so changing digits never shift other cells.
+debug_ui_cell :: proc(ctx: ^mu.Context, caption, value: string, color, caption_color: mu.Color) {
+	r := mu.layout_next(ctx)
+	font := ctx.style.font
+	y := r.y + (r.h - ctx.text_height(font))/2
+	if len(caption) > 0 { mu.draw_text(ctx, font, caption, {r.x + ctx.style.padding, y}, caption_color) }
+	mu.draw_text(ctx, font, value, {r.x + r.w - ctx.style.padding - ctx.text_width(font, value), y}, color)
+}
+
+// Label column plus three equal value columns spanning the window body.
+debug_ui_stat_columns :: proc(ctx: ^mu.Context, label_width: i32) {
+	body := mu.get_current_container(ctx).body
+	available := body.w - label_width - ctx.style.padding*2 - ctx.style.spacing*3
+	column := max(available/3, 1)
+	mu.layout_row(ctx, {label_width, column, column, -1})
+}
+
 debug_ui_window :: proc(client: ^Client, dbg: ^Debug_UI) {
 	ctx := &dbg.ctx
 	s := dbg.scale
@@ -242,22 +260,40 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	muted := mu.Color{150, 156, 168, 255}
 	white := ctx.style.colors[.TEXT]
 	level_color :: proc(level: Perf_Level) -> mu.Color { c := perf_level_color(level); return {c[0], c[1], c[2], c[3]} }
-	mu.layout_row(ctx, {i32(92*s), -1})
-
+	label_width := i32(92*s)
+	// Numbers sit in fixed columns: current | avg | max/1% low. Each value is
+	// right-aligned in its own cell, so frequently changing digits never push
+	// the averages around.
+	debug_ui_stat_columns(ctx, label_width)
 	mu.label(ctx, "FPS")
 	if summary.frames == 0 {
-		debug_ui_value(ctx, "measuring...", muted)
+		debug_ui_cell(ctx, "", "--", muted, muted)
+		debug_ui_cell(ctx, "", "", muted, muted)
+		debug_ui_cell(ctx, "", "", muted, muted)
 	} else {
-		debug_ui_value(ctx, fmt.tprintf("%.0f   avg %.0f   1%% low %.0f", summary.fps, summary.fps_avg, summary.fps_low), level_color(perf_frame_level(summary.frame_avg, 0)))
+		fps_color := level_color(perf_frame_level(summary.frame_avg, 0))
+		debug_ui_cell(ctx, "", fmt.tprintf("%.0f", summary.fps), fps_color, muted)
+		debug_ui_cell(ctx, "avg", fmt.tprintf("%.0f", summary.fps_avg), fps_color, muted)
+		debug_ui_cell(ctx, "1% low", fmt.tprintf("%.0f", summary.fps_low), fps_color, muted)
 	}
-	mu.label(ctx, "Frame")
-	debug_ui_value(ctx, fmt.tprintf("%.2f ms   avg %.2f   max %.2f", summary.frame_ms, summary.frame_avg, summary.frame_max), white)
-	mu.label(ctx, "CPU")
-	debug_ui_value(ctx, fmt.tprintf("%.2f ms   avg %.2f", summary.cpu_ms, summary.cpu_avg), white)
-	mu.label(ctx, "GPU")
-	debug_ui_value(ctx, stats.gpu_valid ? fmt.tprintf("%.2f ms", stats.gpu_ms) : "measuring...", stats.gpu_valid ? white : muted)
+	mu.label(ctx, "Frame ms")
+	debug_ui_cell(ctx, "", fmt.tprintf("%.2f", summary.frame_ms), white, muted)
+	debug_ui_cell(ctx, "avg", fmt.tprintf("%.2f", summary.frame_avg), white, muted)
+	debug_ui_cell(ctx, "max", fmt.tprintf("%.2f", summary.frame_max), white, muted)
+	mu.label(ctx, "CPU ms")
+	debug_ui_cell(ctx, "", fmt.tprintf("%.2f", summary.cpu_ms), white, muted)
+	debug_ui_cell(ctx, "avg", fmt.tprintf("%.2f", summary.cpu_avg), white, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
+	mu.label(ctx, "GPU ms")
+	debug_ui_cell(ctx, "", stats.gpu_valid ? fmt.tprintf("%.2f", stats.gpu_ms) : "--", stats.gpu_valid ? white : muted, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
 	mu.label(ctx, "Draw calls")
-	debug_ui_value(ctx, fmt.tprintf("%d", stats.draw_calls), white)
+	debug_ui_cell(ctx, "", fmt.tprintf("%d", stats.draw_calls), white, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
+	debug_ui_cell(ctx, "", "", white, muted)
+
+	mu.layout_row(ctx, {label_width, -1})
 	mu.label(ctx, "Ping")
 	ping, ping_received, ping_available := client_ping(client)
 	if ping_available {
