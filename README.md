@@ -94,7 +94,7 @@ Settings are saved to `client-settings.json` and `audio-settings.json` in the wo
 
 ## Controls
 
-These are the default bindings. Rebind them in **Settings → Key binds**.
+These are the default bindings. Rebind them in **Settings → Key binds**: select a slot and press a key or mouse button (Escape cancels). To unbind a slot, click its **X**, right-click it, or focus it and press Delete or Backspace.
 
 | Input | Action |
 | --- | --- |

@@ -89,6 +89,7 @@ client_binding_down :: proc(window: glfw.WindowHandle, code: i32) -> bool {
 // sees after the one that consumed a Scroll press.
 client_action_down :: proc(client: ^Client, action: menuui.Binding_Action, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down, scroll := true) -> bool {
 	for code in client.bindings[action] {
+		if code == 0 { continue } // Unbound slots never fire, whatever the reader reports.
 		if code == menuui.BINDING_SCROLL {
 			if scroll && client.scroll_press && client.mouse_state.locked { return true }
 		} else if read(client.window, code) { return true }

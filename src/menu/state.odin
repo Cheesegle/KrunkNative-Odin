@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY }
@@ -94,6 +94,7 @@ Input :: struct {
 	pointer: clay.Vector2,
 	down, tab, shift, enter, escape, left, right: bool,
 	backspace, clear_text, paste: bool,
+	delete_key, right_down: bool, // Delete and the right mouse button unbind a key bind slot.
 	text: string,
 	scroll: clay.Vector2,
 	up, down_key: bool,
@@ -264,6 +265,23 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	for control, i in state.controls[:state.control_count] {
 		if control.id.id == state.focus && control.enabled { focused_index = i }
 	}
+	// Outside capture, right-clicking a key bind slot, or pressing Delete or
+	// Backspace while one is focused, unbinds it without opening the listener.
+	if input.right_down && !state.previous.right_down {
+		for control in state.controls[:state.control_count] {
+			if control.action.kind != .BIND_KEY || !control.enabled { continue }
+			data := clay.GetElementData(control.id)
+			if data.found && contains(data.boundingBox, input.pointer) && clay.PointerOver(control.id) {
+				state.focus, state.pressed = control.id.id, 0
+				binding_unbind(state, control.action.index)
+				return {kind = .UNBIND_KEY, index = control.action.index}
+			}
+		}
+	}
+	if focused_index >= 0 && state.controls[focused_index].action.kind == .BIND_KEY && (input.delete_key && !state.previous.delete_key || input.backspace && !state.previous.backspace) {
+		binding_unbind(state, state.controls[focused_index].action.index)
+		return {kind = .UNBIND_KEY, index = state.controls[focused_index].action.index}
+	}
 	// With text or focus in the search field, Escape clears the search and leaves
 	// the field instead of closing Settings, as Escape only closes the import popup.
 	if input.escape && !state.previous.escape && (state.page == .SETTINGS || state.page == .CONTROLS) && (state.search_length > 0 || settings_search_focused(state)) {
@@ -367,6 +385,13 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.binding_capture, state.binding_reserved = control.action.index+1, false
 		state.pressed = 0
 		return {}
+	}
+	if control.action.kind == .UNBIND_KEY {
+		binding_unbind(state, control.action.index)
+		state.pressed = 0
+		// The X disables itself once the slot is empty; keep focus on the row.
+		state.focus = clay.ID("Binding", u32(control.action.index)).id
+		return control.action
 	}
 	if control.action.kind == .SETTINGS_DROPDOWN {
 		state.settings_dropdown = Settings_Dropdown(control.action.index)
@@ -575,6 +600,14 @@ activate :: proc(state: ^State, control: Control) -> Action {
 	return control.action
 }
 
+// Clears one key bind slot (index = action*2 + slot) in the settings draft.
+// Zero is unbound: it never reads as held, saves as 0 and exports to Krunker as -1.
+binding_unbind :: proc(state: ^State, index: i32) {
+	if index < 0 || index >= i32(len(Binding_Action))*2 { return }
+	state.settings_draft.bindings[Binding_Action(index/2)][index%2] = 0
+	state.binding_capture, state.binding_reserved = 0, false
+}
+
 back_page :: proc(state: ^State) -> Page {
 	if state.page == .LOADOUT { return state.loadout_parent }
 	if state.page == .CONTROLS { return .SETTINGS }
@@ -591,7 +624,7 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .HOME { container = "ClassStrip" }
 		if page == .CLASSES { container = "ClassPicker" }
 	}
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR) { container = "SettingsPanel" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR) { container = "SettingsPanel" }
 	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
