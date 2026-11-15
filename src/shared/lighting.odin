@@ -26,7 +26,20 @@ Lighting_Config :: struct {
 	sky_dome_texture_asset:       i32,
 	sun_angle_x:                  f32,
 	sun_angle_y:                  f32,
+	// Sun shadow map (sceneInit in game.deob.js near line 208216): mapSize is
+	// shadowR (High-Res Shadows forces 4096), the shadow camera's far plane is
+	// shadowD and normalBias is shadowNB clamped to 0..5. Krunker parses the
+	// first two with parseInt and treats 0 as unset.
+	shadow_resolution:            i32,
+	shadow_distance:              i32,
+	shadow_normal_bias:           f32,
 }
+
+// Krunker constants for maps that leave the fields out (game.deob.js near
+// line 18245: 0x4b0, 0x400, 0x1f4).
+SHADOW_DEFAULT_RESOLUTION :: 1024
+SHADOW_DEFAULT_DISTANCE :: 1200
+LIGHT_DEFAULT_DISTANCE :: 500
 
 DEFAULT_LIGHTING_CONFIG :: Lighting_Config {
 	// Defaults mirror addEnvironmentZone in game.deob.js.
@@ -36,8 +49,9 @@ DEFAULT_LIGHTING_CONFIG :: Lighting_Config {
 	fog_distance              = 2000.0,
 	light_color               = Vec3{242.0 / 255.0, 248.0 / 255.0, 252.0 / 255.0},
 	// Browser's default directional-light distance (used when old maps omit
-	// lightD). Direction is normalized by the shader, so zero is invalid.
-	light_distance            = 450.0,
+	// lightD). Direction is normalized by the shader, so zero is invalid; the
+	// distance also places the shadow camera.
+	light_distance            = LIGHT_DEFAULT_DISTANCE,
 	light_intensity           = 1.3,
 	sky_color                 = Vec3{220.0 / 255.0, 232.0 / 255.0, 237.0 / 255.0},
 	sky_dome                  = false,
@@ -47,6 +61,9 @@ DEFAULT_LIGHTING_CONFIG :: Lighting_Config {
 	sky_dome_texture_asset    = 0,
 	sun_angle_x               = 90.0,
 	sun_angle_y               = 54.0,
+	shadow_resolution         = SHADOW_DEFAULT_RESOLUTION,
+	shadow_distance           = SHADOW_DEFAULT_DISTANCE,
+	shadow_normal_bias        = 0,
 }
 
 lighting_json_f32 :: proc(value: json.Value, fallback: f32) -> f32 {
@@ -132,6 +149,15 @@ lighting_parse_json :: proc(value: json.Value) -> (config: Lighting_Config, ok: 
 	if raw, found := settings["skyDomeTexA"]; found { config.sky_dome_texture_asset = lighting_json_i32(raw, config.sky_dome_texture_asset) }
 	if raw, found := settings["sunAngY"]; found { config.sun_angle_y = lighting_json_f32(raw, config.sun_angle_y) }
 	if raw, found := settings["sunAngX"]; found { config.sun_angle_x = lighting_json_f32(raw, config.sun_angle_x) }
+	if raw, found := settings["shadowR"]; found {
+		value := i32(lighting_json_f32(raw, 0)) // parseInt truncates.
+		config.shadow_resolution = value > 0 ? value : SHADOW_DEFAULT_RESOLUTION
+	}
+	if raw, found := settings["shadowD"]; found {
+		value := i32(lighting_json_f32(raw, 0))
+		config.shadow_distance = value > 0 ? value : SHADOW_DEFAULT_DISTANCE
+	}
+	if raw, found := settings["shadowNB"]; found { config.shadow_normal_bias = clamp(lighting_json_f32(raw, 0), 0, 5) }
 
 	return config, true
 }

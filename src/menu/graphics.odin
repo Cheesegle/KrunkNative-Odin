@@ -14,7 +14,26 @@ Visual_Settings :: struct {
 	colors: [Visual_Color][3]f32,
 	hide_cats, hide_extra_props: bool,
 }
-Quality_Settings :: struct { smooth_textures: bool, anisotropy: i32 } // 0 = off; otherwise 2, 4, 8 or 16.
+// Krunker's Settings > Video quality options (game.deob.js settings list near
+// line 210198): "Shadows" (shadows, default on), its advanced "Soft Shadows"
+// (softShad), "High-Res Shadows" (highResShad) and "Dynamic Shadows"
+// (shadowsDynamic), all default off, and "Lighting" (lighting): 0 Low,
+// 1 Normal (default), 2 High, 3 Physical.
+Quality_Settings :: struct {
+	smooth_textures: bool,
+	anisotropy:      i32, // 0 = off; otherwise 2, 4, 8 or 16.
+	shadows, soft_shadows, high_res_shadows, dynamic_shadows: bool,
+	lighting:        i32,
+	// Krodin additions, beyond Krunker parity.
+	shadow_quality:  i32,  // Shadow_Quality: 0 Krunker (whole-map map), 1 Sharp (cascades).
+	self_shadow:     bool, // Your own body casts a shadow (default on).
+}
+Shadow_Quality :: enum i32 { KRUNKER, SHARP }
+SHADOW_QUALITY_LABELS := [Shadow_Quality]string{.KRUNKER = "Krunker", .SHARP = "Sharp"}
+Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
+DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
+LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
+Quality_Toggle :: enum { SHADOWS, SOFT_SHADOWS, HIGH_RES_SHADOWS, DYNAMIC_SHADOWS, SELF_SHADOW }
 
 DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}}
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
@@ -61,6 +80,8 @@ settings_menu_fps_limit_row :: proc(state: ^State) {
 quality_settings_validate :: proc(settings: Quality_Settings) -> Quality_Settings {
 	result := settings
 	switch result.anisotropy { case 0, 2, 4, 8, 16: case: result.anisotropy = 0 }
+	if result.lighting < i32(Lighting_Quality.LOW) || result.lighting > i32(Lighting_Quality.PHYSICAL) { result.lighting = DEFAULT_QUALITY_SETTINGS.lighting }
+	if result.shadow_quality < 0 || result.shadow_quality > i32(Shadow_Quality.SHARP) { result.shadow_quality = DEFAULT_QUALITY_SETTINGS.shadow_quality }
 	return result
 }
 
@@ -100,6 +121,29 @@ settings_quality :: proc(state: ^State, view: View) {
 		}
 	}
 	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
+	quality := state.settings_draft.quality
+	settings_toggle_row(state, "Shadows", "QualityShadows", quality.shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SHADOWS)})
+	settings_toggle_row(state, "Soft Shadows", "QualitySoftShadows", quality.soft_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SOFT_SHADOWS)})
+	settings_toggle_row(state, "High-Res Shadows", "QualityHighResShadows", quality.high_res_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.HIGH_RES_SHADOWS)})
+	settings_toggle_row(state, "Dynamic Shadows", "QualityDynamicShadows", quality.dynamic_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.DYNAMIC_SHADOWS)})
+	settings_toggle_row(state, "Self shadow", "QualitySelfShadow", quality.self_shadow, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SELF_SHADOW)})
+	if settings_search_show(state, "Shadow quality") {
+		if clay.UI(clay.ID("ShadowQualityRow"))(settings_row(state)) {
+			settings_label("Shadow quality", state.scale)
+			spacer()
+			settings_dropdown_field(state, SHADOW_QUALITY_LABELS[Shadow_Quality(clamp(quality.shadow_quality, 0, 1))], "ShadowQuality", .SHADOW_QUALITY)
+		}
+	}
+	settings_note(state, "Self shadow shows your own shadow. Shadow quality Krunker draws one shadow map over the whole map, like Krunker; Sharp uses cascades around you for crisper shadows nearby.")
+	settings_note(state, "Shadows renders shadows from players and objects. Soft Shadows gives them a softer appearance, High-Res Shadows improves their quality, and Dynamic Shadows updates them in real time.")
+	if settings_search_show(state, "Lighting") {
+		if clay.UI(clay.ID("LightingRow"))(settings_row(state)) {
+			settings_label("Lighting", state.scale)
+			spacer()
+			settings_dropdown_field(state, LIGHTING_LABELS[Lighting_Quality(clamp(quality.lighting, 0, 3))], "Lighting", .LIGHTING)
+		}
+	}
+	settings_note(state, "Lighting sets the render quality of game lighting. Low is unlit, Normal is the default, High adds specular highlights and map lights, and Physical uses physically based shading.")
 }
 
 settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 {

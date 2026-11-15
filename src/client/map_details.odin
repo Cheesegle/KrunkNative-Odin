@@ -28,9 +28,12 @@ client_update_map_details :: proc(client: ^Client, settings: menuui.Visual_Setti
 	for object in client.game.map_inst.objects {
 		if object.mesh == nil { continue }
 		mesh := cast(^Mesh)object.mesh
+		was_visible := mesh.visible
 		#partial switch mesh.map_detail {
 		case .CAT: mesh.visible = mesh.map_detail_visible && !settings.hide_cats
 		case .EXTRA_PROP: mesh.visible = mesh.map_detail_visible && !settings.hide_extra_props
 		}
+		// Hidden props must also leave the static shadow map.
+		if mesh.visible != was_visible && mesh.shadow_caster != .NONE { shadow_mark_dirty() }
 	}
 }

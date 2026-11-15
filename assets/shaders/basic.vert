@@ -75,4 +75,9 @@ void main() {
 #endif
 
     gl_Position = camera_projection * camera_world_inverse * vec4(world_pos, 1.0f);
+#if defined(BATCHED) && defined(SHADOW_DEPTH_PASS)
+    // Batches mix casters with receive-only objects (ramps, planes): move the
+    // latter outside the clip volume so the shadow map never sees them.
+    if ((o.flags.y & 64) == 0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+#endif
 }

@@ -34,6 +34,8 @@ BATCH_FLAG_LADDER         :: 2
 BATCH_FLAG_FACE_TEX_SCALE :: 4
 BATCH_FLAG_UNLIT          :: 8
 BATCH_FLAG_NO_FOG         :: 16
+BATCH_FLAG_RECEIVE_SHADOW :: 32 // Basic_Material.receive_shadow
+BATCH_FLAG_CAST_SHADOW    :: 64 // Mesh.shadow_caster == .STATIC (shadow depth pass)
 
 // std430 layout of `Batch_Object` in basic.vert/basic.frag.
 Batch_Object :: struct {
@@ -119,7 +121,7 @@ batch_face_index :: proc(material: ^Basic_Material, vertex_id: int) -> u32 {
 	return u32(vertex_id / 4)
 }
 
-batch_object_from_material :: proc(material: ^Basic_Material, transform: shared.Mat4) -> Batch_Object {
+batch_object_from_material :: proc(material: ^Basic_Material, transform: shared.Mat4, caster := Shadow_Caster.NONE) -> Batch_Object {
 	tex := basic_material_tex_transform(material)
 	flags: i32
 	if material.is_ramp { flags |= BATCH_FLAG_RAMP }
@@ -127,6 +129,8 @@ batch_object_from_material :: proc(material: ^Basic_Material, transform: shared.
 	if material.use_face_tex_scaling { flags |= BATCH_FLAG_FACE_TEX_SCALE }
 	if material.unlit { flags |= BATCH_FLAG_UNLIT }
 	if material.no_fog { flags |= BATCH_FLAG_NO_FOG }
+	if material.receive_shadow { flags |= BATCH_FLAG_RECEIVE_SHADOW }
+	if caster == .STATIC { flags |= BATCH_FLAG_CAST_SHADOW }
 	return Batch_Object{
 		transform  = transform,
 		color      = material.color,
@@ -479,7 +483,7 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 
 		material := cast(^Basic_Material)mesh.material
 		object_index := u32(len(objects))
-		append(&objects, batch_object_from_material(material, mesh.transform_matrix))
+		append(&objects, batch_object_from_material(material, mesh.transform_matrix, mesh.shadow_caster))
 		set.merged += 1
 		base := u32(len(vertices))
 		for vertex, vertex_id in data.vertices {

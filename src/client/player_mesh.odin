@@ -501,7 +501,7 @@ player_crouched_leg_hip_y :: proc(crouch: f32) -> f32 {
 // fully crouched; a partial value (from interpolating between snapshots)
 // would show bent legs on a standing body. Rendered-you uses its own value.
 player_rig_crouch :: proc(player: ^shared.Player) -> f32 {
-	return player.render_you ? player.crouch_val : math.round(clamp(player.crouch_val, 0, 1))
+	return player.render_you || g_rig_continuous_crouch ? player.crouch_val : math.round(clamp(player.crouch_val, 0, 1))
 }
 
 player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {

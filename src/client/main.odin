@@ -70,6 +70,7 @@ Client :: struct {
 	// Static map batching and frustum culling (map_batch.odin). On by default;
 	// `--no-batching` turns it off for A/B comparisons.
 	render_batching: bool,
+	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
 	settings_dirty, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
@@ -640,6 +641,7 @@ client_find_player :: proc(client: ^Client, uid: i32) -> ^shared.Player {
 }
 
 client_clear_players :: proc(client: ^Client) {
+	self_shadow_release()
 	client_clear_projectiles(client)
 	for player in client.game.players {
 		if player.mesh != nil {
@@ -985,6 +987,7 @@ client_unload_map :: proc(client: ^Client) {
 
 	resource_trim_texture_cache()
 	resource_trim_geometry_cache()
+	shadow_release_map()
 	client.map_loaded = false
 }
 
@@ -1434,6 +1437,14 @@ client_render_world :: proc(client: ^Client) {
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	g_draw_stats = {}
 	client.scene.batching_enabled = client.render_batching
+	// After batching_enabled: the shadow pass draws the static map through the
+	// same batches. Its draw calls count towards this frame's stats.
+	_, quality := client_graphics_values(client)
+	quality = menuui.quality_settings_validate(quality)
+	// Self shadow: your third-person rig, drawn only into the player shadow map.
+	g_shadow_extra_casters = self_shadow_update(client, quality)
+	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
+	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
@@ -1441,7 +1452,11 @@ client_render_world :: proc(client: ^Client) {
 
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
+	// The viewmodel keeps the sun's shadows but not the player map, so your
+	// own body (Self shadow) never shades your arms.
+	g_shadow_viewmodel_pass = true
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	g_shadow_viewmodel_pass = false
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
@@ -1676,6 +1691,8 @@ main :: proc() {
 	shared.game_destroy(&client.game)
 	shared.unload_default_maps()
 	if client.offline_custom_map != nil { shared.map_destroy(client.offline_custom_map) }
+	self_shadow_release()
+	shadow_fini()
 	scene_fini(client.fps_scene)
 	scene_fini(client.scene)
 	overlay_fini()

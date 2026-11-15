@@ -82,6 +82,7 @@ Basic_Material :: struct {
 	color: shared.Vec4,
 	emissive: shared.Vec4,
 	alpha_test: f32,
+	receive_shadow: bool, // Samples the sun shadow map when Shadows is on.
 	texture_repeat: shared.Vec2,
 	texture_offset: shared.Vec2,
 	base_texture_offset: shared.Vec2,
@@ -105,6 +106,7 @@ Mesh :: struct {
 	last_transform: Mesh_Transform,
 	transform_cached: bool,
 	visible:   bool,
+	shadow_caster: Shadow_Caster,
 	geometry:  ^Geometry,
 	transform_matrix:    shared.Mat4,
 	camera_space_matrix: shared.Mat4, // temporary - used during scene depth sort
