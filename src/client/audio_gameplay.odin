@@ -19,21 +19,26 @@ client_audio_present :: proc(client: ^Client, event: shared.Presentation_Event) 
 		if weapon.melee && len(weapon.sound) == 0 { path = fmt.tprintf("%ssound/swsh_def_%d.mp3", shared.assets_path(), variant) }
 		// Krunker: remote shots arrive as 's' packets -> playerSound -> play3D with
 		// the weapon's refDist/rollOff (25/1) and no range limit.
-		audio_play(audio, path, .EFFECTS, 0.8, event.position, spatial, priority = 3)
+		// Weapon sounds use Krunker's "Weapon Volume" category for every player.
+		audio_play(audio, path, .WEAPONS, 0.8, event.position, spatial, priority = 3)
 	case .STEP:
-		audio_play_effect(audio, fmt.tprintf("step_%d", variant), .FOOTSTEPS, 0.65 * (1 - event.value * 0.75), event.position, spatial, KRUNKER_STEP_RANGE, 1)
+		// Krunker's playerStep: volume random(0.15, 0.25); a fully crouched
+		// player is half as loud to themselves and silent to everyone else.
+		gain := 0.15 + 0.1 * f32(audio.variation * 2654435761 % 1000) / 1000
+		if event.value >= 1 { gain *= local ? 0.5 : 0 }
+		if gain > 0 { audio_play_effect(audio, fmt.tprintf("step_%d", variant), .FOOTSTEPS, gain, event.position, spatial, KRUNKER_STEP_RANGE, 1) }
 	case .JUMP: audio_play_effect(audio, "jump_0", .FOOTSTEPS, 0.45, event.position, spatial, KRUNKER_STEP_RANGE, 1)
 	case .LAND: audio_play_effect(audio, "land_1", .FOOTSTEPS, 0.65, event.position, spatial, KRUNKER_STEP_RANGE, 1)
 	case .SLIDE: audio_play_effect(audio, "slide_0", .FOOTSTEPS, 0.5, event.position, spatial, KRUNKER_STEP_RANGE, 1)
 	case .RELOAD:
-		if local { audio_play_effect(audio, "reload_1", .EFFECTS, 0.7) }
+		if local { audio_play_effect(audio, "reload_1", .WEAPONS, 0.7) }
 	case .SWAP:
 		// Weapon switching is silent.
 	case .DAMAGE:
 		if local { audio_play_effect(audio, fmt.tprintf("takedmg_%d", variant), .EFFECTS, 0.65, priority = 4) }
 	case .HIT:
 		if local { audio_play_effect(audio, event.headshot ? "crit_0" : "hit_0", .EFFECTS, 0.7, priority = 4) }
-	case .EXPLOSION: audio_play_effect(audio, "explosion", .EFFECTS, 0.85, event.position, true, priority = 3)
+	case .EXPLOSION: audio_play_effect(audio, "explosion", .WEAPONS, 0.85, event.position, true, priority = 3)
 	}
 }
 

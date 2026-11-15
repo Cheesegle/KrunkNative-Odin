@@ -107,18 +107,30 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_hitmarker(state)
 	case .AUDIO:
 		settings_section(state, "Volume")
-		labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}
-		ids := [4]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume"}
-		for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
-		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
+		// Display order; audio_volumes is indexed master, effects, footsteps, UI, weapons.
+		order := [5]int{0, 1, 4, 2, 3}
+		labels := [5]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume", "Weapon volume"}
+		ids := [5]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume", "WeaponVolume"}
+		for i in order { settings_slider(state, labels[i], ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
+		settings_note(state, "Master affects every channel; 0% mutes one. Weapon volume (Krunker's, default 30%) covers every player's gunshots, swings, reloads and explosions.")
+		settings_section(state, "Positional audio")
 		if settings_search_show(state, "Spatial audio") {
 			if clay.UI(clay.ID("SpatialAudioRow"))(settings_row(state)) {
 				settings_label("Spatial audio", state.scale)
 				spacer()
-				settings_dropdown_field(state, SPATIAL_AUDIO_LABELS[Spatial_Audio_Mode(clamp(values.spatial_audio, 0, 1))], "SpatialAudio", .SPATIAL_AUDIO)
+				settings_dropdown_field(state, spatial_audio_label(values.spatial_audio, view.surround_channels), "SpatialAudio", .SPATIAL_AUDIO)
 			}
 		}
-		settings_note(state, "Spatial audio: HRTF (Krunker's default) places sounds in front, behind, above and below on headphones. Stereo only pans left and right.")
+		if settings_search_show(state, "Distance falloff") {
+			if clay.UI(clay.ID("DistanceFalloffRow"))(settings_row(state)) {
+				settings_label("Distance falloff", state.scale)
+				spacer()
+				settings_dropdown_field(state, DISTANCE_FALLOFF_LABELS[Distance_Falloff_Mode(clamp(values.distance_falloff, 0, 2))], "DistanceFalloff", .DISTANCE_FALLOFF)
+			}
+		}
+		settings_toggle_row(state, "Loudness levelling", "LoudnessLevelling", values.levelling, {kind = .LEVELLING_TOGGLE})
+		settings_slider(state, "Levelling strength", "LevellingStrength", values.levelling_strength, 0, 1, {kind = .LEVELLING_STRENGTH})
+		settings_note(state, "HRTF (Krunker's default) needs headphones; Surround uses 5.1/7.1 speakers. Falloff Krunker matches the browser; Reduced keeps far sounds louder. Levelling lifts quiet sounds and tames loud shots.")
 	case .HUD:
 		settings_section(state, "Match")
 		settings_toggle_row(state, "Timer", "HudTimer", !values.hud.hide_timer, {kind = .HUD_TOGGLE})
@@ -237,6 +249,8 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.hitmarker = defaults.hitmarker
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
+		draft.spatial_audio, draft.distance_falloff = defaults.spatial_audio, defaults.distance_falloff
+		draft.levelling, draft.levelling_strength = defaults.levelling, defaults.levelling_strength
 	case .HUD:
 		draft.hud, draft.show_fps, draft.damage = defaults.hud, defaults.show_fps, defaults.damage
 	}
@@ -493,7 +507,7 @@ settings_slider :: proc(state: ^State, label, name: string, value, minimum, maxi
 			border={color=editing && state.number_invalid ? clay.Color{255,70,70,255} : state.focus == value_id.id ? WHITE : SETTINGS_LINE, width=clay.BorderOutside(editing || state.focus == value_id.id ? 2 : 0)},
 			clip={horizontal=editing, childOffset=clay.GetScrollOffset()},
 		}) {
-			label := action.kind == .AUDIO_VOLUME ? fmt.tprintf("%g%%", value*100) : fmt.tprintf("%g", value)
+			label := settings_percent_action(action.kind) ? fmt.tprintf("%g%%", value*100) : fmt.tprintf("%g", value)
 			if editing { label = fmt.tprintf("%s|", string(state.number_buffer[:state.number_length])) }
 			text(label, 20, s, SETTINGS_DARK)
 		}

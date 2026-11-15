@@ -7,10 +7,12 @@ import "core:strings"
 import ma "vendor:miniaudio"
 import shared "../shared"
 
-Audio_Channel :: enum { EFFECTS, FOOTSTEPS, UI }
+// WEAPONS matches Krunker's "Weapon Volume" (gunsVolume, sound category 3):
+// gunshots, melee swings, reloads and explosions, for every player.
+Audio_Channel :: enum { EFFECTS, FOOTSTEPS, UI, WEAPONS }
 MAX_AUDIO_VOICES :: 64
 
-Audio_Sample :: struct { sound: ma.sound, ready: bool }
+Audio_Sample :: struct { sound: ma.sound, ready: bool, path: cstring }
 Audio_Voice :: struct {
 	sound: ma.sound,
 	node: Spatial_Node,
@@ -23,6 +25,7 @@ Audio_Voice :: struct {
 	spatial, stereo_source: bool,
 	position: shared.Vec3,
 	ref_distance: f32,
+	on_bus: bool,                 // Routed through the levelling bus (everything but UI).
 }
 Audio_System :: struct {
 	engine: ma.engine,
@@ -32,6 +35,13 @@ Audio_System :: struct {
 	listener: Audio_Listener,
 	nodes_ready: bool,
 	hrtf: ^Hrtf_Set,
+	levelling: Levelling_Node,
+	// Surround: the engine opens the device's own channel layout. Otherwise the
+	// mix is stereo. `device_channels` is what the output device offers.
+	layout: Surround_Layout,
+	surround: bool,
+	requested_surround, no_device: bool,
+	device_channels: int,
 	serial, hit_revision: u64,
 	variation: u32,
 }
@@ -52,7 +62,7 @@ audio_load_sample :: proc(audio: ^Audio_System, path: string) -> ^Audio_Sample {
 	sample := new(Audio_Sample)
 	audio.samples[strings.clone(path)] = sample
 	cpath := strings.clone_to_cstring(path)
-	defer delete(cpath)
+	sample.path = cpath
 	result := ma.sound_init_from_file(&audio.engine, cpath, {.DECODE}, nil, nil, &sample.sound)
 	sample.ready = result == .SUCCESS
 	shared.asset_trace(path, sample.ready)
@@ -60,22 +70,24 @@ audio_load_sample :: proc(audio: ^Audio_System, path: string) -> ^Audio_Sample {
 	return sample
 }
 
-audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_device: bool = false, sample_rate: u32 = 48000) -> ^Audio_System {
+// Surround opens the device at its native channel count (`channels` stands
+// in for the device when `no_device` is set, as in offline tests); every
+// other mode mixes to stereo.
+audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_device: bool = false, sample_rate: u32 = 48000, channels: u32 = 2) -> ^Audio_System {
 	audio := new(Audio_System)
-	config := ma.engine_config_init()
-	config.channels, config.sampleRate = 2, sample_rate
-	config.noDevice = b32(no_device)
-	result := ma.engine_init(&config, &audio.engine)
-	if result != .SUCCESS {
-		fmt.eprintf("[Audio] Output unavailable (%v); continuing without sound.\n", result)
+	audio.requested_surround, audio.no_device = settings.spatial == .SURROUND, no_device
+	if !audio_engine_open(audio, sample_rate, audio.requested_surround ? (no_device ? channels : 0) : 2) {
 		free(audio)
 		return nil
 	}
 	audio.samples = make(map[string]^Audio_Sample)
 	audio.hrtf = hrtf_load(ma.engine_get_sample_rate(&audio.engine))
-	audio.nodes_ready = true
+	audio.nodes_ready = levelling_node_init(&audio.engine, &audio.levelling)
+	layout := audio.surround ? &audio.layout : nil
 	for &voice in audio.voices {
-		if !spatial_node_init(&audio.engine, &voice.node, audio.hrtf) { audio.nodes_ready = false }
+		if !audio.nodes_ready { break }
+		if !spatial_node_init(&audio.engine, &voice.node, audio.hrtf, layout, cast(^ma.node)&audio.levelling) { audio.nodes_ready = false }
+		voice.on_bus = true
 	}
 	if !audio.nodes_ready { fmt.eprintln("[Audio] Spatial mixer unavailable; positional effects are disabled.") }
 	audio.listener = {forward = {0, 0, -1}}
@@ -95,8 +107,58 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 	} else { fmt.eprintln("[Audio] Sound manifest missing; effects will load on demand.") }
 	for weapon in weapons { if weapon != nil { audio_load_sample(audio, audio_weapon_path(weapon)) } }
 	audio_set_settings(audio, settings)
-	fmt.printf("[Audio] Spatial mixer ready: %d cached effects, %d voices.\n", len(audio.samples), MAX_AUDIO_VOICES)
+	fmt.printf("[Audio] Spatial mixer ready: %d cached effects, %d voices, %d output channels (%v).\n",
+		len(audio.samples), MAX_AUDIO_VOICES, ma.engine_get_channels(&audio.engine), audio_effective_spatial(audio))
 	return audio
+}
+
+@(private="file")
+audio_engine_open :: proc(audio: ^Audio_System, sample_rate, channels: u32) -> bool {
+	config := ma.engine_config_init()
+	config.channels, config.sampleRate = channels, sample_rate
+	config.noDevice = b32(audio.no_device)
+	if audio.no_device && config.channels == 0 { config.channels = 2 }
+	result := ma.engine_init(&config, &audio.engine)
+	if result != .SUCCESS {
+		fmt.eprintf("[Audio] Output unavailable (%v); continuing without sound.\n", result)
+		return false
+	}
+	engine_channels := int(ma.engine_get_channels(&audio.engine))
+	audio.device_channels = engine_channels
+	if device := ma.engine_get_device(&audio.engine); device != nil {
+		audio.device_channels = max(int(device.playback.internalChannels), engine_channels)
+	}
+	audio.surround = false
+	if engine_channels > 2 {
+		ok: bool
+		if device := ma.engine_get_device(&audio.engine); device != nil {
+			audio.layout, ok = surround_layout_from_map(device.playback.channelMap[:engine_channels])
+		} else {
+			audio.layout, ok = surround_layout_standard(engine_channels)
+		}
+		if !ok {
+			// No usable speaker ring (e.g. quad without a front pair): mix in stereo.
+			ma.engine_uninit(&audio.engine)
+			fmt.eprintf("[Audio] Unsupported %d-channel layout; using stereo.\n", engine_channels)
+			return audio_engine_open(audio, sample_rate, 2)
+		}
+		audio.surround = true
+	}
+	return true
+}
+
+// The panning actually in use: Surround needs a multichannel device and HRTF
+// its data set; both fall back to Stereo.
+audio_effective_spatial :: proc(audio: ^Audio_System) -> Spatial_Mode {
+	if audio == nil { return .STEREO }
+	if audio.surround { return .SURROUND }
+	if audio.settings.spatial == .HRTF && audio.hrtf != nil { return .HRTF }
+	return .STEREO
+}
+
+// Switching into or out of Surround changes the engine's channel count.
+audio_needs_reopen :: proc(audio: ^Audio_System, settings: Audio_Settings) -> bool {
+	return audio != nil && audio.requested_surround != (settings.spatial == .SURROUND)
 }
 
 audio_stop_all :: proc(audio: ^Audio_System) {
@@ -108,9 +170,11 @@ audio_destroy :: proc(audio: ^Audio_System) {
 	if audio == nil { return }
 	for &voice in audio.voices { if voice.sample != nil { ma.sound_uninit(&voice.sound) } }
 	for &voice in audio.voices { spatial_node_uninit(&voice.node) }
+	levelling_node_uninit(&audio.levelling)
 	hrtf_destroy(audio.hrtf)
 	for path, sample in audio.samples {
 		if sample.ready { ma.sound_uninit(&sample.sound) }
+		delete(sample.path)
 		free(sample)
 		delete(path)
 	}
@@ -124,6 +188,7 @@ audio_channel_gain :: proc(settings: Audio_Settings, channel: Audio_Channel) -> 
 	case .EFFECTS: return settings.effects
 	case .FOOTSTEPS: return settings.footsteps
 	case .UI: return settings.ui
+	case .WEAPONS: return settings.weapons
 	}
 	return 0
 }
@@ -132,6 +197,7 @@ audio_set_settings :: proc(audio: ^Audio_System, settings: Audio_Settings) {
 	if audio == nil { return }
 	audio.settings = settings
 	ma.engine_set_volume(&audio.engine, settings.master)
+	if audio.nodes_ready { levelling_node_configure(&audio.levelling, settings.levelling, settings.levelling_strength) }
 	audio_update_spatial_voices(audio)
 	for &voice in audio.voices {
 		if voice.sample != nil { ma.sound_set_volume(&voice.sound, voice.gain * audio_channel_gain(settings, voice.channel)) }
@@ -163,23 +229,32 @@ audio_update_spatial_voices :: proc(audio: ^Audio_System) {
 
 audio_voice_params :: proc(audio: ^Audio_System, voice: ^Audio_Voice) -> Spatial_Params {
 	if !voice.spatial { return {} }
-	params := audio_spatial_params(audio.listener, voice.position, voice.ref_distance, voice.stereo_source)
-	params.hrtf = audio.settings.spatial == .HRTF && audio.hrtf != nil
+	params := audio_spatial_params(audio.listener, voice.position, voice.ref_distance, voice.stereo_source, audio.settings.falloff)
+	params.hrtf = audio_effective_spatial(audio) == .HRTF
 	// Binaural rendering feeds each ear one channel of a stereo effect; the
 	// equal-power panner passes both at unity when the source is ahead.
 	if params.hrtf && params.stereo_source { params.gain *= math.SQRT_TWO }
 	return params
 }
 
-audio_spatial_params :: proc(listener: Audio_Listener, position: shared.Vec3, ref_distance: f32, stereo_source: bool) -> Spatial_Params {
+audio_spatial_params :: proc(listener: Audio_Listener, position: shared.Vec3, ref_distance: f32, stereo_source: bool, falloff: Distance_Falloff = .KRUNKER) -> Spatial_Params {
 	azimuth, elevation := audio_azimuth_elevation(listener, position)
 	delta := position - listener.position
 	distance := math.sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z)
 	return {
 		spatial = true, stereo_source = stereo_source,
-		gain = KRUNKER_3D_VOLUME * audio_inverse_distance_gain(distance, ref_distance, KRUNKER_ROLLOFF),
+		gain = KRUNKER_3D_VOLUME * audio_distance_gain(distance, ref_distance, falloff),
 		azimuth = azimuth, elevation = elevation,
 	}
+}
+
+audio_distance_gain :: proc "contextless" (distance, ref_distance: f32, falloff: Distance_Falloff) -> f32 {
+	switch falloff {
+	case .KRUNKER: return audio_inverse_distance_gain(distance, ref_distance, KRUNKER_ROLLOFF)
+	case .REDUCED: return audio_inverse_distance_gain(distance, ref_distance, REDUCED_ROLLOFF)
+	case .OFF: return 1
+	}
+	return 1
 }
 
 // The mixer runs in miniaudio's C thread. Its only Odin code is Spatial_Node,
@@ -206,9 +281,14 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	if voice.sample != nil && bool(ma.sound_is_playing(&voice.sound)) && voice.priority > priority { return false }
 	if voice.sample != sample {
 		if voice.sample != nil { ma.sound_uninit(&voice.sound); voice.sample = nil }
-		// miniaudio's own spatializer is bypassed: every voice feeds its Spatial_Node,
-		// which applies Krunker's panner model (or passes non-spatial audio through).
-		if ma.sound_init_copy(&audio.engine, &sample.sound, {.NO_SPATIALIZATION, .NO_DEFAULT_ATTACHMENT}, nil, &voice.sound) != .SUCCESS { return false }
+		// miniaudio's own spatializer is bypassed: every voice feeds its Spatial_Node
+		// in stereo, which applies the panner (or passes non-spatial audio through).
+		// The resource manager shares the decoded data with the cached sample.
+		config := ma.sound_config_init_2(&audio.engine)
+		config.pFilePath = sample.path
+		config.flags = {.DECODE, .NO_SPATIALIZATION, .NO_DEFAULT_ATTACHMENT}
+		config.channelsOut = audio.nodes_ready ? 2 : 0
+		if ma.sound_init_ex(&audio.engine, &config, &voice.sound) != .SUCCESS { return false }
 		target := audio.nodes_ready ? cast(^ma.node)&voice.node : ma.engine_get_endpoint(&audio.engine)
 		if ma.node_attach_output_bus(cast(^ma.node)&voice.sound, 0, target, 0) != .SUCCESS {
 			ma.sound_uninit(&voice.sound)
@@ -220,6 +300,12 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	voice.channel, voice.gain, voice.priority = channel, gain, priority
 	voice.spatial, voice.position, voice.ref_distance = spatial, position, ref_distance
 	voice.stereo_source = audio_sample_is_stereo(sample)
+	// UI clicks skip loudness levelling; everything else shares the effects bus.
+	if audio.nodes_ready && voice.on_bus != (channel != .UI) {
+		voice.on_bus = channel != .UI
+		target := voice.on_bus ? cast(^ma.node)&audio.levelling : ma.engine_get_endpoint(&audio.engine)
+		ma.node_attach_output_bus(cast(^ma.node)&voice.node, 0, target, 0)
+	}
 	audio.serial += 1
 	voice.serial = audio.serial
 	ma.sound_set_volume(&voice.sound, gain * audio_channel_gain(audio.settings, channel))

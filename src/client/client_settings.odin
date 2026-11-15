@@ -43,7 +43,9 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		fullscreen_index = client_fullscreen_index(fullscreen_sizes, {d.fullscreen_width, d.fullscreen_height}),
 		fov = d.fov, sensitivity = d.sensitivity, mouse_dpi = d.mouse_dpi, ads_sensitivity = d.ads_sensitivity,
 		advanced_sensitivity = d.advanced_sensitivity, invert_mouse = d.invert_mouse,
-		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui},
+		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui, audio.weapons},
+		spatial_audio = i32(audio.spatial), distance_falloff = i32(audio.falloff),
+		levelling = audio.levelling, levelling_strength = audio.levelling_strength,
 		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
 		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
 }

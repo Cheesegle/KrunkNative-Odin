@@ -112,7 +112,7 @@ when ODIN_TEST {
 			path := fmt.tprintf("bin/audio-hrtf-noise-%d.wav", rate)
 			defer os.remove(path)
 			if !testing.expect(t, audio_hrtf_write_noise(path, int(rate), 1)) { return }
-			audio := audio_create(nil, {1, 1, 1, 1, .HRTF}, true, rate)
+			audio := audio_create(nil, audio_test_settings(), true, rate)
 			if !testing.expect(t, audio != nil && audio.hrtf != nil) { return }
 			defer audio_destroy(audio)
 			camera := camera_init(1)
@@ -212,10 +212,10 @@ when ODIN_TEST {
 		delete(data)
 		testing.expect(t, os.write_entire_file(path, string(`{"master":1,"effects":1,"footsteps":1,"ui":1}`)) == nil)
 		testing.expect(t, audio_settings_load(path).spatial == .HRTF, "older settings files default to HRTF")
-		testing.expect(t, os.write_entire_file(path, string(`{"master":1,"effects":1,"footsteps":1,"ui":1,"spatial":"SURROUND"}`)) == nil)
+		testing.expect(t, os.write_entire_file(path, string(`{"master":1,"effects":1,"footsteps":1,"ui":1,"spatial":"QUADRAPHONIC"}`)) == nil)
 		testing.expect(t, audio_settings_load(path).spatial == .HRTF, "unknown modes fall back to HRTF")
 		// Krunker has no spatial-audio setting: importing or exporting must not touch it.
-		values := menuui.Settings_Values{fov = menuui.DEFAULT_FOV, sensitivity = 1, mouse_dpi = 1600, audio_volumes = {0.8, 1, 0.8, 0.6}, spatial_audio = 1}
+		values := menuui.Settings_Values{fov = menuui.DEFAULT_FOV, sensitivity = 1, mouse_dpi = 1600, audio_volumes = {0.8, 1, 0.8, 0.6, 0.3}, spatial_audio = 1}
 		_, import_error := menuui.krunker_settings_import(&values, KRUNKER_SAMPLE_EXPORT)
 		testing.expect(t, len(import_error) == 0 && values.spatial_audio == 1, "a Krunker import keeps the chosen spatial mode")
 		exported := menuui.krunker_settings_export(values, context.temp_allocator)
@@ -223,7 +223,7 @@ when ODIN_TEST {
 		// Settings > Audio > Spatial audio: the dropdown edits the draft and Save applies it.
 		client := Client{audio_settings = DEFAULT_AUDIO_SETTINGS}
 		client.menu.page = .SETTINGS
-		menuui.prepare_settings(&client.menu, menuui.View{audio_volumes = {0.8, 1, 0.8, 0.6}, spatial_audio = i32(client.audio_settings.spatial)})
+		menuui.prepare_settings(&client.menu, menuui.View{audio_volumes = {0.8, 1, 0.8, 0.6, 0.3}, spatial_audio = i32(client.audio_settings.spatial)})
 		testing.expect(t, client.menu.settings_draft.spatial_audio == 0, "the draft starts from the saved mode")
 		menuui.activate(&client.menu, {action = {kind = .SPATIAL_AUDIO, index = 1}})
 		testing.expect(t, client.audio_settings.spatial == .HRTF, "choosing a mode only edits the draft")
@@ -236,39 +236,44 @@ when ODIN_TEST {
 		path := "bin/audio-hrtf-bench.wav"
 		defer os.remove(path)
 		if !testing.expect(t, audio_hrtf_write_noise(path, 48000, 4)) { return }
-		modes := [?]Spatial_Mode{.STEREO, .HRTF}
-		for mode in modes {
-			for turning in ([?]bool{false, true}) {
-				if mode == .STEREO && turning { continue }
-				audio := audio_create(nil, {1, 1, 1, 1, mode}, true)
-				if !testing.expect(t, audio != nil) { return }
-				defer audio_destroy(audio)
-				camera := camera_init(1)
-				audio_update_listener(audio, &camera)
-				for i in 0 ..< MAX_AUDIO_VOICES {
-					angle := f32(i) * 2 * math.PI / MAX_AUDIO_VOICES
-					testing.expect(t, audio_play(audio, path, position = {40*math.cos(angle), f32(i % 5) - 2, 40*math.sin(angle)}, spatial = true, priority = 4))
+		// Every mode with levelling off and on; HRTF also while turning (all voices crossfade).
+		Run :: struct { mode: Spatial_Mode, turning, levelling: bool }
+		runs := [?]Run{
+			{.STEREO, false, false}, {.STEREO, false, true}, {.HRTF, false, false}, {.HRTF, false, true},
+			{.HRTF, true, false}, {.HRTF, true, true}, {.SURROUND, false, false}, {.SURROUND, false, true},
+		}
+		for run in runs {
+			settings := audio_test_settings(spatial = run.mode)
+			settings.levelling = run.levelling
+			audio := audio_create(nil, settings, true, 48000, 8)
+			if !testing.expect(t, audio != nil) { return }
+			defer audio_destroy(audio)
+			camera := camera_init(1)
+			audio_update_listener(audio, &camera)
+			for i in 0 ..< MAX_AUDIO_VOICES {
+				angle := f32(i) * 2 * math.PI / MAX_AUDIO_VOICES
+				testing.expect(t, audio_play(audio, path, position = {40*math.cos(angle), f32(i % 5) - 2, 40*math.sin(angle)}, spatial = true, priority = 4))
+			}
+			channels := int(ma.engine_get_channels(&audio.engine))
+			buffer := make([]f32, 480*channels)
+			defer delete(buffer)
+			callbacks := 200
+			ma.engine_read_pcm_frames(&audio.engine, raw_data(buffer), 480, nil)
+			start := time.tick_now()
+			for c in 0 ..< callbacks {
+				if run.turning {
+					camera.rotation.y = f32(c) * 0.05   // ~3 degrees per 10 ms: every voice crossfades.
+					audio_update_listener(audio, &camera)
 				}
-				buffer: [480*2]f32
-				callbacks := 200
-				ma.engine_read_pcm_frames(&audio.engine, &buffer[0], 480, nil)
-				start := time.tick_now()
-				for c in 0 ..< callbacks {
-					if turning {
-						camera.rotation.y = f32(c) * 0.05   // ~3 degrees per 10 ms: every voice crossfades.
-						audio_update_listener(audio, &camera)
-					}
-					ma.engine_read_pcm_frames(&audio.engine, &buffer[0], 480, nil)
-				}
-				us := f64(time.duration_microseconds(time.tick_since(start))) / f64(callbacks)
-				fmt.printf("[Audio bench] %v%s: %d voices, %.1f us per 480-frame (10 ms) callback at 48 kHz\n",
-					mode, turning ? " (listener turning)" : "", MAX_AUDIO_VOICES, us)
-				// The real-time budget is 10 000 us. Timing is only asserted for optimised
-				// builds (-o:speed: ~250 us stereo, ~850 us HRTF on the reference machine);
-				// -o:none test runs just report it.
-				when ODIN_OPTIMIZATION_MODE != .None {
-					testing.expectf(t, us < 2500, "%v mixing must stay far below real time (%.1f us)", mode, us)
-				}
+				ma.engine_read_pcm_frames(&audio.engine, raw_data(buffer), 480, nil)
+			}
+			us := f64(time.duration_microseconds(time.tick_since(start))) / f64(callbacks)
+			fmt.printf("[Audio bench] %v%s, levelling %s, %d ch: %d voices, %.1f us per 480-frame (10 ms) callback at 48 kHz\n",
+				run.mode, run.turning ? " (listener turning)" : "", run.levelling ? "on" : "off", channels, MAX_AUDIO_VOICES, us)
+			// The real-time budget is 10 000 us. Timing is only asserted for optimised
+			// builds; -o:none test runs just report it.
+			when ODIN_OPTIMIZATION_MODE != .None {
+				testing.expectf(t, us < 2500, "%v mixing must stay far below real time (%.1f us)", run.mode, us)
 			}
 		}
 	}
@@ -285,7 +290,7 @@ when ODIN_TEST {
 			renders: [2][]f32
 			peak: f32
 			for mode, m in modes {
-				audio := audio_create(nil, {1, 1, 1, 1, mode}, true)
+				audio := audio_create(nil, audio_test_settings(spatial = mode), true)
 				if !testing.expect(t, audio != nil) { return }
 				defer audio_destroy(audio)
 				camera := camera_init(1)

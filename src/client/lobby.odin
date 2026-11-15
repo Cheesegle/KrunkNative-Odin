@@ -266,8 +266,10 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings,
 		settings_defaults = client_settings_default_values(fullscreen_sizes, client.max_anisotropy),
-		audio_volumes = {client.audio_settings.master, client.audio_settings.effects, client.audio_settings.footsteps, client.audio_settings.ui},
-		spatial_audio = i32(client.audio_settings.spatial),
+		audio_volumes = {client.audio_settings.master, client.audio_settings.effects, client.audio_settings.footsteps, client.audio_settings.ui, client.audio_settings.weapons},
+		spatial_audio = i32(client.audio_settings.spatial), distance_falloff = i32(client.audio_settings.falloff),
+		levelling = client.audio_settings.levelling, levelling_strength = client.audio_settings.levelling_strength,
+		surround_channels = client.audio != nil ? i32(client.audio.device_channels) : 0,
 		resolution = fmt.tprintf("%d x %d", window_resolution.width, window_resolution.height),
 		match_status = client.game.move_lock ? "Waiting for match to start" : "Match in progress",
 		respawn_remaining = krunker_client_respawn_remaining(client, glfw.GetTime()),
@@ -343,9 +345,17 @@ client_apply_settings_draft :: proc(client: ^Client) {
 		if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
 	}
 	client.settings_dirty = true
-	settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3], Spatial_Mode(clamp(values.spatial_audio, 0, 1))})
+	settings := client_audio_settings_from_values(values)
 	if client.audio_settings != settings {
 		client.audio_settings = settings
+		if audio_needs_reopen(client.audio, settings) {
+			// Surround opens the device with its own channel layout; leaving it
+			// returns to the stereo mix. Sounds already playing stop.
+			hit_revision, no_device := client.audio.hit_revision, client.audio.no_device
+			audio_destroy(client.audio)
+			client.audio = audio_create(client.game.weapons, settings, no_device)
+			if client.audio != nil { client.audio.hit_revision = hit_revision }
+		}
 		audio_set_settings(client.audio, settings)
 		client.audio_settings_dirty, client.audio_save_delay = true, 0.5
 	}
@@ -356,7 +366,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)

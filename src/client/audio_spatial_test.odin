@@ -66,7 +66,7 @@ when ODIN_TEST {
 		path := "bin/audio-spatial-tone-mono.wav"
 		defer os.remove(path)
 		if !testing.expect(t, audio_spatial_write_tone(path, 48000, 1)) { return }
-		audio := audio_create(nil, {1, 1, 1, 1, .STEREO}, true)
+		audio := audio_create(nil, audio_test_settings(spatial = .STEREO), true)
 		if !testing.expect(t, audio != nil) { return }
 		defer audio_destroy(audio)
 		yaws := [?]f32{0, math.PI / 2, math.PI, -2.2}
@@ -123,7 +123,7 @@ when ODIN_TEST {
 			testing.expectf(t, abs(az - c.azimuth) < 0.01 && abs(el - c.elevation) < 0.01, "%v -> az %.2f el %.2f", c.position, az, el)
 		}
 		// Krunker's orientation vector: (sin(yaw+PI), pitch, cos(yaw+PI)).
-		audio := audio_create(nil, {1, 1, 1, 1, .STEREO}, true)
+		audio := audio_create(nil, audio_test_settings(spatial = .STEREO), true)
 		if !testing.expect(t, audio != nil) { return }
 		defer audio_destroy(audio)
 		audio_set_listener(audio, {1, 2, 3}, math.PI / 2, 0.3)
@@ -141,7 +141,7 @@ when ODIN_TEST {
 		path := "bin/audio-spatial-tone-reuse.wav"
 		defer os.remove(path)
 		if !testing.expect(t, audio_spatial_write_tone(path, 48000, 1)) { return }
-		audio := audio_create(nil, {1, 1, 1, 1, .STEREO}, true)
+		audio := audio_create(nil, audio_test_settings(spatial = .STEREO), true)
 		if !testing.expect(t, audio != nil) { return }
 		defer audio_destroy(audio)
 		camera := camera_init(1)

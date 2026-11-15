@@ -86,7 +86,7 @@ test_menu :: proc() -> bool {
 	state.focus = clay.ID("Play").id
 	if menu_test_frame(&state, view, {enter=true}).kind != .PLAY { return false }
 	menu_test_frame(&state, view, {})
-	view.audio_volumes = {0.8, 1, 0.5, 0}
+	view.audio_volumes = {0.8, 1, 0.5, 0, 0.3}
 	view.bindings = menuui.default_bindings()
 	view.resolution_options = []string{"1280 x 720", "1920 x 1080", "2560 x 1440"}
 	view.fullscreen_options = []string{"2560 x 1600", "1920 x 1200", "1920 x 1080"}
@@ -140,7 +140,7 @@ test_menu :: proc() -> bool {
 	// Audio sliders retain their own channel and range when using the keyboard.
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.AUDIO)))
-	for name, i in ([4]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume"}) {
+	for name, i in ([5]string{"MasterVolume", "EffectsVolume", "FootstepsVolume", "UiVolume", "WeaponVolume"}) {
 		menu_test_frame(&state, view, {})
 		state.focus = clay.ID(name).id
 		value = menu_test_frame(&state, view, {right = true})
@@ -297,7 +297,7 @@ test_slider_numbers :: proc() -> bool {
 	state := menuui.State{page=.SETTINGS}
 	if !menuui.init(&state, menu_test_measure, nil) { return false }
 	defer menuui.fini(&state)
-	view := menuui.View{sensitivity=1, fov=90, visuals=menuui.DEFAULT_VISUAL_SETTINGS, viewmodel=menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair=menuui.DEFAULT_CROSSHAIR_SETTINGS, audio_volumes={0.8,1,0.5,0}}
+	view := menuui.View{sensitivity=1, fov=90, visuals=menuui.DEFAULT_VISUAL_SETTINGS, viewmodel=menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair=menuui.DEFAULT_CROSSHAIR_SETTINGS, audio_volumes={0.8,1,0.5,0,0.3}}
 	count := 0
 	for tab in ([4]menuui.Settings_Tab{.MAIN,.VISUALS,.GAMEPLAY,.AUDIO}) {
 		menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(tab)}})
@@ -311,7 +311,7 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_click(&state, view, control.id)
 			if state.number_edit != .SLIDER || state.number_control.id.id != control.id.id { fmt.println("Every slider value must open a number editor", tab, control.action); return false }
 			expected := control.slider_min+(control.slider_max-control.slider_min)*0.375
-			text := control.action.kind == .AUDIO_VOLUME ? "37.5%" : fmt.tprintf("%g", expected)
+			text := menuui.settings_percent_action(control.action.kind) ? "37.5%" : fmt.tprintf("%g", expected)
 			menu_test_frame(&state, view, {text=text})
 			action := menu_test_frame(&state, view, {enter=true})
 			actual := menuui.settings_slider_value(&state, view, control.action)
@@ -319,7 +319,7 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_frame(&state, view, {})
 		}
 	}
-	if count != 35 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker sliders.
+	if count != 37 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker sliders, weapon volume and levelling strength.
 	menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(menuui.Settings_Tab.GAMEPLAY)}})
 	menu_test_frame(&state, view, {})
 	gap: menuui.Control
@@ -484,11 +484,17 @@ test_settings_scrolling :: proc() -> bool {
 		input.escape = true
 		menu_test_frame(&state, view, input, size[0], size[1])
 		if state.page != .HOME || state.scrollbar_dragging { fmt.println("Escape during a scrollbar drag must cancel the capture and settings"); return false }
-		// A short tab must have neither a scrollbar nor a stale capture.
+		// A short page must have neither a scrollbar nor a stale capture. Every
+		// tab now scrolls at 1280x720 (Audio gained positional and levelling
+		// rows), so a one-result search stands in for the short page.
 		state.page, state.settings_tab = .SETTINGS, .AUDIO
+		query := "Distance falloff"
+		copy(state.search_buffer[:], query)
+		state.search_length = len(query)
 		menu_test_frame(&state, view, {}, size[0], size[1])
 		menu_test_frame(&state, view, {}, size[0], size[1])
-		if clay.GetElementData(clay.ID("SettingsScrollTrack")).found || state.scrollbar_dragging { fmt.println("A non-scrolling tab must not retain a scrollbar"); return false }
+		state.search_length = 0
+		if clay.GetElementData(clay.ID("SettingsScrollTrack")).found || state.scrollbar_dragging { fmt.println("A non-scrolling page must not retain a scrollbar"); return false }
 	}
 	fmt.println("Fast wheel scrolling, fractional input, draggable scrollbar, track jumps and capture tests OK")
 	return true
@@ -706,11 +712,11 @@ test_menu_settings_reset :: proc() -> bool {
 	state := menuui.State{}
 	if !menuui.init(&state, menu_test_measure, nil) { return false }
 	defer menuui.fini(&state)
-	defaults := menuui.Settings_Values{fov = menuui.DEFAULT_FOV, sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, ads_sensitivity = 1, audio_volumes = {0.8, 1, 0.8, 0.6},
+	defaults := menuui.Settings_Values{fov = menuui.DEFAULT_FOV, sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, ads_sensitivity = 1, audio_volumes = {0.8, 1, 0.8, 0.6, 0.3},
 		bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
 	bindings := menuui.default_bindings()
 	bindings[.JUMP] = {'V', -4}
-	view := menuui.View{sensitivity = 2, mouse_dpi = 1600, ads_sensitivity = 1, fov = 110, audio_volumes = {0.1, 0.2, 0.3, 0.4}, show_fps = true, bindings = bindings,
+	view := menuui.View{sensitivity = 2, mouse_dpi = 1600, ads_sensitivity = 1, fov = 110, audio_volumes = {0.1, 0.2, 0.3, 0.4, 0.5}, show_fps = true, bindings = bindings,
 		hud = {hide_timer = true}, visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS,
 		resolution_options = []string{"1280 x 720", "1920 x 1080"}, settings_defaults = defaults}
 	view.crosshair.color = 0x00ff00
