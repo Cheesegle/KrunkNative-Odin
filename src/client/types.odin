@@ -186,6 +186,9 @@ UI :: struct {
 	text_material: ^Text_Material,
 	vao:           u32,
 	vbo:           u32,
+	// Dynamic vertices for ui_fill_polygon.
+	poly_vao:      u32,
+	poly_vbo:      u32,
 	width:         f32,
 	height:        f32,
 	scale:         f32,
@@ -234,6 +237,7 @@ MAX_CACHED_GEOMETRIES :: 64
 g_cube_geometry:  ^Geometry
 g_plane_geometry: ^Geometry
 g_ramp_geometry:  ^Geometry
+g_sphere_geometry: ^Geometry
 
 g_blank_texture:  u32
 g_active_texture: u32

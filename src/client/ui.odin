@@ -140,6 +140,17 @@ ui_init :: proc() -> ^UI {
 	gl.EnableVertexAttribArray(0)
 	gl.EnableVertexAttribArray(1)
 
+	// ui_fill_polygon's dynamic vertices, allocated once up front.
+	gl.GenVertexArrays(1, &ui.poly_vao)
+	gl.GenBuffers(1, &ui.poly_vbo)
+	gl.BindVertexArray(ui.poly_vao)
+	gl.BindBuffer(gl.ARRAY_BUFFER, ui.poly_vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, UI_POLYGON_MAX * size_of(Vertex), nil, gl.DYNAMIC_DRAW)
+	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, stride, 0)
+	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, stride, uintptr(3 * size_of(f32)))
+	gl.EnableVertexAttribArray(0)
+	gl.EnableVertexAttribArray(1)
+
 	return ui
 }
 
@@ -210,6 +221,42 @@ ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
 	material_update_uniforms(&ui.material.base)
 
 	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+}
+
+// A convex (or center-visible) polygon in screen pixels, drawn as a triangle
+// fan with the flat UI color. Used for rotated HUD shapes such as hitmarkers.
+UI_POLYGON_MAX :: 64
+ui_fill_polygon :: proc(ui: ^UI, color: shared.Vec4, points: []shared.Vec2) {
+	if len(points) < 3 || len(points) > UI_POLYGON_MAX || !(ui.width > 0 && ui.height > 0) { return }
+	vertices: [UI_POLYGON_MAX]Vertex
+	for p, i in points {
+		if math.is_nan(p.x) || math.is_nan(p.y) || math.is_inf(p.x) || math.is_inf(p.y) { return }
+		// The centered texture coordinate never reaches the rounded-corner path.
+		vertices[i] = {{p.x / ui.width * 2 - 1, 1 - p.y / ui.height * 2, 0}, {0.5, 0.5}}
+	}
+	if ui.poly_vao == 0 { return }
+	ui.material.color = color
+	ui.material.texture = 0
+	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
+	ui.material.border_bottom_left_radius = 0.0
+	ui.material.border_bottom_right_radius = 0.0
+	ui.material.border_top_left_radius = 0.0
+	ui.material.border_top_right_radius = 0.0
+	ui.material.r_clip = 0.0
+	ui.material.stroke_width = 0
+	if g_active_shader != ui.material.base.program {
+		gl.UseProgram(ui.material.base.program)
+		g_active_shader = ui.material.base.program
+	}
+	material_update_uniforms(&ui.material.base)
+	u := scene_uniforms(ui.material.base.program)
+	if u.offset > -1 { gl.Uniform2f(u.offset, 0, 0) }
+	if u.scale > -1 { gl.Uniform2f(u.scale, 1, 1) }
+	gl.BindVertexArray(ui.poly_vao)
+	gl.BindBuffer(gl.ARRAY_BUFFER, ui.poly_vbo)
+	gl.BufferSubData(gl.ARRAY_BUFFER, 0, len(points) * size_of(Vertex), &vertices[0])
+	gl.DrawArrays(gl.TRIANGLE_FAN, 0, i32(len(points)))
+	g_draw_calls += 1
 }
 
 ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: f32) {
@@ -413,6 +460,8 @@ ui_fini :: proc(ui: ^UI) {
 	if ui.vbo != 0 {
 		gl.DeleteBuffers(1, &ui.vbo)
 	}
+	if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
+	if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
 	material_fini(&ui.material.base)
 	material_fini(&ui.text_material.base)
 	delete(g_font_data)

@@ -323,15 +323,10 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	crosshair := client_crosshair_values(client)
 	if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair)) }
 
-	if color, visible := krunker_client_hit_color(client, glfw.GetTime()); visible {
-		// A compact confirmation ring. Damage is still owned by the server.
-		s := client.ui.scale
-		cx, cy := client.ui.width*0.5, client.ui.height*0.5
-		for sign in ([2]f32{-1, 1}) {
-			ui_fill_rect(client.ui, color, cx + sign*10*s-2*s, cy-12*s, 4*s, 7*s)
-			ui_fill_rect(client.ui, color, cx + sign*10*s-2*s, cy+5*s, 4*s, 7*s)
-		}
-	}
+	// Server-confirmed hits; Krunker draws the marker even with the board open.
+	hitmarker := client_hitmarker_values(client)
+	hit_marker_tick(&client.hit_marker, hitmarker, delta)
+	hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale)
 	if client.krunker.connected {
 		progress := client.krunker_world.interact_progress
 		if client.krunker_world.interact_manual_visible { progress = client.krunker_world.interact_manual_progress }

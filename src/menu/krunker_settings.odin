@@ -18,6 +18,7 @@ Krunker_Key :: enum {
 	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS,
 	CROSSHAIR_TYPE, CROSSHAIR_OPACITY, CROSSHAIR_USE_OPACITY, CROSSHAIR_ALWAYS, CROSSHAIR_COLOR, CROSSHAIR_SHADOW,
 	CROSSHAIR_SHADOW_THICKNESS, CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, CROSSHAIR_GAP, CROSSHAIR_DOT,
+	HITMARKER_SHOW, HITMARKER_COLOR, HITMARKER_KILL_COLOR, HITMARKER_OPACITY, HITMARKER_LENGTH, HITMARKER_THICKNESS, HITMARKER_SPACING, HITMARKER_ANIM_SIZE, HITMARKER_FADE,
 	SENSITIVITY_X, SENSITIVITY_Y, AIM_SENSITIVITY_X, AIM_SENSITIVITY_Y, INVERT_Y,
 	SOUND, PLAYER_VOLUME, UI_VOLUME,
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
@@ -45,6 +46,16 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.CROSSHAIR_LENGTH = {"crosshairLen", .NUMBER, 16, 0, 100},
 	.CROSSHAIR_GAP = {"crosshairGap", .NUMBER, 0, -100, 100},
 	.CROSSHAIR_DOT = {"crosshairDot", .SWITCH, 1, 0, 0},
+	// Hitmarker category (krunkbox current.analysis.js near line 252728).
+	.HITMARKER_SHOW = {"hitm", .SWITCH, 1, 0, 0},
+	.HITMARKER_COLOR = {"hitmCol", .COLOR, 0xffffff, 0, 0},
+	.HITMARKER_KILL_COLOR = {"hitmKCol", .COLOR, 0xff0000, 0, 0},
+	.HITMARKER_OPACITY = {"hitOpac", .NUMBER, 1, 0, 1},
+	.HITMARKER_LENGTH = {"hitmLen", .NUMBER, 25, 1, 50},
+	.HITMARKER_THICKNESS = {"hitmThick", .NUMBER, 7, 1, 20},
+	.HITMARKER_SPACING = {"hitmSpac", .NUMBER, 37, 5, 60},
+	.HITMARKER_ANIM_SIZE = {"hitmAnimD", .NUMBER, 0.14, 0.1, 0.5},
+	.HITMARKER_FADE = {"hitmFad", .NUMBER, 0.0062, 0.0001, 0.01},
 	.SENSITIVITY_X = {"sensitivityX", .NUMBER, 1, 0.1, 15},
 	.SENSITIVITY_Y = {"sensitivityY", .NUMBER, 1, 0.1, 15},
 	.AIM_SENSITIVITY_X = {"aimSensitivityX", .NUMBER, 1, 0.1, 15},
@@ -301,6 +312,12 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string) -> (resu
 		color = colors[.CROSSHAIR_COLOR], shadow_color = colors[.CROSSHAIR_SHADOW],
 	}
 	draft.crosshair = crosshair_settings_validate(draft.crosshair)
+	// Headshot color is Krodin's own, so an import keeps it.
+	draft.hitmarker = hitmarker_settings_validate(Hitmarker_Settings{
+		show = switches[.HITMARKER_SHOW],
+		values = {.OPACITY = f32(numbers[.HITMARKER_OPACITY]), .LENGTH = f32(numbers[.HITMARKER_LENGTH]), .THICKNESS = f32(numbers[.HITMARKER_THICKNESS]), .SPACING = f32(numbers[.HITMARKER_SPACING]), .ANIM_SIZE = f32(numbers[.HITMARKER_ANIM_SIZE]), .FADE = f32(numbers[.HITMARKER_FADE])},
+		colors = {.NORMAL = colors[.HITMARKER_COLOR], .KILL = colors[.HITMARKER_KILL_COLOR], .HEADSHOT = hitmarker_settings_validate(values.hitmarker).colors[.HEADSHOT]},
+	})
 
 	known := make(map[string]bool, allocator = context.temp_allocator)
 	for setting in KRUNKER_SETTINGS { known[setting.key] = true }
@@ -381,6 +398,11 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	numbers[.CROSSHAIR_THICKNESS], numbers[.CROSSHAIR_LENGTH], numbers[.CROSSHAIR_GAP] = f64(crosshair.values[.THICKNESS]), f64(crosshair.values[.SIZE]), f64(crosshair.values[.GAP])
 	switches[.CROSSHAIR_USE_OPACITY], switches[.CROSSHAIR_ALWAYS], switches[.CROSSHAIR_DOT] = crosshair.toggles[.CUSTOM_OPACITY], crosshair.toggles[.ALWAYS_SHOW], crosshair.toggles[.DOT]
 	colors[.CROSSHAIR_COLOR], colors[.CROSSHAIR_SHADOW] = crosshair.color, crosshair.shadow_color
+	hitmarker := hitmarker_settings_validate(values.hitmarker)
+	switches[.HITMARKER_SHOW] = hitmarker.show
+	colors[.HITMARKER_COLOR], colors[.HITMARKER_KILL_COLOR] = hitmarker.colors[.NORMAL], hitmarker.colors[.KILL]
+	numbers[.HITMARKER_OPACITY], numbers[.HITMARKER_LENGTH], numbers[.HITMARKER_THICKNESS] = f64(hitmarker.values[.OPACITY]), f64(hitmarker.values[.LENGTH]), f64(hitmarker.values[.THICKNESS])
+	numbers[.HITMARKER_SPACING], numbers[.HITMARKER_ANIM_SIZE], numbers[.HITMARKER_FADE] = f64(hitmarker.values[.SPACING]), f64(hitmarker.values[.ANIM_SIZE]), f64(hitmarker.values[.FADE])
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
 	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))

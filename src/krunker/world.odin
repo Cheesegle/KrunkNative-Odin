@@ -131,7 +131,10 @@ Krunker_World_State :: struct {
 	last_hit_at: f64,
 	hit_revision: u64,
 	hit_lethal: bool,
+	hit_headshot: bool,
 	winner_team, end_result: i32,
+	// END was applied for this match; gsc can end the match before it arrives.
+	end_received: bool,
 	// END endIndex (0 normal, 2 match over, 3 abandoned) and its final table.
 	end_index: i32,
 	end_entries: [dynamic]Krunker_End_Entry,

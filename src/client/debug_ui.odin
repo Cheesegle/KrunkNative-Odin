@@ -188,7 +188,7 @@ debug_ui_update :: proc(client: ^Client) -> bool {
 // Clicks, scroll and mouse binds over the debug window stay out of the menu.
 debug_ui_block_menu_input :: proc(input: ^menuui.Input) {
 	input.pointer = {DEBUG_UI_OFFSCREEN, DEBUG_UI_OFFSCREEN}
-	input.down = false
+	input.down, input.right_down = false, false
 	input.scroll = {}
 	if input.binding_pressed < 0 { input.binding_pressed = 0 }
 }
@@ -245,6 +245,7 @@ debug_ui_window :: proc(client: ^Client, dbg: ^Debug_UI) {
 	cnt.rect.y = clamp(cnt.rect.y, 0, max(0, screen_h - cnt.rect.h))
 	if !mu.begin_window(ctx, DEBUG_WINDOW_TITLE, cnt.rect, {.NO_RESIZE, .NO_SCROLL}) { return }
 	debug_ui_performance(client, dbg)
+	debug_ui_rendering(client, dbg)
 	mu.end_window(ctx)
 	// Fit the height to this frame's content (collapsing the section shrinks
 	// it); the width stays fixed. microui's AUTO_SIZE would also shrink width.
@@ -338,6 +339,30 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 
 	mu.layout_row(ctx, {-1}, i32(96*s))
 	debug_ui_graph(dbg, stats, mu.layout_next(ctx), summary.frame_avg)
+}
+
+// Debug drawing toggles (debug_hitboxes.odin). All start off and are not saved.
+// The section starts collapsed so the window keeps its size until it is used.
+debug_ui_rendering :: proc(client: ^Client, dbg: ^Debug_UI) {
+	ctx := &dbg.ctx
+	if .ACTIVE not_in mu.header(ctx, "Rendering") { return }
+	dr := &client.debug_render
+	muted := mu.Color{150, 156, 168, 255}
+	mu.layout_row(ctx, {-1})
+	mu.checkbox(ctx, "Player hitboxes", &dr.player_hitboxes)
+	mu.checkbox(ctx, "Map collision (150u)", &dr.map_collision)
+	mu.checkbox(ctx, "Shot rays", &dr.shot_rays)
+	mu.checkbox(ctx, "X-ray (through walls)", &dr.xray)
+	// What the player boxes are: whose rules decide hits, and which pose.
+	if dr.player_hitboxes {
+		if debug_hitbox_model(client) == .KRUNKER {
+			debug_ui_value(ctx, "Krunker server hurtboxes", muted)
+			debug_ui_value(ctx, "at interpolated poses", muted)
+		} else {
+			debug_ui_value(ctx, debug_hitbox_kind(client) == .MELEE ? "Krodin melee boxes" : "Krodin shot boxes", muted)
+			debug_ui_value(ctx, client.net.connected ? "displayed; server re-tests" : "at simulation positions", muted)
+		}
+	}
 }
 
 // The last PERF_GRAPH_FRAMES frame times as bars (newest at the right),

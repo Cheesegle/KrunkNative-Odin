@@ -9,6 +9,7 @@ Presentation_Event :: struct {
 	position: Vec3,
 	value: f32,
 	headshot: bool,
+	lethal: bool, // HIT only: the damage killed the victim.
 }
 
 game_emit_presentation :: proc(game: ^Game, event: Presentation_Event) {
@@ -23,7 +24,8 @@ player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind) {
 	if player.loadout_index >= 0 && player.loadout_index < player.loadout_size { weapon_id = player.loadout[player.loadout_index] }
 	game_emit_presentation(player.game, {
 		kind = kind, uid = player.uid, weapon_id = weapon_id,
-		position = player.position + Vec3{0, player.height - GAME_CONSTANTS.camera_height, 0},
+		// Krunker's playerSound/playSound emit from the player's x, y, z (feet).
+		position = player.position,
 		value = player.crouch_val,
 	})
 }
