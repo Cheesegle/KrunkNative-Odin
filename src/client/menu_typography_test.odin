@@ -217,7 +217,7 @@ when ODIN_TEST {
 				testing.expect(t, state.errors == 0, "menu layout reported an error")
 				if scenario >= 46 {
 					heading := clay.GetElementData(clay.ID("SettingsHeading")).boundingBox
-					for id in ([]string{"SettingsSearch", "SettingsExport", "SettingsImport"}) {
+					for id in ([]string{"SettingsSearch", "SettingsReset", "SettingsExport", "SettingsImport"}) {
 						box := clay.GetElementData(clay.ID(id)).boundingBox
 						testing.expectf(t, box.width > 0 && box.x >= heading.x && box.x+box.width <= heading.x+heading.width+1 && box.y >= heading.y && box.y+box.height <= heading.y+heading.height+1, "%s must fit in the settings header at %v", id, size)
 					}

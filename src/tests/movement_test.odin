@@ -290,6 +290,10 @@ main :: proc() {
 		fmt.eprintln("Menu tests failed")
 		os.exit(1)
 	}
+	if !test_menu_settings_reset() {
+		fmt.eprintln("Settings reset tests failed")
+		os.exit(1)
+	}
 	if !test_fuzzy_matcher() || !test_settings_search() || !test_menu_fps_limit_setting() || !test_slider_curve() || !test_dropdown_scroll() {
 		fmt.eprintln("Settings search tests failed")
 		os.exit(1)

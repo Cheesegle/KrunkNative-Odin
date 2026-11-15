@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY }
@@ -85,6 +85,10 @@ View :: struct {
 	advanced_sensitivity, invert_mouse: bool,
 	audio_volumes: [4]f32,
 	show_fps: bool,
+	// What Reset restores: the client's defaults for a missing settings file
+	// (client_settings_defaults through client_settings_validate, plus the
+	// audio defaults). Reset stays disabled while this is the zero value.
+	settings_defaults: Settings_Values,
 }
 Input :: struct {
 	pointer: clay.Vector2,
@@ -138,6 +142,9 @@ State :: struct {
 	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
 	// can make it several kilobytes, so the field holds up to 64 KiB.
 	import_open, import_overflow: bool,
+	// Krunker's resetSettings asks confirm("settings.reset.confirm") first.
+	reset_open: bool,
+	settings_defaults: Settings_Values, // Copied from View every frame.
 	import_buffer: [65536]u8,
 	import_length: int,
 	settings_message: [160]u8,
@@ -160,10 +167,12 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.number_edit = .NONE
 		state.color_edit = 0
 		settings_import_close(state)
+		state.reset_open = false
 		state.settings_message_length = 0
 		state.search_length = 0
 		return
 	}
+	state.settings_defaults = view.settings_defaults
 	if !state.settings_active {
 		state.settings_resolution_selected = false
 		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
@@ -222,6 +231,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	if state.import_open {
 		if action, handled := settings_import_interact(state, input); handled { return action }
 	}
+	if state.reset_open && settings_reset_interact(state, input) { return {} }
 	if state.number_edit != .NONE && settings_number_interact(state, input) { return {} }
 	// Capture runs before menu shortcuts: Enter, Tab, arrows and mouse buttons
 	// can all be rebound without activating another control behind the listener.
@@ -387,6 +397,29 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.focus = clay.ID("ImportConfirm").id
 		return {}
 	}
+	if control.action.kind == .SETTINGS_RESET_OPEN {
+		if !settings_reset_available(state) { return {} }
+		state.reset_open, state.pressed, state.settings_message_length = true, 0, 0
+		state.binding_capture, state.binding_reserved, state.settings_dropdown = 0, false, .NONE
+		state.focus = clay.ID("ResetConfirm").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_RESET_CLOSE {
+		state.reset_open, state.pressed, state.focus = false, 0, clay.ID("SettingsReset").id
+		return {}
+	}
+	if control.action.kind == .SETTINGS_RESET {
+		state.reset_open, state.pressed, state.focus = false, 0, clay.ID("SettingsReset").id
+		if !settings_reset_available(state) { return {} }
+		if control.action.index == 1 {
+			settings_reset_tab(&state.settings_draft, state.settings_defaults, state.settings_tab)
+			settings_set_message(state, fmt.tprintf("%s reset to defaults. Save keeps them; Cancel restores your settings.", SETTINGS_TABS[state.settings_tab]), false)
+		} else {
+			state.settings_draft = state.settings_defaults
+			settings_set_message(state, "All settings reset to defaults. Save keeps them; Cancel restores your settings.", false)
+		}
+		return {}
+	}
 	if control.action.kind == .SETTINGS_IMPORT {
 		state.pressed = 0
 		if state.import_overflow { settings_set_message(state, "Settings text is too long.", true); return {} }
@@ -420,6 +453,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.color_edit, state.color_invalid = 0, false
 		state.binding_reserved = false
 		settings_import_close(state)
+		state.reset_open = false
 		state.settings_message_length = 0
 		state.search_length = 0
 		return control.action if control.action.kind == .SETTINGS_SAVE else Action{}

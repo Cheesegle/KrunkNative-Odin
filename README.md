@@ -19,6 +19,7 @@ with the browser game.
   - Key binds, sensitivity in cm/360, video, visuals, viewmodel, crosshair and audio.
   - Fuzzy settings search.
   - Import and export of Krunker settings text.
+  - Reset to defaults (all settings, or just the current tab), with a confirmation step.
 
 ## Requirements
 
@@ -153,6 +154,7 @@ later ones are broad and may change.
   - [x] Key binds, cm/360 sensitivity, video, visuals, viewmodel, Precision crosshair, trails and audio.
   - [x] Fuzzy settings search.
   - [x] Krunker settings import/export.
+  - [x] Reset settings to defaults.
 - [x] Fixed the fullscreen resolution picker and the mid-round class-change softlock.
 
 ### Phase 1: Playable core

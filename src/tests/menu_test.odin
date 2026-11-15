@@ -501,7 +501,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.GAMEPLAY)))
 	menu_test_frame(&state, view, {})
-	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+3+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
+	if state.settings_tab != .GAMEPLAY || state.control_count != len(menuui.Settings_Tab)+4+9+2*len(menuui.Viewmodel_Control)+len(menuui.Viewmodel_Toggle)+2*len(menuui.Crosshair_Control)+len(menuui.Crosshair_Toggle) { fmt.println("Gameplay must expose global viewmodel, trails and crosshair controls with editable numbers"); return false }
 	state.focus = clay.ID("FieldOfView").id
 	menu_test_frame(&state, view, {right=true})
 	if state.settings_draft.fov != 95 { fmt.println("FOV keyboard adjustment must start from the current draft angle"); return false }
@@ -702,4 +702,113 @@ test_live_lobby_records :: proc() -> bool {
 	if !kproto.krunker_world_apply_packet(&world, []kproto.Krunker_Msgpack_Value{"cda","socket-a",kproto.Krunker_Msgpack_Nil{}}) || len(world.lobby_players) != 0 { return false }
 	fmt.println("Live pre-spawn lobby roster and assignment tests OK")
 	return true
+}
+
+// Settings > Reset (Krunker's resetSettings): a confirmation popup, then the
+// draft returns to View.settings_defaults. Save applies it, Cancel reverts.
+test_menu_settings_reset :: proc() -> bool {
+	state := menuui.State{}
+	if !menuui.init(&state, menu_test_measure, nil) { return false }
+	defer menuui.fini(&state)
+	defaults := menuui.Settings_Values{fov = menuui.DEFAULT_FOV, sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, ads_sensitivity = 1, audio_volumes = {0.8, 1, 0.8, 0.6},
+		bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
+	bindings := menuui.default_bindings()
+	bindings[.JUMP] = {'V', -4}
+	view := menuui.View{sensitivity = 2, mouse_dpi = 1600, ads_sensitivity = 1, fov = 110, audio_volumes = {0.1, 0.2, 0.3, 0.4}, show_fps = true, bindings = bindings,
+		hud = {hide_timer = true}, visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS,
+		resolution_options = []string{"1280 x 720", "1920 x 1080"}, settings_defaults = defaults}
+	view.crosshair.color = 0x00ff00
+	state.page = .SETTINGS
+	menu_test_frame(&state, view, {})
+	menu_test_frame(&state, view, {})
+	edited := state.settings_draft
+	if edited.bindings[.JUMP] != ([2]i32{'V', -4}) || edited == defaults { fmt.println("Reset test: the draft must start from the saved settings"); return false }
+
+	// Krunker's header order: Reset, Export, Import.
+	reset := clay.GetElementData(clay.ID("SettingsReset")).boundingBox
+	export := clay.GetElementData(clay.ID("SettingsExport")).boundingBox
+	if reset.width <= 0 || reset.x+reset.width > export.x+1 || abs(reset.y-export.y) > 1 { fmt.println("Reset must sit before Export in the settings header"); return false }
+
+	// One click only opens the confirmation; Escape, a click outside and
+	// "Keep my settings" each close it without touching the draft.
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	if !state.reset_open || state.settings_draft != edited || !clay.GetElementData(clay.ID("ResetPopup")).found { fmt.println("Reset must ask for confirmation first"); return false }
+	if state.focus != clay.ID("ResetConfirm").id { fmt.println("The confirmation must focus its Reset button"); return false }
+	menu_test_frame(&state, view, {escape = true})
+	menu_test_frame(&state, view, {})
+	if state.reset_open || state.page != .SETTINGS || state.settings_draft != edited { fmt.println("Escape must close only the confirmation"); return false }
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	menu_test_frame(&state, view, {pointer = {2, 2}, down = true})
+	menu_test_frame(&state, view, {pointer = {2, 2}})
+	if state.reset_open || state.settings_draft != edited { fmt.println("A click outside must close the confirmation"); return false }
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("ResetCancel"))
+	menu_test_frame(&state, view, {})
+	if state.reset_open || state.settings_draft != edited { fmt.println("Keep my settings must close the confirmation"); return false }
+
+	// Settings behind the popup cannot be clicked.
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("SettingsSave")).kind != .NONE || state.page != .SETTINGS { fmt.println("The confirmation must block the footer"); return false }
+
+	// Confirm: every tab, key binds included, returns to the defaults.
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("ResetConfirm")).kind != .NONE || state.reset_open || state.settings_draft != defaults || state.page != .SETTINGS {
+		fmt.println("Reset all must restore every default in the draft"); return false
+	}
+	if view.bindings[.JUMP] != ([2]i32{'V', -4}) { fmt.println("Reset must not touch the saved settings"); return false }
+	menu_test_frame(&state, view, {})
+	// Cancel reverts the reset.
+	menu_test_click(&state, view, clay.ID("SettingsCancel"))
+	menu_test_frame(&state, view, {})
+	state.page = .SETTINGS
+	menu_test_frame(&state, view, {})
+	if state.settings_draft != edited { fmt.println("Cancel must discard a reset"); return false }
+
+	// Enter confirms from the keyboard; Save then hands the defaults to the client.
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	menu_test_frame(&state, view, {enter = true})
+	menu_test_frame(&state, view, {})
+	if state.settings_draft != defaults { fmt.println("Enter must confirm the reset"); return false }
+	if menu_test_click(&state, view, clay.ID("SettingsSave")).kind != .SETTINGS_SAVE { fmt.println("Save must apply the reset"); return false }
+	menu_test_frame(&state, view, {})
+
+	// "Reset <tab> only" on Key binds restores just the binds.
+	state.page = .SETTINGS
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.INPUT)))
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("ResetTab", 1))
+	menu_test_frame(&state, view, {})
+	if state.settings_draft.bindings != defaults.bindings || state.settings_draft.sensitivity != 2 || state.settings_draft.fov != 110 || state.settings_draft.audio_volumes != view.audio_volumes {
+		fmt.println("Reset Key binds only must restore just the binds"); return false
+	}
+	menu_test_click(&state, view, clay.ID("SettingsCancel"))
+	menu_test_frame(&state, view, {})
+
+	// While searching there is no current tab, so only Reset all is offered.
+	state.page = .SETTINGS
+	menu_test_frame(&state, view, {})
+	state.focus = clay.ID("SettingsSearch").id
+	menu_test_frame(&state, view, {text = "fov"})
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	menu_test_frame(&state, view, {})
+	if !state.reset_open || clay.GetElementData(clay.ID("ResetTab", 1)).found { fmt.println("Search results must offer only Reset all"); return false }
+	menu_test_frame(&state, view, {escape = true})
+	menu_test_frame(&state, view, {})
+
+	// Without defaults from the client, Reset is disabled.
+	view.settings_defaults = {}
+	menu_test_frame(&state, view, {})
+	menu_test_click(&state, view, clay.ID("SettingsReset"))
+	if state.reset_open { fmt.println("Reset must stay disabled without defaults"); return false }
+	return state.errors == 0
 }
