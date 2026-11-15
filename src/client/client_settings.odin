@@ -31,6 +31,21 @@ client_settings_defaults :: proc() -> Client_Settings {
 	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
 }
 
+// The menu draft for a missing settings file, which Settings > Reset restores:
+// the loader's defaults (client_settings_defaults through
+// client_settings_validate) plus the audio defaults, shaped like menu_view.
+client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = nil, max_anisotropy: f32 = 16) -> menuui.Settings_Values {
+	d := client_settings_validate(client_settings_defaults())
+	audio := audio_settings_clamp(DEFAULT_AUDIO_SETTINGS)
+	return {display_mode = d.display_mode, resolution_index = d.resolution_index, monitor_index = d.monitor_index,
+		fullscreen_index = client_fullscreen_index(fullscreen_sizes, {d.fullscreen_width, d.fullscreen_height}),
+		fov = d.fov, sensitivity = d.sensitivity, mouse_dpi = d.mouse_dpi, ads_sensitivity = d.ads_sensitivity,
+		advanced_sensitivity = d.advanced_sensitivity, invert_mouse = d.invert_mouse,
+		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui},
+		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
+		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair}
+}
+
 client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result := settings
 	result.fov = menuui.fov_validate(result.fov)
