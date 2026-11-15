@@ -286,11 +286,21 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	mu.label(ctx, "CPU ms")
 	debug_ui_cell(ctx, "", fmt.tprintf("%.2f", summary.cpu_ms), white, muted)
 	debug_ui_cell(ctx, "avg", fmt.tprintf("%.2f", summary.cpu_avg), white, muted)
-	debug_ui_cell(ctx, "", "", white, muted)
+	debug_ui_cell(ctx, "max", fmt.tprintf("%.2f", summary.cpu_max), level_color(perf_frame_level(summary.cpu_max, 0)), muted)
 	mu.label(ctx, "GPU ms")
 	debug_ui_cell(ctx, "", stats.shown_gpu_valid ? fmt.tprintf("%.2f", stats.shown_gpu_ms) : "--", stats.shown_gpu_valid ? white : muted, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
+	// The rest of each frame, outside CPU time: SwapBuffers (driver/compositor
+	// present), event polling (window messages, raw mouse), and the remainder.
+	// The max column is coloured so a spike points at its source.
+	split_labels := [Perf_Split]string{.SWAP = "Swap ms", .EVENTS = "Events ms", .OTHER = "Other ms"}
+	for part in Perf_Split {
+		mu.label(ctx, split_labels[part])
+		debug_ui_cell(ctx, "", fmt.tprintf("%.2f", summary.split_ms[part]), white, muted)
+		debug_ui_cell(ctx, "avg", fmt.tprintf("%.2f", summary.split_avg[part]), white, muted)
+		debug_ui_cell(ctx, "max", fmt.tprintf("%.2f", summary.split_max[part]), level_color(perf_frame_level(summary.split_max[part], 0)), muted)
+	}
 	// Total draws this frame (world, view model, HUD and menus), then the
 	// world/view-model share and how map batching and culling handled it.
 	world := stats.shown_world

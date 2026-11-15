@@ -143,6 +143,28 @@ when ODIN_TEST {
 	}
 
 	@(test)
+	perf_overlay_splits_frame_time :: proc(t: ^testing.T) {
+		client := new(Client)
+		defer free(client)
+		perf_overlay_set(client, true)
+		// 10 ms frame = 2 ms CPU + 5 ms swap + 1 ms events + 2 ms other.
+		perf_overlay_record(client, 10, 2, 5, 1)
+		summary := perf_summary(&client.perf)
+		testing.expect(t, summary.split_ms == ([Perf_Split]f32{.SWAP = 5, .EVENTS = 1, .OTHER = 2}), "the frame splits into swap, events and the remainder")
+		// A 40 ms swap stall among fast frames shows as the swap max, not CPU.
+		perf_reset(&client.perf)
+		for _ in 0 ..< 50 { perf_overlay_record(client, 1, 0.2, 0.5, 0.1) }
+		perf_overlay_record(client, 41, 0.2, 40, 0.1)
+		for _ in 0 ..< 50 { perf_overlay_record(client, 1, 0.2, 0.5, 0.1) }
+		summary = perf_summary(&client.perf)
+		testing.expect(t, summary.split_max[.SWAP] == 40 && summary.cpu_max < 1 && summary.split_max[.EVENTS] < 1, "a swap stall is attributed to swap")
+		testing.expect(t, perf_frame_level(summary.split_max[.SWAP], 0) == .BAD, "and its max is coloured as a hitch")
+		// The remainder never goes negative when parts overlap rounding.
+		perf_overlay_record(client, 1, 0.6, 0.5, 0.1)
+		testing.expect(t, perf_summary(&client.perf).split_ms[.OTHER] == 0, "other is clamped at zero")
+	}
+
+	@(test)
 	perf_overlay_shows_batching_stats :: proc(t: ^testing.T) {
 		client := new(Client)
 		defer free(client)
