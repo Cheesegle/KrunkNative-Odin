@@ -156,12 +156,14 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 		values.fov = fov_validate(view.fov)
 		values.viewmodel = viewmodel_settings_validate(view.viewmodel)
 		values.crosshair = crosshair_settings_validate(view.crosshair)
+		values.hitmarker = hitmarker_settings_validate(view.hitmarker)
 	}
 	#partial switch action.kind {
 	case .AUDIO_VOLUME: return values.audio_volumes[action.index]
 	case .FOV: return values.fov
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
+	case .HITMARKER_VALUE: return values.hitmarker.values[Hitmarker_Control(action.index)]
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	}

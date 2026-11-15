@@ -54,6 +54,8 @@ Client :: struct {
 	viewmodel_settings: menuui.Viewmodel_Settings,
 	trail_settings: menuui.Trail_Settings,
 	crosshair_settings: menuui.Crosshair_Settings,
+	hitmarker_settings: menuui.Hitmarker_Settings,
+	hit_marker: Hit_Marker,
 	aim_pressed, aim_toggled: bool,
 	inspect_pressed: bool,
 	scoreboard_open: bool,
@@ -1552,6 +1554,7 @@ main :: proc() {
 	client.viewmodel_settings = preferences.viewmodel
 	client.trail_settings = preferences.trails
 	client.crosshair_settings = preferences.crosshair
+	client.hitmarker_settings = preferences.hitmarker
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
@@ -1649,7 +1652,8 @@ main :: proc() {
 		if client.audio_settings_dirty { audio_settings_save(client.audio_settings) }
 		audio_destroy(client.audio)
 	}
-	client.game.presentation_enabled = client.audio != nil
+	// Hitmarkers read HIT events even when audio is unavailable.
+	client.game.presentation_enabled = true
 
 	if len(options.class_name) > 0 {
 		client.selected_class = i32(shared.class_config_index(options.class_name))

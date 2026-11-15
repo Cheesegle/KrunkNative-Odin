@@ -171,6 +171,7 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 						ordered_remove(&client.game.impacts, 0)
 					}
 					append(&client.game.impacts, impact)
+					client_hit_marker_native_impact(client, impact)
 				}
 			}
 			nc.recv_len -= packet_size

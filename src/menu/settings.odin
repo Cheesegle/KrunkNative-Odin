@@ -103,6 +103,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_viewmodel(state)
 		settings_trails(state)
 		settings_crosshair(state)
+		settings_hitmarker(state)
 	case .AUDIO:
 		settings_section(state, "Volume")
 		labels := [4]string{"Master volume", "Effects volume", "Footsteps volume", "UI volume"}
@@ -219,6 +220,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
+		draft.hitmarker = defaults.hitmarker
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 	case .HUD:
