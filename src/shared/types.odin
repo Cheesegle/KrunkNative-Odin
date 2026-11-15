@@ -436,9 +436,16 @@ Player :: struct {
 	has_ramp_fix:                    bool,
 	idle_anim:                       f32,
 	hp_chase:                        f32,
-	// Krunker `canBSeen`: client-side nameplate visibility, refreshed every
-	// 200 ms from teams and a line-of-sight test (see healthbars.odin).
+	// Client-side nameplate visibility (healthbars.odin). can_be_seen is the
+	// latest team/lobby/line-of-sight result; nameplate_alpha eases toward it
+	// and is what the renderer uses. nameplate_seen_at is the client time of
+	// the last visible check (for the hold before fading out). The state is
+	// per life: nameplate_tracked is cleared on death, respawn and creation.
 	can_be_seen:                     bool,
+	nameplate_tracked:               bool,
+	nameplate_in_view:               bool,
+	nameplate_alpha:                 f32,
+	nameplate_seen_at:               f32,
 	position:                        Vec3,
 	last_position:                   Vec3,
 	velocity:                        Vec3,
