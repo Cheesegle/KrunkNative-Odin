@@ -52,13 +52,11 @@ Bench_Result :: struct {
 	culled:      f64, // Average map batches culled per frame.
 }
 
-bench_configs :: proc() -> []Bench_Config {
-	configs := make([dynamic]Bench_Config, context.temp_allocator)
-	base := menuui.Quality_Settings{}
-	append(&configs, Bench_Config{"per-object (batching off)", base, false, false})
-	append(&configs, Bench_Config{"batched, no culling", base, true, false})
-	append(&configs, Bench_Config{"batched + culled", base, true, true})
-	return configs[:]
+// Static: bench_map frees the temp allocator after every configuration.
+BENCH_CONFIGS := [?]Bench_Config{
+	{"per-object (batching off)", {}, false, false},
+	{"batched, no culling", {}, true, false},
+	{"batched + culled", {}, true, true},
 }
 
 bench_parse_size :: proc(text: string) -> (w, h: i32, ok: bool) {
@@ -316,13 +314,13 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 	bench_spawn_players(client)
 	fmt.printf("[Bench] %s: %d objects, %d world meshes, %d spawns\n", map_name, len(map_inst.objects), len(client.scene.meshes), len(map_inst.spawns))
 	if set := client.scene.batches; set != nil {
-		fmt.printf("[Bench] %s: %d map batches hold %d meshes (%d vertices, %d indices)\n", map_name, len(set.batches), len(set.members), set.vertex_count, set.index_count)
+		fmt.printf("[Bench] %s: %d draw slots; %d meshes merged (%d vertices, %d indices), %d drawn singly (%d of them for depth ties)\n", map_name, len(set.batches), set.merged, set.vertex_count, set.index_count, set.singles, set.tie_excluded)
 	}
 
 	for size in sizes {
 		target := bench_target_init(size[0], size[1])
 		defer bench_target_fini(&target)
-		for bench_config in bench_configs() {
+		for bench_config in BENCH_CONFIGS {
 			result := bench_run_config(client, &target, bench_config, client.bench_seconds, map_name)
 			append(results, result)
 			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  draws %7.1f  [%d frames]\n",
