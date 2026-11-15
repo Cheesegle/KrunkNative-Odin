@@ -29,8 +29,14 @@ g_draw_calls: u32
 
 Perf_Level :: enum u8 { GOOD, WARN, BAD }
 
+// Parts of the frame outside the CPU (tick + render submission) time:
+// SwapBuffers, event polling (window messages and raw mouse input), and the
+// remainder (settings saves, the idle wait, allocator reset).
+Perf_Split :: enum u8 { SWAP, EVENTS, OTHER }
+
 Perf_Stats :: struct {
 	frame_ms, cpu_ms: [PERF_HISTORY]f32,
+	split_ms: [Perf_Split][PERF_HISTORY]f32,
 	head, count: int, // head is the next write index.
 	draw_calls: u32, // Draw calls of the last recorded frame.
 	world: Draw_Stats, // World/viewmodel batching and culling stats of that frame.
@@ -54,13 +60,15 @@ Perf_Stats :: struct {
 Perf_Summary :: struct {
 	fps, fps_avg, fps_low: f32,
 	frame_ms, frame_avg, frame_max: f32,
-	cpu_ms, cpu_avg: f32,
+	cpu_ms, cpu_avg, cpu_max: f32,
+	split_ms, split_avg, split_max: [Perf_Split]f32,
 	frames: int,
 }
 
 perf_push :: proc(stats: ^Perf_Stats, frame_ms, cpu_ms: f32) {
 	stats.frame_ms[stats.head] = max(0, frame_ms)
 	stats.cpu_ms[stats.head] = max(0, cpu_ms)
+	for part in Perf_Split { stats.split_ms[part][stats.head] = 0 }
 	stats.head = (stats.head + 1) % PERF_HISTORY
 	stats.count = min(stats.count + 1, PERF_HISTORY)
 }
@@ -78,9 +86,15 @@ perf_reset :: proc(stats: ^Perf_Stats) {
 	stats.shown, stats.shown_valid, stats.since_refresh_ms = {}, false, 0
 }
 
-perf_overlay_record :: proc(client: ^Client, frame_ms, cpu_ms: f32) {
+// All values describe the same (previous) frame: its duration, its CPU time,
+// and how long its SwapBuffers and event polling took.
+perf_overlay_record :: proc(client: ^Client, frame_ms, cpu_ms: f32, swap_ms: f32 = 0, events_ms: f32 = 0) {
 	if !client.perf_overlay { return }
 	perf_push(&client.perf, frame_ms, cpu_ms)
+	newest := perf_sample_index(&client.perf, 0)
+	client.perf.split_ms[.SWAP][newest] = max(0, swap_ms)
+	client.perf.split_ms[.EVENTS][newest] = max(0, events_ms)
+	client.perf.split_ms[.OTHER][newest] = max(0, frame_ms - cpu_ms - swap_ms - events_ms)
 	client.perf.draw_calls = g_draw_calls
 	client.perf.world = g_draw_stats // Reset per frame by client_render_world.
 	perf_refresh_shown(&client.perf)
@@ -99,13 +113,16 @@ perf_refresh_shown :: proc(stats: ^Perf_Stats, force := false) {
 	if stats.count > 0 {
 		recent := perf_window_frames(stats, PERF_TEXT_REFRESH_MS)
 		frame_total, cpu_total: f32
+		split_total: [Perf_Split]f32
 		for age in 0..<recent {
 			index := perf_sample_index(stats, age)
 			frame_total += stats.frame_ms[index]
 			cpu_total += stats.cpu_ms[index]
+			for part in Perf_Split { split_total[part] += stats.split_ms[part][index] }
 		}
 		summary.frame_ms = frame_total / f32(recent)
 		summary.cpu_ms = cpu_total / f32(recent)
+		for part in Perf_Split { summary.split_ms[part] = split_total[part] / f32(recent) }
 		summary.fps = summary.frame_ms > 0 ? 1000 / summary.frame_ms : 0
 	}
 	stats.shown = summary
@@ -132,6 +149,7 @@ perf_summary :: proc(stats: ^Perf_Stats) -> (summary: Perf_Summary) {
 	if stats.count == 0 { return }
 	newest := perf_sample_index(stats, 0)
 	summary.frame_ms, summary.cpu_ms = stats.frame_ms[newest], stats.cpu_ms[newest]
+	for part in Perf_Split { summary.split_ms[part] = stats.split_ms[part][newest] }
 	if summary.frame_ms > 0 { summary.fps = 1000 / summary.frame_ms }
 
 	fps_frames := perf_window_frames(stats, PERF_FPS_WINDOW_MS)
@@ -141,14 +159,21 @@ perf_summary :: proc(stats: ^Perf_Stats) -> (summary: Perf_Summary) {
 
 	frame_frames := perf_window_frames(stats, PERF_FRAME_WINDOW_MS)
 	frame_total, cpu_total: f32
+	split_total: [Perf_Split]f32
 	for age in 0..<frame_frames {
 		index := perf_sample_index(stats, age)
 		frame_total += stats.frame_ms[index]
 		cpu_total += stats.cpu_ms[index]
 		summary.frame_max = max(summary.frame_max, stats.frame_ms[index])
+		summary.cpu_max = max(summary.cpu_max, stats.cpu_ms[index])
+		for part in Perf_Split {
+			split_total[part] += stats.split_ms[part][index]
+			summary.split_max[part] = max(summary.split_max[part], stats.split_ms[part][index])
+		}
 	}
 	summary.frame_avg = frame_total / f32(frame_frames)
 	summary.cpu_avg = cpu_total / f32(frame_frames)
+	for part in Perf_Split { summary.split_avg[part] = split_total[part] / f32(frame_frames) }
 
 	// 1% low: the FPS of the mean of the slowest 1% of frames (at least one).
 	low_frames := perf_window_frames(stats, PERF_LOW_WINDOW_MS)

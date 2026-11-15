@@ -1609,6 +1609,7 @@ main :: proc() {
 
 	last_tick := f32(glfw.GetTime())
 	last_frame_start := glfw.GetTime()
+	prev_cpu_ms, prev_swap_ms, prev_events_ms: f32
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
 		frame_start := glfw.GetTime()
@@ -1620,18 +1621,27 @@ main :: proc() {
 
 		client_tick(client, now, delta)
 		client_audio_tick(client, delta)
-		// CPU time is the tick and render submission; frame time includes the
-		// swap and event polling of the previous frame.
+		// The debug window records the previous frame in full: its duration
+		// (start to start), CPU time (tick + render submission), and how long
+		// its SwapBuffers and event polling took.
 		when KRODIN_DEV {
-			perf_overlay_record(client, f32((frame_start-last_frame_start)*1000), f32((glfw.GetTime()-frame_start)*1000))
+			cpu_ms := f32((glfw.GetTime()-frame_start)*1000)
+			perf_overlay_record(client, f32((frame_start-last_frame_start)*1000), prev_cpu_ms, prev_swap_ms, prev_events_ms)
+			prev_cpu_ms = cpu_ms
 		}
 		last_frame_start = frame_start
 		if client.settings_dirty {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))
 		}
+		swap_start := glfw.GetTime()
 		glfw.SwapBuffers(client.window)
+		swap_end := glfw.GetTime()
 		client_poll_events()
+		when KRODIN_DEV {
+			prev_swap_ms = f32((swap_end-swap_start)*1000)
+			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
+		}
 		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
 		free_all(context.temp_allocator)
 	}
