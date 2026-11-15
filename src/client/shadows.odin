@@ -84,28 +84,41 @@ Render_Quality :: struct {
 // renders without going through client_update_graphics is unchanged.
 g_render_quality := Render_Quality{lighting = .NORMAL}
 
-Shadow_State :: struct {
-	program:        u32,
-	uniforms:       Shadow_Depth_Uniforms,
-	fbo, texture:   u32,
-	size:           i32,
-	soft:           bool,
-	view_projection: shared.Mat4,
-	shadow_matrix:  shared.Mat4, // World to shadow-map UV and depth.
-	map_inst:       ^shared.Map, // Map the bounds and lights belong to.
-	half_width:     f32,
-	half_length:    f32,
-	lights:         [MAX_MAP_LIGHTS]Map_Light,
-	light_count:    int,
-	dirty:          bool,
-	renders:        int, // Shadow-map renders since startup (tests, benchmark).
+// Two depth maps of the same size. `static_target` holds the map's casters
+// and is redrawn only when the scene changes. With Dynamic Shadows it is
+// copied into `dynamic_target` every frame and only the players are drawn on
+// top: the same picture as redrawing everything (Krunker's autoUpdate), at
+// the cost of a texture copy plus the player meshes.
+Shadow_Target :: struct {
+	fbo, texture: u32,
 }
 
-Shadow_Depth_Uniforms :: struct {
-	basic: Shader_Uniforms,
+Shadow_State :: struct {
+	program:          u32, // basic.vert/frag with SHADOW_DEPTH_PASS.
+	uniforms:         Shader_Uniforms,
+	batched_program:  u32, // The same with BATCHED, for the static map batches.
+	batched_uniforms: Shader_Uniforms,
+	static_target:    Shadow_Target,
+	dynamic_target:   Shadow_Target,
+	size:             i32,
+	soft:             bool,
+	view_projection:  shared.Mat4,
+	shadow_matrix:    shared.Mat4, // World to shadow-map UV and depth.
+	map_inst:         ^shared.Map, // Map the bounds and lights belong to.
+	half_width:       f32,
+	half_length:      f32,
+	lights:           [MAX_MAP_LIGHTS]Map_Light,
+	light_count:      int,
+	dirty:            bool,
+	renders:          int, // Static shadow-map renders since startup (tests, benchmark).
+	dynamic_renders:  int, // Per-frame player passes (Dynamic Shadows).
+	sampled:          u32, // Texture the world pass samples this frame.
 }
 
 g_shadow: Shadow_State
+// Benchmark only: Dynamic Shadows redraws the static casters every frame too,
+// as before the static map was cached.
+g_shadow_full_redraw: bool
 
 json_truthy :: proc(value: json.Value) -> bool {
 	#partial switch v in value {
@@ -275,38 +288,59 @@ shadow_program_init :: proc() -> bool {
 	defer { delete(vert); delete(frag) }
 	g_shadow.program = shader_compile(vert, frag, "#define SHADOW_DEPTH_PASS\n")
 	if g_shadow.program == 0 { return false }
-	g_shadow.uniforms.basic = cache_uniforms(g_shadow.program)
+	g_shadow.uniforms = cache_uniforms(g_shadow.program)
+	// Optional: without it the static map is drawn object by object.
+	g_shadow.batched_program = shader_compile(vert, frag, "#define BATCHED\n#define SHADOW_DEPTH_PASS\n")
+	if g_shadow.batched_program != 0 { g_shadow.batched_uniforms = cache_uniforms(g_shadow.batched_program) }
 	return true
 }
 
 @(private = "file")
-shadow_target_init :: proc(size: i32, soft: bool) {
-	if g_shadow.fbo != 0 && g_shadow.size == size && g_shadow.soft == soft { return }
-	shadow_release_target()
-	gl.CreateTextures(gl.TEXTURE_2D, 1, &g_shadow.texture)
-	gl.TextureStorage2D(g_shadow.texture, 1, gl.DEPTH_COMPONENT24, size, size)
+shadow_target_create :: proc(size: i32, soft: bool) -> Shadow_Target {
+	target: Shadow_Target
+	gl.CreateTextures(gl.TEXTURE_2D, 1, &target.texture)
+	gl.TextureStorage2D(target.texture, 1, gl.DEPTH_COMPONENT24, size, size)
 	filter := i32(soft ? gl.LINEAR : gl.NEAREST)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_MIN_FILTER, filter)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_MAG_FILTER, filter)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE)
-	gl.TextureParameteri(g_shadow.texture, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
-	gl.CreateFramebuffers(1, &g_shadow.fbo)
-	gl.NamedFramebufferTexture(g_shadow.fbo, gl.DEPTH_ATTACHMENT, g_shadow.texture, 0)
-	gl.NamedFramebufferDrawBuffer(g_shadow.fbo, gl.NONE)
-	gl.NamedFramebufferReadBuffer(g_shadow.fbo, gl.NONE)
-	g_shadow.size, g_shadow.soft = size, soft
-	g_shadow.dirty = true
+	gl.TextureParameteri(target.texture, gl.TEXTURE_MIN_FILTER, filter)
+	gl.TextureParameteri(target.texture, gl.TEXTURE_MAG_FILTER, filter)
+	gl.TextureParameteri(target.texture, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TextureParameteri(target.texture, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.TextureParameteri(target.texture, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE)
+	gl.TextureParameteri(target.texture, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
+	gl.CreateFramebuffers(1, &target.fbo)
+	gl.NamedFramebufferTexture(target.fbo, gl.DEPTH_ATTACHMENT, target.texture, 0)
+	gl.NamedFramebufferDrawBuffer(target.fbo, gl.NONE)
+	gl.NamedFramebufferReadBuffer(target.fbo, gl.NONE)
+	return target
+}
+
+@(private = "file")
+shadow_target_free :: proc(target: ^Shadow_Target) {
+	if target.fbo != 0 { gl.DeleteFramebuffers(1, &target.fbo) }
+	if target.texture != 0 { gl.DeleteTextures(1, &target.texture) }
+	target^ = {}
+}
+
+@(private = "file")
+shadow_targets_init :: proc(size: i32, soft, dynamic_shadows: bool) {
+	if g_shadow.static_target.fbo == 0 || g_shadow.size != size || g_shadow.soft != soft {
+		shadow_release_target()
+		g_shadow.static_target = shadow_target_create(size, soft)
+		g_shadow.size, g_shadow.soft = size, soft
+		g_shadow.dirty = true
+	}
+	if dynamic_shadows && g_shadow.dynamic_target.fbo == 0 {
+		g_shadow.dynamic_target = shadow_target_create(size, soft)
+	}
 }
 
 shadow_release_target :: proc() {
-	if g_shadow.fbo != 0 { gl.DeleteFramebuffers(1, &g_shadow.fbo) }
-	if g_shadow.texture != 0 { gl.DeleteTextures(1, &g_shadow.texture) }
-	g_shadow.fbo, g_shadow.texture, g_shadow.size = 0, 0, 0
+	shadow_target_free(&g_shadow.static_target)
+	shadow_target_free(&g_shadow.dynamic_target)
+	g_shadow.size, g_shadow.sampled = 0, 0
 }
 
-// Map change: the shadow map and the light list belong to the old map.
+// Map change: the shadow maps and the light list belong to the old map.
 shadow_release_map :: proc() {
 	shadow_release_target()
 	g_shadow.map_inst = nil
@@ -314,11 +348,14 @@ shadow_release_map :: proc() {
 	g_shadow.dirty = true
 }
 
-// Shutdown: everything, including the depth program.
+// Shutdown: everything, including the depth programs.
 shadow_fini :: proc() {
 	shadow_release_map()
-	if g_shadow.program != 0 { gl.DeleteProgram(g_shadow.program) }
-	if g_active_shader == g_shadow.program { g_active_shader = 0 }
+	for program in ([2]u32{g_shadow.program, g_shadow.batched_program}) {
+		if program == 0 { continue }
+		gl.DeleteProgram(program)
+		if g_active_shader == program { g_active_shader = 0 }
+	}
 	g_shadow = {}
 	g_render_quality = {lighting = .NORMAL}
 }
@@ -348,7 +385,7 @@ shadow_prepare :: proc(scene: ^Scene, map_inst: ^shared.Map, quality: menuui.Qua
 		return
 	}
 	if !shadow_program_init() { return }
-	shadow_target_init(shadow_map_size(config, quality.high_res_shadows), quality.soft_shadows)
+	shadow_targets_init(shadow_map_size(config, quality.high_res_shadows), quality.soft_shadows, quality.dynamic_shadows)
 
 	far := f32(config.shadow_distance > 0 ? config.shadow_distance : shared.SHADOW_DEFAULT_DISTANCE)
 	view := shadow_view_matrix(sun_position(config))
@@ -364,90 +401,157 @@ shadow_prepare :: proc(scene: ^Scene, map_inst: ^shared.Map, quality: menuui.Qua
 	}
 	g_shadow.shadow_matrix = uv * view_projection
 
+	if quality.dynamic_shadows && g_shadow_full_redraw { g_shadow.dirty = true }
 	if g_shadow.dirty || quality.dynamic_shadows {
 		shadow_render(scene, view, projection, quality.dynamic_shadows, framebuffer, viewport)
-		g_shadow.dirty = false
 	}
+	g_shadow.sampled = quality.dynamic_shadows ? g_shadow.dynamic_target.texture : g_shadow.static_target.texture
 	g_render_quality.shadows = true
 	g_render_quality.soft_shadows = quality.soft_shadows
 	g_render_quality.dynamic_shadows = quality.dynamic_shadows
 }
 
 @(private = "file")
-shadow_render :: proc(scene: ^Scene, view, projection: shared.Mat4, dynamic_shadows: bool, previous_fbo: u32, previous_viewport: [4]i32) {
-	gl.BindFramebuffer(gl.FRAMEBUFFER, g_shadow.fbo)
+shadow_bind_program :: proc(program: u32, u: ^Shader_Uniforms, view, projection: shared.Mat4) {
+	gl.UseProgram(program)
+	g_active_shader = program
+	view_matrix, projection_matrix := view, projection
+	gl.UniformMatrix4fv(u.camera_world_inverse, 1, gl.FALSE, &view_matrix[0, 0])
+	gl.UniformMatrix4fv(u.camera_projection, 1, gl.FALSE, &projection_matrix[0, 0])
+	gl.Uniform1f(u.world_uv_scale, shared.GAME_CONSTANTS.world_uv_scale)
+	gl.Uniform1i(u.tex, 0)
+}
+
+// One mesh through the per-object depth program (already bound).
+@(private = "file")
+shadow_draw_mesh :: proc(mesh: ^Mesh, vao: ^u32) {
+	if mesh.material == nil || mesh.material.vtable != &basic_material_vtable { return }
+	mesh_update_transform_matrix(mesh)
+	if vao^ != mesh.geometry.vao {
+		gl.BindVertexArray(mesh.geometry.vao)
+		vao^ = mesh.geometry.vao
+	}
+	// basic_material_update_uniforms writes through u_basic.
+	saved := u_basic
+	u_basic = g_shadow.uniforms
+	basic_material_update_uniforms(mesh.material)
+	u_basic = saved
+	gl.UniformMatrix4fv(g_shadow.uniforms.transform, 1, gl.FALSE, &mesh.transform_matrix[0, 0])
+	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	g_draw_stats.draw_calls += 1
+}
+
+// A batch the world pass draws as one call: merged, every member visible and
+// unmoved since the build (the same test as scene_draw_batches).
+@(private = "file")
+shadow_batch_whole :: proc(set: ^Map_Batch_Set, batch: ^Map_Batch) -> bool {
+	if batch.single { return false }
+	for mesh in set.members[batch.member_start:][:batch.member_count] {
+		if !mesh.visible || mesh.transform != mesh.last_transform { return false }
+	}
+	return true
+}
+
+// Static casters. With batching on, merged map batches go through the batched
+// depth program (one draw per batch; receive-only members are clipped away in
+// basic.vert). Batches the world pass would split, single slots and every
+// other static caster are drawn one by one.
+@(private = "file")
+shadow_draw_static :: proc(scene: ^Scene, view, projection: shared.Mat4) {
+	set := scene.batches
+	batched := set != nil && scene.batching_enabled && g_shadow.batched_program != 0 && set.vao != 0
+	vao: u32
+	if batched {
+		shadow_bind_program(g_shadow.batched_program, &g_shadow.batched_uniforms, view, projection)
+		gl.BindVertexArray(set.vao)
+		gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, set.ssbo)
+		for &batch in set.batches {
+			if !shadow_batch_whole(set, &batch) { continue }
+			basic_bind_texture(batch.key.texture)
+			gl.DrawElements(gl.TRIANGLES, batch.index_count, gl.UNSIGNED_INT, rawptr(uintptr(batch.first_index) * size_of(u32)))
+			g_draw_stats.draw_calls += 1
+		}
+	}
+	shadow_bind_program(g_shadow.program, &g_shadow.uniforms, view, projection)
+	if batched {
+		for &batch in set.batches {
+			if shadow_batch_whole(set, &batch) { continue }
+			for mesh in set.members[batch.member_start:][:batch.member_count] {
+				if mesh.visible && mesh.shadow_caster == .STATIC { shadow_draw_mesh(mesh, &vao) }
+			}
+		}
+	}
+	for mesh in scene.meshes {
+		if !mesh.visible || mesh.shadow_caster != .STATIC || batched && mesh.batched { continue }
+		shadow_draw_mesh(mesh, &vao)
+	}
+}
+
+@(private = "file")
+shadow_begin_pass :: proc(target: Shadow_Target, clear: bool) {
+	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
 	gl.Viewport(0, 0, g_shadow.size, g_shadow.size)
 	gl.Enable(gl.DEPTH_TEST)
 	gl.DepthMask(gl.TRUE)
 	gl.Disable(gl.BLEND)
 	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
-	gl.Clear(gl.DEPTH_BUFFER_BIT)
+	if clear { gl.Clear(gl.DEPTH_BUFFER_BIT) }
 	gl.Enable(gl.CULL_FACE)
 	gl.CullFace(gl.FRONT)
 	gl.ActiveTexture(gl.TEXTURE0)
+}
 
-	gl.UseProgram(g_shadow.program)
-	g_active_shader = g_shadow.program
-	view_matrix, projection_matrix := view, projection
-	u := &g_shadow.uniforms.basic
-	gl.UniformMatrix4fv(u.camera_world_inverse, 1, gl.FALSE, &view_matrix[0, 0])
-	gl.UniformMatrix4fv(u.camera_projection, 1, gl.FALSE, &projection_matrix[0, 0])
-	gl.Uniform1f(u.world_uv_scale, shared.GAME_CONSTANTS.world_uv_scale)
-	gl.Uniform1i(u.tex, 0)
-
-	// basic_material_update_uniforms writes through u_basic; point it at the
-	// depth program's locations for this pass.
-	saved_uniforms := u_basic
-	u_basic = u^
-	defer u_basic = saved_uniforms
-	vao: u32
-	for mesh in scene.meshes {
-		if !mesh.visible || mesh.shadow_caster == .NONE { continue }
-		if mesh.shadow_caster == .DYNAMIC && !dynamic_shadows { continue }
-		if mesh.material == nil || mesh.material.vtable != &basic_material_vtable { continue }
-		mesh_update_transform_matrix(mesh)
-		if vao != mesh.geometry.vao {
-			gl.BindVertexArray(mesh.geometry.vao)
-			vao = mesh.geometry.vao
-		}
-		basic_material_update_uniforms(mesh.material)
-		gl.UniformMatrix4fv(u.transform, 1, gl.FALSE, &mesh.transform_matrix[0, 0])
-		gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+@(private = "file")
+shadow_render :: proc(scene: ^Scene, view, projection: shared.Mat4, dynamic_shadows: bool, previous_fbo: u32, previous_viewport: [4]i32) {
+	if g_shadow.dirty {
+		shadow_begin_pass(g_shadow.static_target, true)
+		shadow_draw_static(scene, view, projection)
+		g_shadow.dirty = false
+		g_shadow.renders += 1
 	}
-
+	if dynamic_shadows {
+		size := g_shadow.size
+		gl.CopyImageSubData(g_shadow.static_target.texture, gl.TEXTURE_2D, 0, 0, 0, 0, g_shadow.dynamic_target.texture, gl.TEXTURE_2D, 0, 0, 0, 0, size, size, 1)
+		shadow_begin_pass(g_shadow.dynamic_target, false)
+		shadow_bind_program(g_shadow.program, &g_shadow.uniforms, view, projection)
+		vao: u32
+		for mesh in scene.meshes {
+			if mesh.visible && mesh.shadow_caster == .DYNAMIC { shadow_draw_mesh(mesh, &vao) }
+		}
+		g_shadow.dynamic_renders += 1
+	}
 	gl.Disable(gl.CULL_FACE)
 	gl.CullFace(gl.BACK)
 	gl.BindFramebuffer(gl.FRAMEBUFFER, previous_fbo)
 	gl.Viewport(previous_viewport[0], previous_viewport[1], previous_viewport[2], previous_viewport[3])
-	g_shadow.renders += 1
 }
 
 // Per-pass uniforms for basic.frag; called with the basic program bound.
-shadow_update_pass_uniforms :: proc() {
+shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
 	q := g_render_quality
-	gl.Uniform1i(u_basic.lighting_mode, i32(q.lighting))
-	gl.Uniform1i(u_basic.shadow_enabled, i32(q.shadows))
+	gl.Uniform1i(u.lighting_mode, i32(q.lighting))
+	gl.Uniform1i(u.shadow_enabled, i32(q.shadows))
 	if q.shadows {
 		shadow_matrix := g_shadow.shadow_matrix
-		gl.UniformMatrix4fv(u_basic.shadow_matrix, 1, gl.FALSE, &shadow_matrix[0, 0])
-		gl.Uniform1i(u_basic.shadow_soft, i32(q.soft_shadows))
-		gl.Uniform1f(u_basic.shadow_texel, 1 / f32(g_shadow.size))
-		gl.Uniform1f(u_basic.shadow_bias, SHADOW_BIAS)
-		gl.Uniform1f(u_basic.shadow_normal_bias, g_lighting_config.shadow_normal_bias)
-		gl.Uniform1i(u_basic.shadow_map, 1)
-		gl.BindTextureUnit(1, g_shadow.texture)
+		gl.UniformMatrix4fv(u.shadow_matrix, 1, gl.FALSE, &shadow_matrix[0, 0])
+		gl.Uniform1i(u.shadow_soft, i32(q.soft_shadows))
+		gl.Uniform1f(u.shadow_texel, 1 / f32(g_shadow.size))
+		gl.Uniform1f(u.shadow_bias, SHADOW_BIAS)
+		gl.Uniform1f(u.shadow_normal_bias, g_lighting_config.shadow_normal_bias)
+		gl.Uniform1i(u.shadow_map, 1)
+		gl.BindTextureUnit(1, g_shadow.sampled)
 	}
 	count: i32
 	if q.lighting >= .HIGH {
 		for light in g_shadow.lights[:g_shadow.light_count] {
 			if !map_light_enabled(light, q.lighting) { continue }
 			direction := light.kind == .POINT ? shared.Vec3{} : linalg.normalize0(light.kind == .DIRECTIONAL ? light.position - light.target : light.target - light.position)
-			gl.Uniform4f(u_basic.map_light_position + count, light.position.x, light.position.y, light.position.z, f32(light.kind))
-			gl.Uniform4f(u_basic.map_light_color + count, light.color.x, light.color.y, light.color.z, light.distance)
-			gl.Uniform4f(u_basic.map_light_direction + count, direction.x, direction.y, direction.z, light.decay)
-			gl.Uniform2f(u_basic.map_light_cone + count, light.cone_cos, light.penumbra_cos)
+			gl.Uniform4f(u.map_light_position + count, light.position.x, light.position.y, light.position.z, f32(light.kind))
+			gl.Uniform4f(u.map_light_color + count, light.color.x, light.color.y, light.color.z, light.distance)
+			gl.Uniform4f(u.map_light_direction + count, direction.x, direction.y, direction.z, light.decay)
+			gl.Uniform2f(u.map_light_cone + count, light.cone_cos, light.penumbra_cos)
 			count += 1
 		}
 	}
-	gl.Uniform1i(u_basic.map_light_count, count)
+	gl.Uniform1i(u.map_light_count, count)
 }

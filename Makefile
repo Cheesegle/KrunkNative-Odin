@@ -9,7 +9,7 @@ PROFILE ?= none
 
 UNAME_S := $(shell uname -s)
 
-.PHONY: all client server test check clean dist-windows
+.PHONY: all client dev server test check clean dist-windows
 
 all: client server
 
@@ -28,6 +28,12 @@ client:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client -o:$(PROFILE)
 
+# Developer client with debug tools (KRODIN_DEV, F3 window). Separate file
+# name so it is never packaged for testers.
+dev:
+	mkdir -p $(BIN_DIR)
+	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client_dev -o:$(PROFILE) -define:KRODIN_DEV=true
+
 server:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/server -out:$(BIN_DIR)/krodin_server -o:$(PROFILE)
@@ -40,10 +46,11 @@ test:
 
 check:
 	$(ODIN) check src/client
+	$(ODIN) check src/client -define:KRODIN_DEV=true
 	$(ODIN) check src/server
 
 clean:
-	rm -f $(BIN_DIR)/krodin_client $(BIN_DIR)/krodin_server $(BIN_DIR)/krodin_tests
+	rm -f $(BIN_DIR)/krodin_client $(BIN_DIR)/krodin_client_dev $(BIN_DIR)/krodin_server $(BIN_DIR)/krodin_tests
 
 dist-windows: client
 	@echo "Windows builds statically by default (vendor links glfw3_mt.lib); no DLL needed."

@@ -34,6 +34,13 @@ DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .C
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}
+// Frame cap while the cursor is free (menus, loading, end screen); gameplay is
+// never capped. Stored as frames per second: 0 is the monitor's refresh rate,
+// so settings files without the key keep the default, and -1 is unlimited.
+MENU_FPS_LIMIT_MONITOR :: 0
+MENU_FPS_LIMIT_UNLIMITED :: -1
+MENU_FPS_LIMITS := [7]i32{MENU_FPS_LIMIT_MONITOR, 30, 60, 120, 144, 240, MENU_FPS_LIMIT_UNLIMITED}
+MENU_FPS_LIMIT_LABELS := [7]string{"Monitor refresh", "30", "60", "120", "144", "240", "Unlimited"}
 
 visual_settings_validate :: proc(settings: Visual_Settings) -> Visual_Settings {
 	result := settings
@@ -46,6 +53,23 @@ visual_settings_validate :: proc(settings: Visual_Settings) -> Visual_Settings {
 	result.color_override = {}
 	result.colors = DEFAULT_VISUAL_SETTINGS.colors
 	return result
+}
+
+menu_fps_limit_index :: proc(limit: i32) -> i32 {
+	for value, i in MENU_FPS_LIMITS { if value == limit { return i32(i) } }
+	return 0
+}
+
+// Unknown values fall back to the monitor's refresh rate.
+menu_fps_limit_validate :: proc(limit: i32) -> i32 { return MENU_FPS_LIMITS[menu_fps_limit_index(limit)] }
+
+settings_menu_fps_limit_row :: proc(state: ^State) {
+	if !settings_search_show(state, "Menu FPS limit") { return }
+	if clay.UI(clay.ID("MenuFpsLimitRow"))(settings_row(state)) {
+		settings_label("Menu FPS limit", state.scale)
+		spacer()
+		settings_dropdown_field(state, MENU_FPS_LIMIT_LABELS[menu_fps_limit_index(state.settings_draft.menu_fps_limit)], "MenuFpsLimit", .MENU_FPS_LIMIT)
+	}
 }
 
 quality_settings_validate :: proc(settings: Quality_Settings) -> Quality_Settings {

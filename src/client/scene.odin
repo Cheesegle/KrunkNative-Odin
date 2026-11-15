@@ -12,7 +12,9 @@ scene_add_mesh :: proc(scene: ^Scene, mesh: ^Mesh) {
 }
 
 scene_remove_mesh :: proc(scene: ^Scene, mesh: ^Mesh) {
-	for i := 0; i < len(scene.meshes); i += 1 {
+	// Effects (tracers, trails, bullet holes) are added after every map mesh,
+	// so search from the end.
+	for i := len(scene.meshes) - 1; i >= 0; i -= 1 {
 		if scene.meshes[i] == mesh {
 			ordered_remove(&scene.meshes, i)
 			scene.mesh_count = i32(len(scene.meshes))
@@ -202,6 +204,8 @@ scene_remove_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loado
 scene_uniforms :: proc(program: u32) -> ^Shader_Uniforms {
 	if program == basic_shader_program {
 		return &u_basic
+	} else if program != 0 && program == basic_batched_shader_program {
+		return &u_basic_batched
 	} else if program == quad_shader_program {
 		return &u_quad
 	}
@@ -224,7 +228,9 @@ scene_update_pass_uniforms :: proc(program: u32, camera: ^Camera) {
 		gl.UniformMatrix4fv(u.camera_projection, 1, gl.FALSE, &camera.projection_matrix[0, 0])
 	}
 	if program == basic_shader_program {
-		basic_material_update_pass_uniforms(camera)
+		basic_material_update_pass_uniforms(camera, &u_basic)
+	} else if program != 0 && program == basic_batched_shader_program {
+		basic_material_update_pass_uniforms(camera, &u_basic_batched)
 	}
 }
 
@@ -276,6 +282,71 @@ scene_draw_mesh :: proc(mesh: ^Mesh, camera: ^Camera, state: ^Scene_Draw_State) 
 	}
 
 	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	g_draw_calls += 1
+	g_draw_stats.draw_calls += 1
+}
+
+// Draws the static map batches (map_batch.odin) in their tie-safe order. A
+// batch whose members were all hidden (hide cats/props) is skipped; if only
+// some are hidden, or a member moved after the build, its visible members are
+// drawn individually instead. Single slots are always drawn individually.
+scene_draw_batches :: proc(scene: ^Scene, camera: ^Camera, state: ^Scene_Draw_State, frustum: ^Frustum) {
+	set := scene.batches
+	for &batch in set.batches {
+		if g_render_culling && !frustum_aabb_visible(frustum, batch.bounds_min, batch.bounds_max) {
+			g_draw_stats.batches_culled += 1
+			continue
+		}
+		members := set.members[batch.member_start:][:batch.member_count]
+		all_visible, any_visible, moved := true, false, false
+		for mesh in members {
+			if mesh.visible { any_visible = true } else { all_visible = false }
+			if mesh.transform != mesh.last_transform { moved = true }
+		}
+		if !any_visible {
+			continue
+		}
+		if batch.single || !all_visible || moved {
+			for mesh in members {
+				if !mesh.visible { continue }
+				mesh_update_transform_matrix(mesh)
+				scene_draw_mesh(mesh, camera, state)
+			}
+			continue
+		}
+
+		if state.program != set.program {
+			if g_active_shader != set.program {
+				gl.UseProgram(set.program)
+				g_active_shader = set.program
+			}
+			scene_update_pass_uniforms(set.program, camera)
+			state.program = set.program
+		}
+		if state.vao != set.vao {
+			gl.BindVertexArray(set.vao)
+			state.vao = set.vao
+		}
+		// Binding 0 is only used by the batched program; rebind per pass.
+		gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, set.ssbo)
+		if state.no_depth_write {
+			gl.DepthMask(gl.TRUE)
+			state.no_depth_write = false
+		}
+		if state.blending {
+			gl.Disable(gl.BLEND)
+			state.blending = false
+		}
+		if state.wireframe != batch.key.wireframe {
+			gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE if batch.key.wireframe else gl.FILL)
+			state.wireframe = batch.key.wireframe
+		}
+		basic_bind_texture(batch.key.texture)
+		gl.DrawElements(gl.TRIANGLES, batch.index_count, gl.UNSIGNED_INT, rawptr(uintptr(batch.first_index) * size_of(u32)))
+		g_draw_calls += 1
+		g_draw_stats.draw_calls += 1
+		g_draw_stats.batch_draws += 1
+	}
 }
 
 // Stable merge sort keeps equal-depth effects in scene order and bounds the
@@ -331,15 +402,30 @@ scene_render :: proc(scene: ^Scene, camera: ^Camera, viewport_w, viewport_h: f32
 		return
 	}
 
+	// Batched path: static map batches first, then everything else with a
+	// bounding-sphere frustum test. Disabled, this is the original path.
+	batched := scene.batches != nil && scene.batching_enabled
+	frustum: Frustum
+	if batched {
+		frustum = frustum_from_camera(camera)
+		scene_draw_batches(scene, camera, &state, &frustum)
+	}
+
 	// 1. Draw opaque meshes directly with hardware depth testing.
 	// 2. Collect visible transparent meshes for back-to-front sorting.
 	clear(&scene.transparent_meshes)
 	for i in 0 ..< mesh_count {
 		mesh := scene.meshes[i]
-		if !mesh.visible {
+		if !mesh.visible || batched && mesh.batched {
 			continue
 		}
 		mesh_update_transform_matrix(mesh)
+		if batched && g_render_culling {
+			if center, radius, ok := mesh_bounding_sphere(mesh); ok && !frustum_sphere_visible(&frustum, center, radius) {
+				g_draw_stats.meshes_culled += 1
+				continue
+			}
+		}
 
 		if mesh.material.transparent {
 			mesh.camera_space_matrix = camera.world_inverse_matrix * mesh.transform_matrix
@@ -366,6 +452,7 @@ scene_render :: proc(scene: ^Scene, camera: ^Camera, viewport_w, viewport_h: f32
 }
 
 scene_fini :: proc(scene: ^Scene) {
+	map_batch_destroy(scene, members_alive = false)
 	delete(scene.meshes)
 	delete(scene.transparent_meshes)
 	delete(scene.transparent_sort_scratch)

@@ -12,6 +12,10 @@ Geometry :: struct {
 	ref_count:   u32,
 	last_used:   u64,
 	permanent:   bool,
+	// Model-space bounds of the vertices, for frustum culling.
+	bounds_min:  shared.Vec3,
+	bounds_max:  shared.Vec3,
+	has_bounds:  bool,
 }
 
 Texture_Cache_Entry :: struct {
@@ -107,6 +111,8 @@ Mesh :: struct {
 	transform_matrix:    shared.Mat4,
 	camera_space_matrix: shared.Mat4, // temporary - used during scene depth sort
 	material:  ^Material,
+	// Drawn through the scene's map batches while batching is enabled.
+	batched:   bool,
 }
 
 Color_Cube :: struct {
@@ -159,6 +165,9 @@ Scene :: struct {
 	meshes:             [dynamic]^Mesh,
 	transparent_meshes: [dynamic]^Mesh,
 	transparent_sort_scratch: [dynamic]^Mesh,
+	// Static map geometry merged into a few draws (map_batch.odin).
+	batches:            ^Map_Batch_Set,
+	batching_enabled:   bool,
 }
 
 Camera :: struct {
@@ -215,7 +224,7 @@ Tracer_Marker :: struct {
 g_geometry_cache: map[string]^Geometry
 g_texture_cache:  map[string]^Texture_Cache_Entry
 g_texture_by_id:  map[u32]^Texture_Cache_Entry
-g_glyph_cache:    map[u8]^Glyph_Cache_Entry
+g_glyph_cache:    [256]^Glyph_Cache_Entry
 
 g_resource_clock: u64
 

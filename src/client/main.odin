@@ -63,9 +63,15 @@ Client :: struct {
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
 	bench_seconds: f32, // Benchmark mode only.
+	// Static map batching and frustum culling (map_batch.odin). On by default;
+	// `--no-batching` turns it off for A/B comparisons.
+	render_batching: bool,
 	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
 	settings_dirty, vsync: bool,
+	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
+	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	monitor_index: i32,
+	monitor_cache: Monitor_Cache,
 
 	mouse_state: struct {
 		locked:  bool,
@@ -128,6 +134,12 @@ Client :: struct {
 	projectile_meshes: [dynamic]^Mesh,
 	explosions: [dynamic]Krunker_Explosion_Flash,
 	show_fps:       bool,
+	// Debug performance window: stats ring, GPU timer queries and the
+	// lazily created microui context (nil until the window is first shown).
+	perf_overlay:   bool,
+	last_perf_overlay_key: bool,
+	perf:           Perf_Stats,
+	debug_ui:       ^Debug_UI,
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
@@ -137,6 +149,98 @@ Client :: struct {
 }
 
 g_client: ^Client
+
+// The menu's monitor names and fullscreen sizes. glfw.GetVideoModes
+// re-enumerates every display mode on Windows, so this is refreshed only when
+// a monitor is connected or removed, the chosen monitor changes, or Settings
+// opens. Fixed capacity keeps it allocation-free.
+Monitor_Cache :: struct {
+	valid: bool,
+	index: i32,
+	sizes: [dynamic; 256]Display_Resolution,
+	// GLFW owns the names until the monitor is removed, which invalidates the cache.
+	names: [dynamic; 32]string,
+	// Seconds per frame while not playing, from the monitor's refresh rate.
+	idle_frame_interval: f64,
+}
+
+client_monitor_cache_refresh :: proc(client: ^Client) {
+	cache := &client.monitor_cache
+	cache^ = {valid = true, index = client.monitor_index, idle_frame_interval = 1.0 / 60}
+	monitor := client_monitor(client.monitor_index)
+	append(&cache.sizes, ..monitor_resolutions(monitor))
+	for handle in glfw.GetMonitors() { append(&cache.names, glfw.GetMonitorName(handle)) }
+	if monitor != nil {
+		if mode := glfw.GetVideoMode(monitor); mode != nil && mode.refresh_rate > 0 { cache.idle_frame_interval = 1.0 / f64(mode.refresh_rate) }
+	}
+}
+
+// Refreshes the cache when it is stale or Settings is opening this frame.
+client_monitor_cache :: proc(client: ^Client) -> ^Monitor_Cache {
+	settings_opening := (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) && !client.menu.settings_active
+	if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index || settings_opening {
+		client_monitor_cache_refresh(client)
+	}
+	return &client.monitor_cache
+}
+
+client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
+	if g_client != nil { g_client.monitor_cache.valid = false }
+}
+
+// Menus and loading screens wait between frames instead of spinning a core:
+// by default one display refresh, or the user's menu FPS limit. Whenever the
+// cursor is captured for play, frames stay uncapped. Readiness flags are
+// deliberately not checked: Krunker's "ready" packet clears
+// krunker_world.ready during waiting and warmup phases while the player still
+// moves, and capping then causes visible hitches. client_tick still runs every
+// frame, so sockets keep being polled.
+client_idle_frame_interval :: proc(client: ^Client) -> f64 {
+	if client.mouse_state.locked { return 0 }
+	limit := client.menu_fps_limit
+	// Settings previews the staged limit; Cancel discards it with the draft.
+	if client.menu.settings_active && (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) { limit = client.menu.settings_draft.menu_fps_limit }
+	limit = menuui.menu_fps_limit_validate(limit)
+	switch limit {
+	case menuui.MENU_FPS_LIMIT_UNLIMITED: return 0
+	case menuui.MENU_FPS_LIMIT_MONITOR:
+		if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
+		return client.monitor_cache.idle_frame_interval
+	case: return 1 / f64(limit)
+	}
+}
+
+// The next frame's target end. Deadlines advance by whole intervals so wakeup
+// jitter does not lower the average rate; after a frame that ran more than one
+// interval late, or when pacing starts, the schedule restarts from this frame.
+client_idle_frame_deadline :: proc(previous, frame_start, interval: f64) -> f64 {
+	deadline := previous + interval
+	if previous <= 0 || deadline < frame_start || deadline > frame_start + interval { deadline = frame_start + interval }
+	return deadline
+}
+
+// Event waits keep window messages and input flowing until the last stretch,
+// which yields on the clock. With 1 ms timer resolution the waits land within
+// a fraction of a millisecond, and the deadline schedule absorbs the rest, so
+// a short margin keeps frame times even without burning a core: at 240 FPS a
+// 1.5 ms margin cost about a third of a core more than 0.5 ms for no gain in
+// rate (measured on a 240 Hz Windows laptop).
+IDLE_FRAME_SPIN_MARGIN :: 0.0005
+
+client_pace_idle_frame :: proc(client: ^Client, frame_start, interval: f64) {
+	if interval <= 0 { client.idle_frame_deadline = 0; return }
+	deadline := client_idle_frame_deadline(client.idle_frame_deadline, frame_start, interval)
+	client.idle_frame_deadline = deadline
+	for !bool(glfw.WindowShouldClose(client.window)) {
+		remaining := deadline - glfw.GetTime()
+		if remaining <= 0 { return }
+		if remaining > IDLE_FRAME_SPIN_MARGIN {
+			client_wait_events(remaining - IDLE_FRAME_SPIN_MARGIN)
+		} else {
+			client_timer_yield()
+		}
+	}
+}
 
 MAX_PREDICTED_INPUTS :: 256
 
@@ -267,11 +371,13 @@ Client_Options :: struct {
 	class_name: string,
 	show_help: bool,
 	show_fps:  bool,
+	perf_overlay: bool,
 	offline:   bool,
 	asset_sweep: string,
 	bench_maps: string, // Comma-separated; empty when not benchmarking.
 	bench_seconds: f32,
 	bench_sizes: string, // Comma-separated WxH or "native".
+	no_batching: bool,
 }
 
 print_client_help :: proc() {
@@ -284,6 +390,9 @@ print_client_help :: proc() {
 	fmt.println("  -m, --map <name>      Load a map by name (for example: burg)")
 	fmt.println("  -c, --class <name>    Spawn as the given class (for example: hunter)")
 	fmt.println("      --fps             Show an FPS meter")
+	when KRODIN_DEV {
+		fmt.println("      --perf-overlay    Start with the debug performance window open (F3)")
+	}
 	fmt.println("      --offline         Run the local authoritative simulation")
 	fmt.println("      --asset-sweep <manifest.txt>")
 	fmt.println("                        Load every map, model, icon and sound in a hidden")
@@ -293,6 +402,7 @@ print_client_help :: proc() {
 	fmt.println("                        offscreen with an uncapped frame rate, once per")
 	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
 	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
+	fmt.println("      --no-batching     Draw every map object individually, without culling")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -345,8 +455,13 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.show_help = true
 		case "--fps", "--show-fps":
 			options.show_fps = true
+		case "--perf-overlay":
+			// Developer builds only (-define:KRODIN_DEV=true); release builds ignore it.
+			when KRODIN_DEV { options.perf_overlay = true }
 		case "--offline":
 			options.offline = true
+		case "--no-batching":
+			options.no_batching = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -505,6 +620,11 @@ client_load_map :: proc(client: ^Client) {
 			scene_add_mesh(client.scene, mesh)
 		}
 	}
+
+	map_batch_destroy(client.scene)
+	if client.render_batching {
+		map_batch_build(client.scene, client.game.map_inst)
+	}
 }
 
 client_find_player :: proc(client: ^Client, uid: i32) -> ^shared.Player {
@@ -534,9 +654,14 @@ client_clear_players :: proc(client: ^Client) {
 }
 
 client_discard_acked_inputs :: proc(client: ^Client, ack_seq: i32) {
-	for len(client.predicted_inputs) > 0 && client.predicted_inputs[0].seq <= ack_seq {
-		ordered_remove(&client.predicted_inputs, 0)
-	}
+	acked := 0
+	for acked < len(client.predicted_inputs) && client.predicted_inputs[acked].seq <= ack_seq { acked += 1 }
+	remove_range(&client.predicted_inputs, 0, acked)
+}
+
+// Drops the oldest predicted inputs beyond `limit` in one shift.
+client_cap_predicted_inputs :: proc(client: ^Client, limit: int) {
+	if excess := len(client.predicted_inputs) - limit; excess > 0 { remove_range(&client.predicted_inputs, 0, excess) }
 }
 
 client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packet_Player_State) {
@@ -557,9 +682,8 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	player.jump_timer = state.jump_timer
 	shared.player_update_height(player)
 
-	if !state.on_ramp && player.ramp_fix != nil {
-		free(player.ramp_fix)
-		player.ramp_fix = nil
+	if !state.on_ramp {
+		player.has_ramp_fix = false
 	}
 }
 
@@ -845,6 +969,7 @@ client_unload_map :: proc(client: ^Client) {
 		return
 	}
 
+	map_batch_destroy(client.scene)
 	for object in client.game.map_inst.objects {
 		if object.mesh != nil {
 			mesh := cast(^Mesh)object.mesh
@@ -1105,6 +1230,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 
 	client.last_fullscreen_key = fullscreen_key
+	when KRODIN_DEV {
+		if client_perf_overlay_toggle_update(client) { client.settings_dirty = true }
+	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
 
 	escape_key := client_action_down(client, .MENU) || glfw.GetKey(client.window, glfw.KEY_ESCAPE) == glfw.PRESS
@@ -1186,9 +1314,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
-			if len(client.predicted_inputs) > MAX_PREDICTED_INPUTS {
-				ordered_remove(&client.predicted_inputs, 0)
-			}
+			client_cap_predicted_inputs(client, MAX_PREDICTED_INPUTS)
 			shared.player_proc_input(client.me, &input, true, client.game.move_lock, true)
 			net_client_send_input(&client.net, &input)
 		} else {
@@ -1262,6 +1388,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client_tick_textures(client, now)
 
+	// GPU time covers the world, view model and HUD, not the debug window.
+	when KRODIN_DEV { perf_overlay_gpu_begin(client) }
 	client_render_world(client)
 
 	// Overlay pass: bars use the world camera for projection only.
@@ -1270,23 +1398,35 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 
+	// The debug window takes its input before the menu so a click or scroll
+	// over it never reaches the Clay menu underneath; it is drawn last.
+	debug_pointer := false
+	when KRODIN_DEV { debug_pointer = client.perf_overlay && debug_ui_update(client) }
 	if end_screen_visible {
 		end_screen_render(client, glfw.GetTime())
 	} else if !client.mouse_state.locked {
-		hud_render(client, delta)
+		hud_render(client, delta, debug_pointer)
 	} else {
 		overlay_render(client, delta)
 	}
 	fps_render(client)
+	when KRODIN_DEV {
+		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
+		if client.perf_overlay { debug_ui_render(client) }
+	}
 }
 
 // World and viewmodel passes. The benchmark mode draws through this too, so its
 // numbers cover the same work as a real frame minus the HUD.
 client_render_world :: proc(client: ^Client) {
 	client_update_graphics(client)
+	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	g_draw_stats = {}
+	client.scene.batching_enabled = client.render_batching
+	// After batching_enabled: the shadow pass draws the static map through the
+	// same batches. Its draw calls count towards this frame's stats.
 	_, quality := client_graphics_values(client)
 	shadow_prepare(client.scene, client.game.map_inst, menuui.quality_settings_validate(quality), client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height})
-	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
@@ -1331,16 +1471,22 @@ main :: proc() {
 		return
 	}
 	defer glfw.Terminate()
+	client_set_timer_precision()
+	defer client_restore_timer_precision()
 
 	client := new(Client)
 	defer free(client)
 	g_client = client
 	preferences := client_settings_load()
 	client.show_fps = options.show_fps || preferences.show_fps
+	// The debug window exists only in developer builds; release builds never
+	// open it, even if a dev build saved it as open.
+	when KRODIN_DEV { client.perf_overlay = options.perf_overlay || preferences.perf_overlay }
 	client.display_mode = Display_Mode(preferences.display_mode)
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
+	client.menu_fps_limit = preferences.menu_fps_limit
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse
@@ -1351,6 +1497,7 @@ main :: proc() {
 	client.crosshair_settings = preferences.crosshair
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
+	client.render_batching = !options.no_batching
 
 	client.camera.zoom = 1.0
 	client.camera.fov = preferences.fov * math.PI / 180
@@ -1386,13 +1533,15 @@ main :: proc() {
 	glfw.SetCharCallback(client.window, menu_character)
 	glfw.SetKeyCallback(client.window, client_binding_key)
 	glfw.SetMouseButtonCallback(client.window, client_binding_mouse)
+	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.MakeContextCurrent(client.window)
 
-	if bool(glfw.RawMouseMotionSupported()) {
-		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
-	}
+	// The native Windows path owns raw mouse input (and decides whether GLFW's
+	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
 	if client_mouse_init(client.window) {
-		fmt.println("[Input] Buffered Windows raw mouse enabled")
+		fmt.println("[Input] Native Windows raw mouse enabled")
+	} else if bool(glfw.RawMouseMotionSupported()) {
+		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
 	}
 	defer client_mouse_fini()
 
@@ -1465,21 +1614,41 @@ main :: proc() {
 	free_all(context.temp_allocator)
 
 	last_tick := f32(glfw.GetTime())
+	last_frame_start := glfw.GetTime()
+	prev_cpu_ms, prev_swap_ms, prev_events_ms: f32
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
-		now := f32(glfw.GetTime())
+		frame_start := glfw.GetTime()
+		now := f32(frame_start)
 		delta := now - last_tick
 
 		last_tick = now
+		g_draw_calls = 0
 
 		client_tick(client, now, delta)
 		client_audio_tick(client, delta)
+		// The debug window records the previous frame in full: its duration
+		// (start to start), CPU time (tick + render submission), and how long
+		// its SwapBuffers and event polling took.
+		when KRODIN_DEV {
+			cpu_ms := f32((glfw.GetTime()-frame_start)*1000)
+			perf_overlay_record(client, f32((frame_start-last_frame_start)*1000), prev_cpu_ms, prev_swap_ms, prev_events_ms)
+			prev_cpu_ms = cpu_ms
+		}
+		last_frame_start = frame_start
 		if client.settings_dirty {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))
 		}
+		swap_start := glfw.GetTime()
 		glfw.SwapBuffers(client.window)
+		swap_end := glfw.GetTime()
 		client_poll_events()
+		when KRODIN_DEV {
+			prev_swap_ms = f32((swap_end-swap_start)*1000)
+			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
+		}
+		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
 		free_all(context.temp_allocator)
 	}
 
@@ -1491,6 +1660,7 @@ main :: proc() {
 	krunker_ws_disconnect(&client.krunker)
 	shared.join_link_free(&client.join_link)
 	kproto.network_log_clear_secrets()
+	kproto.network_log_close()
 	delete(client.join_status)
 	delete(client.selection_status)
 	kproto.krunker_world_reset(&client.krunker_world)
@@ -1503,6 +1673,7 @@ main :: proc() {
 	scene_fini(client.fps_scene)
 	scene_fini(client.scene)
 	overlay_fini()
+	debug_ui_fini(client)
 	ui_fini(client.ui)
 	resource_cache_fini()
 	delete(menu_portraits)

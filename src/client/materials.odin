@@ -5,6 +5,8 @@ import gl "vendor:OpenGL"
 import shared "../shared"
 
 basic_shader_program: u32
+// Static map batches (map_batch.odin): same shader source with BATCHED defined.
+basic_batched_shader_program: u32
 quad_shader_program: u32
 text_shader_program: u32
 
@@ -73,6 +75,7 @@ Shader_Uniforms :: struct {
 }
 
 u_basic: Shader_Uniforms
+u_basic_batched: Shader_Uniforms
 u_quad:  Shader_Uniforms
 u_text:  Shader_Uniforms
 
@@ -154,10 +157,19 @@ basic_material_update_uniforms :: proc(mat: rawptr) {
 	gl.Uniform1i(u_basic.no_fog, i32(material.no_fog))
 	gl.Uniform3f(face_scale, material.face_scale.x, material.face_scale.y, material.face_scale.z)
 
-	color := u_basic.color
-	emissive := u_basic.emissive
-	tex_transform := u_basic.tex_transform
+	gl.Uniform4f(u_basic.color, material.color.x, material.color.y, material.color.z, material.color.w)
+	gl.Uniform4f(u_basic.emissive, material.emissive.x, material.emissive.y, material.emissive.z, material.emissive.w)
+	gl.Uniform1f(u_basic.alpha_test, material.alpha_test)
+	if g_render_quality.shadows { gl.Uniform1i(u_basic.receive_shadow, i32(material.receive_shadow)) }
 
+	transform_flat := flatten_mat3(basic_material_tex_transform(material))
+	gl.UniformMatrix3fv(u_basic.tex_transform, 1, gl.TRUE, &transform_flat[0])
+	basic_bind_texture(material.texture)
+}
+
+// Row-major UV transform. Map batches store the same rows, so both paths use
+// bit-identical values.
+basic_material_tex_transform :: proc(material: ^Basic_Material) -> [3][3]f32 {
 	c := math.cos(material.texture_rotation)
 	s := math.sin(material.texture_rotation)
 	// Match THREE.Texture.setUvTransform with its default center (0, 0).
@@ -168,26 +180,22 @@ basic_material_update_uniforms :: proc(mat: rawptr) {
 	m11 := material.texture_repeat.y * c
 	tx := material.texture_offset.x
 	ty := material.texture_offset.y
-	transform := [3][3]f32{
+	return [3][3]f32{
 		{m00, m01, tx},
 		{m10, m11, ty},
 		{0, 0, 1},
 	}
+}
 
-	gl.Uniform4f(color, material.color.x, material.color.y, material.color.z, material.color.w)
-	gl.Uniform4f(emissive, material.emissive.x, material.emissive.y, material.emissive.z, material.emissive.w)
-	gl.Uniform1f(u_basic.alpha_test, material.alpha_test)
-	if g_render_quality.shadows { gl.Uniform1i(u_basic.receive_shadow, i32(material.receive_shadow)) }
-
-	transform_flat := flatten_mat3(transform)
-	gl.UniformMatrix3fv(tex_transform, 1, gl.TRUE, &transform_flat[0])
-	if material.texture != 0 && g_active_texture == material.texture || material.texture == 0 && g_blank_texture != 0 && g_active_texture == g_blank_texture {
+// Texture 0 means the untextured white material.
+basic_bind_texture :: proc(texture: u32) {
+	if texture != 0 && g_active_texture == texture || texture == 0 && g_blank_texture != 0 && g_active_texture == g_blank_texture {
 		return
 	}
 
-	if material.texture != 0 {
-		gl.BindTexture(gl.TEXTURE_2D, material.texture)
-		g_active_texture = material.texture
+	if texture != 0 {
+		gl.BindTexture(gl.TEXTURE_2D, texture)
+		g_active_texture = texture
 	} else {
 		if g_blank_texture == 0 {
 			gl.CreateTextures(gl.TEXTURE_2D, 1, &g_blank_texture)
@@ -206,28 +214,28 @@ basic_material_update_uniforms :: proc(mat: rawptr) {
 
 // Camera and environment are shared by every basic material in this pass.
 // Updating them here also computes the sun direction only once per pass.
-basic_material_update_pass_uniforms :: proc(camera: ^Camera) {
-	gl.Uniform1f(u_basic.world_uv_scale, shared.GAME_CONSTANTS.world_uv_scale)
-	gl.Uniform1i(u_basic.tex, 0)
+basic_material_update_pass_uniforms :: proc(camera: ^Camera, u: ^Shader_Uniforms) {
+	gl.Uniform1f(u.world_uv_scale, shared.GAME_CONSTANTS.world_uv_scale)
+	gl.Uniform1i(u.tex, 0)
 	// Current Krunker uses an ambient light plus a directional sky/sun light.
 	// Keep the same angle convention as the browser's sceneInit (degrees,
 	// negated before conversion to radians).
 	light_x := g_lighting_config.light_distance * math.cos(-g_lighting_config.sun_angle_x * math.PI / 180.0)
 	light_y := g_lighting_config.light_distance * math.sin(-g_lighting_config.sun_angle_x * math.PI / 180.0) * math.sin(-g_lighting_config.sun_angle_y * math.PI / 180.0)
 	light_z := g_lighting_config.light_distance * math.sin(-g_lighting_config.sun_angle_x * math.PI / 180.0) * math.cos(-g_lighting_config.sun_angle_y * math.PI / 180.0)
-	gl.Uniform3f(u_basic.ambient_color, g_lighting_config.ambient_color.x, g_lighting_config.ambient_color.y, g_lighting_config.ambient_color.z)
-	gl.Uniform1f(u_basic.ambient_intensity, g_lighting_config.ambient_intensity)
-	gl.Uniform3f(u_basic.light_color, g_lighting_config.light_color.x, g_lighting_config.light_color.y, g_lighting_config.light_color.z)
-	gl.Uniform1f(u_basic.light_intensity, g_lighting_config.light_intensity)
-	gl.Uniform3f(u_basic.light_dir, light_x, light_y, light_z)
-	gl.Uniform3f(u_basic.fog_color, g_lighting_config.fog_color.x, g_lighting_config.fog_color.y, g_lighting_config.fog_color.z)
-	gl.Uniform1f(u_basic.fog_near, 1.0)
-	gl.Uniform1f(u_basic.fog_far, max(1.0, g_lighting_config.fog_distance))
-	gl.Uniform3f(u_basic.camera_position, camera.position.x, camera.position.y, camera.position.z)
+	gl.Uniform3f(u.ambient_color, g_lighting_config.ambient_color.x, g_lighting_config.ambient_color.y, g_lighting_config.ambient_color.z)
+	gl.Uniform1f(u.ambient_intensity, g_lighting_config.ambient_intensity)
+	gl.Uniform3f(u.light_color, g_lighting_config.light_color.x, g_lighting_config.light_color.y, g_lighting_config.light_color.z)
+	gl.Uniform1f(u.light_intensity, g_lighting_config.light_intensity)
+	gl.Uniform3f(u.light_dir, light_x, light_y, light_z)
+	gl.Uniform3f(u.fog_color, g_lighting_config.fog_color.x, g_lighting_config.fog_color.y, g_lighting_config.fog_color.z)
+	gl.Uniform1f(u.fog_near, 1.0)
+	gl.Uniform1f(u.fog_far, max(1.0, g_lighting_config.fog_distance))
+	gl.Uniform3f(u.camera_position, camera.position.x, camera.position.y, camera.position.z)
 	values := g_visual_settings.values
-	gl.Uniform4f(u_basic.visual_image, values[.BRIGHTNESS], values[.GAMMA], values[.CONTRAST], values[.SATURATION])
-	gl.Uniform2f(u_basic.visual_lighting, values[.AMBIENT], values[.SUNLIGHT])
-	shadow_update_pass_uniforms()
+	gl.Uniform4f(u.visual_image, values[.BRIGHTNESS], values[.GAMMA], values[.CONTRAST], values[.SATURATION])
+	gl.Uniform2f(u.visual_lighting, values[.AMBIENT], values[.SUNLIGHT])
+	shadow_update_pass_uniforms(u)
 }
 
 flatten_mat3 :: proc(m: [3][3]f32) -> [9]f32 {
@@ -398,4 +406,20 @@ text_material_init :: proc() -> ^Text_Material {
 
 	material.base.program = text_shader_program
 	return material
+}
+
+// Compiled on first use. Returns 0 when the driver rejects it (for example no
+// shader storage buffers); the map then keeps the per-object path.
+basic_batched_program :: proc() -> u32 {
+	if basic_batched_shader_program == 0 {
+		vert_shader := shared.concat(shared.assets_path(), "shaders/basic.vert")
+		frag_shader := shared.concat(shared.assets_path(), "shaders/basic.frag")
+		defer delete(vert_shader)
+		defer delete(frag_shader)
+		basic_batched_shader_program = shader_compile(vert_shader, frag_shader, "#define BATCHED\n")
+		if basic_batched_shader_program != 0 {
+			u_basic_batched = cache_uniforms(basic_batched_shader_program)
+		}
+	}
+	return basic_batched_shader_program
 }

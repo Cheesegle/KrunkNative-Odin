@@ -65,6 +65,7 @@ load_obj_model :: proc(path: string, transform_y: bool) -> ^Geometry {
 	geometry.cache_key = strings.clone(path)
 	geometry.ref_count = 1
 	geometry.last_used = resource_touch()
+	geometry_set_bounds(geometry, vertices[:])
 
 	g_geometry_cache[geometry.cache_key] = geometry
 	resource_trim_geometry_cache()
@@ -464,8 +465,22 @@ create_geometry :: proc(vertices: []Vertex, indices: []u32) -> ^Geometry {
 	geometry.ebo = ebo
 	geometry.index_count = i32(len(indices))
 	geometry.ref_count = 1
+	geometry_set_bounds(geometry, vertices)
 
 	return geometry
+}
+
+geometry_set_bounds :: proc(geometry: ^Geometry, vertices: []Vertex) {
+	if len(vertices) == 0 {
+		return
+	}
+	geometry.bounds_min = vertices[0].position
+	geometry.bounds_max = vertices[0].position
+	for vertex in vertices[1:] {
+		geometry.bounds_min = {min(geometry.bounds_min.x, vertex.position.x), min(geometry.bounds_min.y, vertex.position.y), min(geometry.bounds_min.z, vertex.position.z)}
+		geometry.bounds_max = {max(geometry.bounds_max.x, vertex.position.x), max(geometry.bounds_max.y, vertex.position.y), max(geometry.bounds_max.z, vertex.position.z)}
+	}
+	geometry.has_bounds = true
 }
 
 create_ladder_geo :: proc(height: f32) -> ^Geometry {
@@ -774,6 +789,10 @@ resource_cache_fini :: proc() {
 	if basic_shader_program != 0 {
 		gl.DeleteProgram(basic_shader_program)
 		basic_shader_program = 0
+	}
+	if basic_batched_shader_program != 0 {
+		gl.DeleteProgram(basic_batched_shader_program)
+		basic_batched_shader_program = 0
 	}
 	if quad_shader_program != 0 {
 		gl.DeleteProgram(quad_shader_program)

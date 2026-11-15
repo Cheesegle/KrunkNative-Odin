@@ -11,6 +11,11 @@ import shared "../shared"
 g_font_info: stbtt.fontinfo
 g_font_loaded: bool
 g_font_data: []byte
+// ascent - descent: stbtt.ScaleForPixelHeight(size) is size / g_font_height_units.
+g_font_height_units: f32
+// Kerning in font units for ASCII pairs, filled on first use.
+g_kern_cache: [128][128]i32
+g_kern_cached: [128][128]bool
 
 stb_font_metrics :: proc(ascent, descent, gap: ^i32) {
 	load_font()
@@ -24,7 +29,7 @@ stb_font_metrics :: proc(ascent, descent, gap: ^i32) {
 }
 
 load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
-	if cached, ok := g_glyph_cache[c]; ok {
+	if cached := g_glyph_cache[c]; cached != nil {
 		return cached
 	}
 
@@ -94,6 +99,12 @@ load_font :: proc() {
 	if ok {
 		g_font_data = font_data
 		g_font_loaded = bool(stbtt.InitFont(&g_font_info, &g_font_data[0], 0))
+	}
+	if g_font_loaded {
+		ascent, descent, gap: i32
+		stbtt.GetFontVMetrics(&g_font_info, &ascent, &descent, &gap)
+		g_font_height_units = f32(ascent - descent)
+		g_kern_cached = {}
 	}
 }
 
@@ -166,6 +177,7 @@ ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
 	}
 
 	gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4)
+	g_draw_calls += 1
 }
 
 ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
@@ -317,7 +329,18 @@ ui_measure_text :: proc(ui: ^UI, text: string, size: f32) -> f32 {
 
 ui_text_kerning :: proc(previous, current: rune, size: f32) -> f32 {
 	if previous == 0 || !g_font_loaded { return 0 }
-	return f32(stbtt.GetCodepointKernAdvance(&g_font_info, previous, current)) * stbtt.ScaleForPixelHeight(&g_font_info, size)
+	kern: i32
+	if previous > 0 && previous < 128 && current >= 0 && current < 128 {
+		if !g_kern_cached[previous][current] {
+			g_kern_cache[previous][current] = i32(stbtt.GetCodepointKernAdvance(&g_font_info, previous, current))
+			g_kern_cached[previous][current] = true
+		}
+		kern = g_kern_cache[previous][current]
+	} else {
+		kern = i32(stbtt.GetCodepointKernAdvance(&g_font_info, previous, current))
+	}
+	// Same float division as stbtt.ScaleForPixelHeight, without the call.
+	return f32(kern) * (size / g_font_height_units)
 }
 
 ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32) -> f32 {
@@ -361,14 +384,17 @@ ui_fini :: proc(ui: ^UI) {
 		return
 	}
 
-	for _, glyph in g_glyph_cache {
+	for glyph in g_glyph_cache {
+		if glyph == nil {
+			continue
+		}
 		if glyph.texture != 0 {
 			gl.DeleteTextures(1, &glyph.texture)
 		}
 		free(glyph)
 	}
-	delete(g_glyph_cache)
-	g_glyph_cache = nil
+	g_glyph_cache = {}
+	g_kern_cached = {}
 
 	if ui.vao != 0 {
 		gl.DeleteVertexArrays(1, &ui.vao)

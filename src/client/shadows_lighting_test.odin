@@ -121,7 +121,7 @@ when ODIN_TEST {
 		off := menuui.Quality_Settings{lighting = 1}
 		shaded_off := shadow_test_pixel(scene, &camera, &map_inst, off, shaded_x, 32)
 		lit_off := shadow_test_pixel(scene, &camera, &map_inst, off, lit_x, 32)
-		testing.expect(t, g_shadow.renders == renders && g_shadow.fbo == 0 && !g_render_quality.shadows, "Shadows off must not create or render a shadow map")
+		testing.expect(t, g_shadow.renders == renders && g_shadow.static_target.fbo == 0 && !g_render_quality.shadows, "Shadows off must not create or render a shadow map")
 		testing.expect(t, shaded_off == lit_off && lit_off.r > 240, fmt.tprintf("without shadows the floor is evenly lit (%v, %v)", shaded_off, lit_off))
 
 		on := menuui.DEFAULT_QUALITY_SETTINGS
@@ -136,9 +136,18 @@ when ODIN_TEST {
 		testing.expect(t, g_shadow.renders == renders + 2, "changing the filter must rebuild the shadow map once")
 		dynamic_quality := on
 		dynamic_quality.dynamic_shadows = true
+		dynamic_before := g_shadow.dynamic_renders
 		shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32)
-		shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32)
-		testing.expect(t, g_shadow.renders == renders + 4, "Dynamic Shadows must render the shadow map every frame")
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32).r < 100, "Dynamic Shadows must keep the static map's shadows")
+		testing.expect(t, g_shadow.dynamic_renders == dynamic_before + 2 && g_shadow.renders == renders + 2,
+			"Dynamic Shadows must redraw the players every frame on a copy of the cached static map")
+		// A player-like caster only shows with Dynamic Shadows.
+		box.shadow_caster = .DYNAMIC
+		shadow_mark_dirty()
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, on, shaded_x, 32).r > 240, "players must not cast without Dynamic Shadows")
+		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, dynamic_quality, shaded_x, 32).r < 100, "players must cast with Dynamic Shadows")
+		box.shadow_caster = .STATIC
+		shadow_mark_dirty()
 
 		low := on
 		low.lighting = 0
@@ -150,7 +159,7 @@ when ODIN_TEST {
 		testing.expect(t, shadow_test_pixel(scene, &camera, &map_inst, high, shaded_x, 32).r < 100, "High lighting must keep the sun's shadow")
 
 		shadow_release_map()
-		testing.expect(t, g_shadow.fbo == 0 && g_shadow.texture == 0, "a map change must free the shadow map")
+		testing.expect(t, g_shadow.static_target.fbo == 0 && g_shadow.static_target.texture == 0 && g_shadow.dynamic_target.texture == 0, "a map change must free the shadow map")
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "shadows must not generate OpenGL errors")
 	}
 }
