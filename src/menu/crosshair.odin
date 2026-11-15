@@ -20,7 +20,11 @@ DEFAULT_CROSSHAIR_SETTINGS :: Crosshair_Settings{
 }
 // Official desktop Precision ranges (5fHFc).
 CROSSHAIR_LIMITS := [Crosshair_Control][2]f32{.OPACITY={0,1}, .SHADOW={0,3}, .THICKNESS={0,100}, .SIZE={0,100}, .GAP={-100,100}}
-CROSSHAIR_STEPS := [Crosshair_Control]f32{.OPACITY=0.1, .SHADOW=0.1, .THICKNESS=0.5, .SIZE=0.5, .GAP=1}
+// Krunker steps thickness/length by 0.5 and gap by 1 over 0-100 / ±100 ranges,
+// which puts the usual values (thickness 1-4, size 5-20) in a few percent of
+// the bar. Krodin keeps the ranges but uses finer steps and curved sliders.
+CROSSHAIR_STEPS := [Crosshair_Control]f32{.OPACITY=0.1, .SHADOW=0.1, .THICKNESS=0.1, .SIZE=0.1, .GAP=0.5}
+CROSSHAIR_CURVES := [Crosshair_Control]f32{.OPACITY=1, .SHADOW=1, .THICKNESS=2, .SIZE=2, .GAP=2}
 CROSSHAIR_LABELS := [Crosshair_Control]string{.OPACITY="Custom opacity", .SHADOW="Shadow thickness", .THICKNESS="Thickness", .SIZE="Size", .GAP="Gap"}
 CROSSHAIR_IDS := [Crosshair_Control]string{.OPACITY="CrosshairOpacity", .SHADOW="CrosshairShadow", .THICKNESS="CrosshairThickness", .SIZE="CrosshairSize", .GAP="CrosshairGap"}
 
@@ -92,7 +96,7 @@ settings_crosshair :: proc(state: ^State) {
 	settings_crosshair_color(state, "Shadow color", 2)
 	for control in Crosshair_Control {
 		if control == .OPACITY { continue }
-		settings_slider(state, CROSSHAIR_LABELS[control], CROSSHAIR_IDS[control], state.settings_draft.crosshair.values[control], CROSSHAIR_LIMITS[control][0], CROSSHAIR_LIMITS[control][1], {kind=.CROSSHAIR_VALUE, index=i32(control)}, step=CROSSHAIR_STEPS[control])
+		settings_slider(state, CROSSHAIR_LABELS[control], CROSSHAIR_IDS[control], state.settings_draft.crosshair.values[control], CROSSHAIR_LIMITS[control][0], CROSSHAIR_LIMITS[control][1], {kind=.CROSSHAIR_VALUE, index=i32(control)}, step=CROSSHAIR_STEPS[control], curve=CROSSHAIR_CURVES[control])
 	}
 	settings_toggle_row(state, "Dot", "CrosshairDot", state.settings_draft.crosshair.toggles[.DOT], {kind=.CROSSHAIR_TOGGLE, index=i32(Crosshair_Toggle.DOT)})
 	settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Always show keeps the crosshair when aiming. Custom opacity overrides its normal fade. Click a color to type or paste #RRGGBB. Image crosshairs are coming later.")

@@ -95,7 +95,7 @@ Input :: struct {
 	up, down_key: bool,
 	binding_pressed: i32,
 }
-Control :: struct { id: clay.ElementId, action: Action, enabled, slider, number: bool, slider_min, slider_max, slider_step: f32 }
+Control :: struct { id: clay.ElementId, action: Action, enabled, slider, number: bool, slider_min, slider_max, slider_step, slider_curve: f32 }
 State :: struct {
 	page: Page,
 	ctx: ^clay.Context,
@@ -323,7 +323,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 			if control.slider && input.down {
 				progress := clamp((input.pointer[0] - data.boundingBox.x) / data.boundingBox.width, 0, 1)
 				action := control.action
-				action.value = control.slider_min + progress * (control.slider_max - control.slider_min)
+				action.value = slider_value_at(progress, control.slider_min, control.slider_max, control.slider_curve, control.slider_step)
 				return activate(state, {action = action})
 			}
 			if !input.down && state.previous.down && over {
