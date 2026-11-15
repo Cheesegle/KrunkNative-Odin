@@ -153,7 +153,12 @@ Client :: struct {
 	fps_value:      u32,
 	fps_frames:     u32,
 	fps_elapsed:    f32,
-	healthbar_visibility_checked_at: f32,
+	// Nameplate visibility scheduler (healthbars.odin): the client time of the
+	// last update, the round-robin cursor into game.players and the fractional
+	// line-of-sight checks carried to the next frame.
+	healthbar_visibility_time:   f32,
+	healthbar_visibility_cursor: int,
+	healthbar_visibility_budget: f32,
 	viewport_width: i32,
 	viewport_height: i32,
 }

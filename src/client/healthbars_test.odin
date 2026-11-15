@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:os"
 import "core:testing"
+import "core:time"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import shared "../shared"
@@ -46,10 +47,17 @@ when ODIN_TEST {
 		return
 	}
 
+	// Lets the visibility fades settle (one second of frames), then draws.
 	nameplate_test_colors :: proc(client: ^Client, pixels: []u8) -> (red, green, white: int) {
+		healthbar_test_settle(client)
+		red, green, white, _ = nameplate_test_draw(client, pixels)
+		return
+	}
+
+	// Draws with the current nameplate alphas. red_level sums the red channel
+	// of red-dominant pixels, so it scales with the bar's alpha.
+	nameplate_test_draw :: proc(client: ^Client, pixels: []u8) -> (red, green, white, red_level: int) {
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-		client.healthbar_visibility_checked_at = -1
-		player_healthbars_update_visibility(client, 0)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
@@ -57,6 +65,7 @@ when ODIN_TEST {
 			if pixels[i] > 200 && pixels[i+1] < 120 && pixels[i+2] < 120 { red += 1 }
 			if pixels[i] < 190 && pixels[i+1] > 200 && pixels[i+2] < 140 { green += 1 }
 			if pixels[i] > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 { white += 1 }
+			if int(pixels[i]) > int(pixels[i+1]) + 40 && int(pixels[i]) > int(pixels[i+2]) + 40 { red_level += int(pixels[i]) }
 		}
 		return
 	}
@@ -125,6 +134,21 @@ when ODIN_TEST {
 		client.game.map_inst = &los_map
 		hidden_red, wall_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, hidden_red == 0 && wall_green == green, "an enemy behind map geometry must get no bar (ESP) while the teammate keeps one")
+		// A low wall hides the enemy's feet but not the head or chest.
+		los_wall.scale.y = 6
+		partial_red, _ := healthbar_test_colors(&client, pixels)
+		testing.expectf(t, partial_red == half_red, "a partly occluded enemy keeps a full bar (%d/%d red)", partial_red, half_red)
+		testing.expect(t, enemy.nameplate_alpha == 1 && !shared.map_can_see(&los_map, player_healthbar_eye(&local), enemy.position),
+			"the low wall hides the feet, yet the plate is fully shown")
+		// The renderer uses the fade alpha: half-faded is dimmer, zero is gone.
+		_, _, _, full_level := nameplate_test_draw(&client, pixels)
+		enemy.nameplate_alpha = 0.5
+		_, _, _, half_level := nameplate_test_draw(&client, pixels)
+		enemy.nameplate_alpha = 0
+		faded_red, faded_green, _, faded_level := nameplate_test_draw(&client, pixels)
+		testing.expectf(t, half_level > full_level/4 && half_level < full_level*3/4, "a half-faded bar is drawn at about half intensity (%d of %d)", half_level, full_level)
+		testing.expect(t, faded_red == 0 && faded_level == 0 && faded_green == green, "a fully faded enemy bar is not drawn; the teammate's is untouched")
+		los_wall.scale.y = 40
 		client.game.map_inst = nil
 		client.mouse_state.locked = false
 		menu_red, menu_green := healthbar_test_colors(&client, pixels)
@@ -144,8 +168,37 @@ when ODIN_TEST {
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "health bar and world rendering must preserve valid OpenGL state")
 	}
 
+	healthbar_test_settle :: proc(client: ^Client, seconds: f32 = 1) {
+		start := client.healthbar_visibility_time
+		frames := int(seconds*60)
+		for i in 1 ..= frames { player_healthbars_update_visibility(client, start + f32(i)/60) }
+	}
+
+	// Steps the visibility update at 144 Hz for `seconds`, tracking the alpha range seen.
+	healthbar_test_run :: proc(client: ^Client, player: ^shared.Player, seconds: f32) -> (lowest, highest: f32) {
+		lowest, highest = 2, -1
+		start := client.healthbar_visibility_time
+		frames := int(math.ceil(seconds*144))
+		for i in 1 ..= frames {
+			player_healthbars_update_visibility(client, start + f32(i)/144)
+			lowest, highest = min(lowest, player.nameplate_alpha), max(highest, player.nameplate_alpha)
+		}
+		return
+	}
+
+	// Steps at 144 Hz until the alpha reaches `target`; returns the time taken.
+	healthbar_test_time_to :: proc(client: ^Client, player: ^shared.Player, target: f32, limit: f32 = 2) -> (elapsed: f32, partial: bool) {
+		start := client.healthbar_visibility_time
+		for i in 1 ..= int(limit*144) {
+			player_healthbars_update_visibility(client, start + f32(i)/144)
+			if player.nameplate_alpha == target { return f32(i)/144, partial }
+			if player.nameplate_alpha > 0 && player.nameplate_alpha < 1 { partial = true }
+		}
+		return limit, partial
+	}
+
 	@(test)
-	healthbars_follow_krunker_nameplate_visibility :: proc(t: ^testing.T) {
+	healthbars_follow_nameplate_visibility_rules :: proc(t: ^testing.T) {
 		local := shared.Player{active = true, is_you = true, team = 1, position = {0, 0, 0}, height = 11, health = 100, max_health = 100}
 		enemy := shared.Player{active = true, team = 2, position = {0, 0, -80}, height = 11, health = 100, max_health = 100}
 		ally := shared.Player{active = true, team = 1, position = {6, 0, -80}, height = 11, health = 100, max_health = 100}
@@ -158,62 +211,245 @@ when ODIN_TEST {
 		client.game.map_inst = &world
 		append(&client.game.players, &local, &enemy, &ally)
 		defer delete(client.game.players)
-		refresh :: proc(client: ^Client) {
-			client.healthbar_visibility_checked_at = -1
-			player_healthbars_update_visibility(client, 0)
-		}
 
-		refresh(&client)
-		testing.expect(t, !enemy.can_be_seen, "an enemy behind a wall must not get a nameplate")
-		testing.expect(t, ally.can_be_seen, "teammates are always shown, even through walls")
+		healthbar_test_settle(&client)
+		testing.expect(t, !enemy.can_be_seen && enemy.nameplate_alpha == 0, "an enemy fully behind a wall is hidden once the fade ends")
+		testing.expect(t, ally.can_be_seen && ally.nameplate_alpha == 1, "teammates are always shown at full alpha, even through walls")
 
 		wall.active = false
-		refresh(&client)
-		testing.expect(t, enemy.can_be_seen, "an enemy in clear sight gets a nameplate; standing on the floor must not block it")
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.can_be_seen && enemy.nameplate_alpha == 1, "an enemy in clear sight gets a nameplate; standing on the floor must not block it")
 
-		wall.active = true
-		client.healthbar_visibility_checked_at = 5
-		player_healthbars_update_visibility(&client, 5.1)
-		testing.expect(t, enemy.can_be_seen, "visibility only refreshes every 200 ms like Krunker")
-		player_healthbars_update_visibility(&client, 5.25)
-		testing.expect(t, !enemy.can_be_seen, "the next 200 ms refresh must pick up the blocking wall")
-
-		// canSee aims at the target's feet: a waist-high wall hides the tag.
-		wall.scale.y = 6
-		refresh(&client)
-		testing.expect(t, !enemy.can_be_seen, "Krunker tests line of sight to the player's feet")
+		// Changed from Krunker's feet-only rule: a waist-high wall hides the
+		// feet, but the head and chest are in sight, so the plate stays.
+		wall.active, wall.scale.y = true, 6
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.can_be_seen && enemy.nameplate_alpha == 1, "head visible over a low wall with the feet hidden: shown")
+		testing.expect(t, !shared.map_can_see(&world, player_healthbar_eye(&local), enemy.position), "the low wall really does hide the feet")
+		// Crouching behind the same wall lowers the head below the sight line.
+		enemy.crouch_val, enemy.height = 1, 8
+		wall.scale.y = 8.5
+		healthbar_test_settle(&client)
+		testing.expect(t, !enemy.can_be_seen && enemy.nameplate_alpha == 0, "a crouched enemy fully behind cover is hidden (sight points follow the crouched height)")
+		enemy.crouch_val, enemy.height = 0, 11
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.can_be_seen, "standing back up over the same cover shows the head again")
 		wall.scale.y = 30
+
+		// A wall that covers the centre line but not the hitbox edges.
+		wall.scale.x = 2
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.can_be_seen && enemy.nameplate_alpha == 1, "a thin pole in front of the centre does not hide a player whose sides are in sight")
+		wall.scale.x = 200
 
 		see_through := []shared.Prefab{.WINDOW, .GRASS, .LIGHT_CONE, .RAMP}
 		for prefab in see_through {
 			wall.prefab = prefab
-			refresh(&client)
-			testing.expectf(t, enemy.can_be_seen, "%v is transparent/noShoot and must not block nameplates", prefab)
+			healthbar_test_settle(&client)
+			testing.expectf(t, enemy.can_be_seen && enemy.nameplate_alpha == 1, "%v is transparent/noShoot and must not block nameplates", prefab)
 		}
 		wall.prefab = .CUBE
 		wall.no_shoot = true
-		refresh(&client)
+		healthbar_test_settle(&client)
 		testing.expect(t, enemy.can_be_seen, "noShoot objects must not block nameplates")
 		wall.no_shoot, wall.collision_type = false, .NONE
-		refresh(&client)
+		healthbar_test_settle(&client)
 		testing.expect(t, enemy.can_be_seen, "no-collision objects must not block nameplates")
 		wall.collision_type = .BOX
 
 		wall.active = false
 		client.game.config.hide_enemy_nametags = true
-		refresh(&client)
-		testing.expect(t, !enemy.can_be_seen && ally.can_be_seen, "Hide Nametags (Enemies) hides only enemy nameplates")
+		healthbar_test_settle(&client)
+		testing.expect(t, !enemy.can_be_seen && enemy.nameplate_alpha == 0 && ally.can_be_seen && ally.nameplate_alpha == 1, "Hide Nametags (Enemies) hides only enemy nameplates")
 		client.game.config.hide_enemy_nametags = false
 		wall.active = true
 
 		local.team, ally.team, enemy.team = 0, 0, 0
-		refresh(&client)
-		testing.expect(t, !ally.can_be_seen && !enemy.can_be_seen, "in FFA nobody is a teammate, so walls hide every nameplate")
+		healthbar_test_settle(&client)
+		testing.expect(t, !ally.can_be_seen && !enemy.can_be_seen && ally.nameplate_alpha == 0, "in FFA nobody is a teammate, so walls hide every nameplate")
 
 		local.active = false
 		local.team, ally.team = 1, 1
-		refresh(&client)
-		testing.expect(t, !ally.can_be_seen, "a dead local player must not keep stale nameplate visibility")
+		healthbar_test_settle(&client)
+		testing.expect(t, !ally.can_be_seen && ally.nameplate_alpha == 0 && !ally.nameplate_tracked, "a dead local player must not keep stale nameplate visibility")
+	}
+
+	@(test)
+	nameplates_fade_hold_and_follow_peeks :: proc(t: ^testing.T) {
+		local := shared.Player{active = true, is_you = true, team = 1, position = {0, 0, 0}, height = 11, health = 100, max_health = 100}
+		enemy := shared.Player{active = true, team = 2, position = {0, 0, -80}, height = 11, health = 100, max_health = 100}
+		other := shared.Player{active = true, team = 2, position = {30, 0, -80}, height = 11, health = 100, max_health = 100}
+		wall := shared.Object{active = true, collision_type = .BOX, position = {0, 0, -40}, scale = {200, 30, 2}}
+		world := shared.Map{}
+		append(&world.objects, &wall)
+		defer delete(world.objects)
+		client := Client{me = &local}
+		client.game.map_inst = &world
+		append(&client.game.players, &local, &enemy, &other)
+		defer delete(client.game.players)
+		interval := 1/HEALTHBAR_VISIBILITY_RATE
+		frame := f32(1)/144
+
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.nameplate_alpha == 0, "start hidden")
+
+		// Peek: the plate starts within one update interval and fades in.
+		wall.active = false
+		elapsed, partial := healthbar_test_time_to(&client, &enemy, 1)
+		testing.expectf(t, elapsed <= interval + NAMEPLATE_FADE_IN + 2*frame, "a peek is fully shown within one update interval plus the fade-in (%.3f s)", elapsed)
+		testing.expect(t, elapsed >= NAMEPLATE_FADE_IN - frame && partial, "the plate fades in instead of popping")
+
+		// Brief occlusion (a pole or prop sweeping across): the hold keeps it.
+		wall.active = true
+		lowest, _ := healthbar_test_run(&client, &enemy, NAMEPLATE_HOLD - 2*interval - 3*frame)
+		wall.active = false
+		after, _ := healthbar_test_run(&client, &enemy, 0.3)
+		testing.expectf(t, lowest == 1 && after == 1, "a brief occlusion must not flicker the plate (lowest alpha %.2f)", min(lowest, after))
+
+		// Going behind a wall: held, then faded out, never popped.
+		wall.active = true
+		held, _ := healthbar_test_run(&client, &enemy, NAMEPLATE_HOLD - 2*interval)
+		testing.expect(t, held == 1, "the plate is held for the hold time after the last visible test")
+		elapsed, partial = healthbar_test_time_to(&client, &enemy, 0)
+		testing.expectf(t, partial && elapsed <= 2*interval + NAMEPLATE_FADE_OUT + 2*frame, "after the hold the plate fades out to 0 (%.3f s)", elapsed)
+		testing.expect(t, !enemy.can_be_seen, "hidden after the fade")
+
+		// Round-robin: each player is tested once per interval, spread over frames.
+		healthbar_test_settle(&client)
+		wall.active = false
+		elapsed_other, _ := healthbar_test_time_to(&client, &other, 1)
+		testing.expectf(t, elapsed_other <= interval + NAMEPLATE_FADE_IN + 2*frame, "every player gets its turn within the interval (%.3f s)", elapsed_other)
+
+		// Deaths and respawns never inherit a fade.
+		healthbar_test_settle(&client)
+		testing.expect(t, enemy.nameplate_alpha == 1, "visible before dying")
+		enemy.active = false
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + frame)
+		testing.expect(t, enemy.nameplate_alpha == 0 && !enemy.can_be_seen && !enemy.nameplate_tracked, "death clears the plate at once (no fade-out over a corpse)")
+		wall.active = true
+		enemy.active = true
+		highest_after_respawn: f32
+		_, highest_after_respawn = healthbar_test_run(&client, &enemy, 0.5)
+		testing.expect(t, highest_after_respawn == 0, "a respawn behind a wall starts hidden, with no stale fade or hold")
+		wall.active = false
+		enemy.health = 0
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + frame)
+		testing.expect(t, enemy.nameplate_alpha == 0 && !enemy.nameplate_tracked, "zero health counts as dead")
+		enemy.health = 100
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + frame)
+		testing.expect(t, enemy.can_be_seen && enemy.nameplate_alpha > 0 && enemy.nameplate_alpha < 1, "a respawn in sight is tested at once and fades in from 0")
+
+		// A newly created player (zeroed state) is tested on its first frame.
+		newcomer := shared.Player{active = true, team = 2, position = {-30, 0, -80}, height = 11, health = 100, max_health = 100}
+		newcomer.nameplate_alpha, newcomer.nameplate_seen_at = 1, client.healthbar_visibility_time // garbage that must not leak
+		newcomer.nameplate_tracked = false
+		wall.active = true
+		append(&client.game.players, &newcomer)
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + frame)
+		testing.expect(t, newcomer.nameplate_tracked && !newcomer.can_be_seen && newcomer.nameplate_alpha == 0, "a new player starts from a clean state")
+
+		// Teammates are at full alpha from their first frame.
+		mate := shared.Player{active = true, team = 1, position = {0, 0, -90}, height = 11, health = 100, max_health = 100}
+		append(&client.game.players, &mate)
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + frame)
+		testing.expect(t, mate.nameplate_alpha == 1 && mate.can_be_seen, "teammates never fade")
+
+		// The display curve covers the full range.
+		testing.expect(t, player_nameplate_display_alpha(0) == 0 && player_nameplate_display_alpha(1) == 1 &&
+			player_nameplate_display_alpha(0.25) < player_nameplate_display_alpha(0.5), "display alpha eases from 0 to 1")
+	}
+
+	@(test)
+	nameplates_skip_players_off_screen :: proc(t: ^testing.T) {
+		local := shared.Player{active = true, is_you = true, position = {0, 0, 0}, height = 11, health = 100, max_health = 100}
+		enemy := shared.Player{active = true, position = {0, 0, 80}, height = 11, health = 100, max_health = 100}
+		client := Client{me = &local, viewport_width = 640, viewport_height = 360}
+		client.camera = camera_init(math.PI/2)
+		client.camera.position = {0, 9.5, 0}
+		append(&client.game.players, &local, &enemy)
+		defer delete(client.game.players)
+		healthbar_test_settle(&client)
+		testing.expect(t, !enemy.can_be_seen && !enemy.nameplate_in_view && enemy.nameplate_alpha == 0, "a player behind the camera is not traced")
+		// Turning around: the anchor enters the screen and is tested that frame.
+		client.camera.rotation.y = math.PI
+		player_healthbars_update_visibility(&client, client.healthbar_visibility_time + 1.0/144)
+		testing.expect(t, enemy.nameplate_in_view && enemy.can_be_seen && enemy.nameplate_alpha > 0, "entering the view triggers an immediate test")
+	}
+
+	// Krunker-style full scan of every object, without the segment-bounds
+	// filter or collision index; the reference for the cost test.
+	healthbar_test_can_see_unfiltered :: proc(map_inst: ^shared.Map, from, to: shared.Vec3) -> bool {
+		segment := to - from
+		for object in map_inst.objects {
+			if !shared.map_object_blocks_sight(object) { continue }
+			if t, _, hit := shared.ray_box_hit(from, segment, object.position, object.scale); hit && t < 1 { return false }
+		}
+		return true
+	}
+
+	@(test)
+	healthbar_visibility_cost_on_bastion :: proc(t: ^testing.T) {
+		map_inst, ok := shared.map_load_from_file("assets/maps/bastion.json")
+		if !testing.expect(t, ok && map_inst != nil, "bastion loads") { return }
+		defer shared.map_destroy(map_inst)
+		// Deterministic positions on top of floor-sized boxes across the map.
+		floors := make([dynamic]^shared.Object, context.temp_allocator)
+		for object in map_inst.objects {
+			if shared.map_object_blocks_sight(object) && object.scale.x > 20 && object.scale.z > 20 && object.scale.x < 400 && object.scale.z < 400 { append(&floors, object) }
+		}
+		if !testing.expect(t, len(floors) > 16) { return }
+		players: [17]shared.Player
+		client := Client{}
+		client.game.map_inst = map_inst
+		defer delete(client.game.players)
+		seed := u32(12345)
+		next :: proc(seed: ^u32) -> f32 { seed^ = seed^*1664525 + 1013904223; return f32(seed^ >> 8)/f32(1 << 24) }
+		for &player, i in players {
+			floor := floors[int(next(&seed)*f32(len(floors)))]
+			player = shared.Player{active = true, team = i32(i % 2) + 1, height = 11, scale = shared.GAME_CONSTANTS.player_scale, health = 100, max_health = 100}
+			player.position = floor.position + {(next(&seed)-0.5)*floor.scale.x*0.8, floor.scale.y, (next(&seed)-0.5)*floor.scale.z*0.8}
+			append(&client.game.players, &player)
+		}
+		client.me = &players[0]
+		players[0].is_you = true
+		for &player in players[1:] { player.team = 2 } // 16 enemies
+		eye := player_healthbar_eye(client.me)
+
+		// The segment filter must never change an answer.
+		mismatches, rays := 0, 0
+		for &player in players[1:] {
+			for point in player_healthbar_sight_points(eye, &player) {
+				rays += 1
+				if shared.map_can_see(map_inst, eye, point) != healthbar_test_can_see_unfiltered(map_inst, eye, point) { mismatches += 1 }
+			}
+		}
+		testing.expectf(t, mismatches == 0, "filtered and full-scan line of sight disagree on %d of %d rays", mismatches, rays)
+
+		REPS :: 200
+		// Worst case: all 16 players tested in one frame (5 rays each when hidden).
+		start := time.tick_now()
+		visible := 0
+		for _ in 0 ..< REPS { for &player in players[1:] { if player_healthbar_line_of_sight(map_inst, eye, &player) { visible += 1 } } }
+		all_us := time.duration_microseconds(time.tick_since(start))/REPS
+		start = time.tick_now()
+		for _ in 0 ..< REPS {
+			for &player in players[1:] {
+				for point in player_healthbar_sight_points(eye, &player) { if healthbar_test_can_see_unfiltered(map_inst, eye, point) { break } }
+			}
+		}
+		full_scan_us := time.duration_microseconds(time.tick_since(start))/REPS
+
+		// Steady state: the real scheduler at 144 fps with every player in view
+		// (no viewport, so no frustum skip), averaged over 10 seconds.
+		FRAMES :: 1440
+		player_healthbars_update_visibility(&client, 0)
+		start = time.tick_now()
+		for i in 1 ..= FRAMES { player_healthbars_update_visibility(&client, f32(i)/144) }
+		frame_us := time.duration_microseconds(time.tick_since(start))/FRAMES
+		fmt.printf("[healthbar-cost] bastion, 16 enemies (%d visible): all tested in one frame %.1f us (full scan %.1f us); scheduler at %v Hz per player, 144 fps: %.1f us/frame\n",
+			visible/REPS, all_us, full_scan_us, HEALTHBAR_VISIBILITY_RATE, frame_us)
+		testing.expectf(t, all_us < full_scan_us, "the segment filter must make line of sight cheaper (%.1f vs %.1f us)", all_us, full_scan_us)
+		testing.expectf(t, frame_us < 1000, "nameplate visibility must stay well under a millisecond per frame (%.1f us)", frame_us)
 	}
 
 	@(test)

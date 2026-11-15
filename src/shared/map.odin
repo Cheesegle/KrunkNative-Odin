@@ -632,10 +632,24 @@ map_object_blocks_sight :: proc(object: ^Object) -> bool {
 	return true
 }
 
+// Cost: a loaded map scans only its collision index (no-collision objects
+// never block), and a box whose bounds miss the segment's bounding box is
+// rejected before the flag checks and the slab test. On bastion this is about
+// 6x cheaper than testing every object (~1.8 us instead of ~12.8 us for an
+// unblocked ray; see healthbar_visibility_cost_on_bastion).
 map_can_see :: proc(map_inst: ^Map, from, to: Vec3) -> bool {
 	if map_inst == nil { return true }
 	segment := to - from
-	for object in map_inst.objects {
+	lo := Vec3{min(from.x, to.x), min(from.y, to.y), min(from.z, to.z)}
+	hi := Vec3{max(from.x, to.x), max(from.y, to.y), max(from.z, to.z)}
+	count := map_inst.collision_indexed ? len(map_inst.collision_objects) : len(map_inst.objects)
+	for i in 0 ..< count {
+		object := map_inst.objects[map_inst.collision_indexed ? int(map_inst.collision_objects[i]) : i]
+		if object == nil { continue }
+		half_x, half_z := object.scale.x*0.5, object.scale.z*0.5
+		if object.position.x - half_x > hi.x || object.position.x + half_x < lo.x ||
+			object.position.z - half_z > hi.z || object.position.z + half_z < lo.z ||
+			object.position.y > hi.y || object.position.y + object.scale.y < lo.y { continue }
 		if !map_object_blocks_sight(object) { continue }
 		if t, _, hit := ray_box_hit(from, segment, object.position, object.scale); hit && t < 1 { return false }
 	}
