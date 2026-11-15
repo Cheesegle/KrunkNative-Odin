@@ -29,7 +29,7 @@ when ODIN_TEST {
 		// and keeps its other quality choices.
 		testing.expect(t, os.write_entire_file(path, `{"version":1,"quality":{"smooth_textures":true,"anisotropy":4}}`) == nil)
 		older := client_settings_load(path)
-		testing.expect(t, older.quality == menuui.Quality_Settings{smooth_textures = true, anisotropy = 4, shadows = true, lighting = 1, self_shadow = true},
+		testing.expect(t, older.quality == menuui.Quality_Settings{anisotropy = 4, shadows = true, lighting = 1, self_shadow = true},
 			fmt.tprintf("older preferences must load Krunker's Shadows and Lighting defaults: %v", older.quality))
 		testing.expect(t, os.write_entire_file(path, `{"version":1}`) == nil)
 		testing.expect(t, client_settings_load(path).quality == menuui.DEFAULT_QUALITY_SETTINGS, "files without a quality block must use the defaults")

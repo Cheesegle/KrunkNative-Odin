@@ -577,12 +577,7 @@ test_graphics_menu :: proc() -> bool {
 	if state.focus != clay.ID("ResetVisuals").id || box.y < panel.y-1 || box.y+box.height > panel.y+panel.height+1 { fmt.println("Reset visuals must remain reachable by keyboard"); return false }
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.VIDEO)))
 	menu_test_frame(&state, view, {})
-	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("TextureFiltering").id { menuui.focus_visible(control, .SETTINGS) } }
-	menu_test_frame(&state, view, {})
-	menu_test_click(&state, view, clay.ID("TextureFiltering"))
-	menu_test_frame(&state, view, {})
-	menu_test_click(&state, view, clay.ID("SettingsOption", 1))
-	menu_test_frame(&state, view, {})
+	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("TextureFiltering").id { fmt.println("Texture filtering was removed; textures are always Sharp"); return false } }
 	for control in state.controls[:state.control_count] { if control.id.id == clay.ID("Anisotropy").id { menuui.focus_visible(control, .SETTINGS) } }
 	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("Anisotropy"))
@@ -591,7 +586,7 @@ test_graphics_menu :: proc() -> bool {
 	menu_test_click(&state, view, clay.ID("SettingsOption", 2))
 	menu_test_frame(&state, view, {})
 	value := menu_test_click(&state, view, clay.ID("SettingsSave"))
-	if value.kind != .SETTINGS_SAVE || !state.settings_draft.quality.smooth_textures || state.settings_draft.quality.anisotropy != 4 || abs(state.settings_draft.visuals.values[.GAMMA]-1.05)>0.001 { fmt.println("Graphics changes must survive tab switches and Save"); return false }
+	if value.kind != .SETTINGS_SAVE || state.settings_draft.quality.anisotropy != 4 || abs(state.settings_draft.visuals.values[.GAMMA]-1.05)>0.001 { fmt.println("Graphics changes must survive tab switches and Save"); return false }
 	fmt.println("Visuals, Gameplay FOV, graphics scrolling, supported quality choices and staging tests OK")
 	return true
 }
