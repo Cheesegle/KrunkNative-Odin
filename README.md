@@ -48,7 +48,9 @@ An optimization level can follow the target (`none`, `minimal`, `size`, `speed`,
 
 The first Windows client build needs internet access to fetch the WebView2 loader.
 
-To build and package a release, run `.\package-windows.ps1` (Windows) or `python package-linux.py` (Linux).
+`.\package-windows.ps1` builds the tester zip in `dist/`: release binaries plus only the assets the
+client loads, found by running `krodin_client.exe --asset-sweep` over every map, class, weapon and sound.
+`python package-linux.py` still packages Linux builds from a seed asset archive.
 
 <details>
 <summary>Fresh Odin installs on Linux/macOS</summary>

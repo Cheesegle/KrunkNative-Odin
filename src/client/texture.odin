@@ -5,6 +5,7 @@ import "core:math"
 import "core:strings"
 import gl "vendor:OpenGL"
 import stbi "vendor:stb/image"
+import shared "../shared"
 
 Texture :: struct {
 	id:     u32,
@@ -359,6 +360,7 @@ texture_load_from_file :: proc(filename: string) -> (tex: Texture, ok: bool) {
 
 	w, h, channels: i32
 	data := stbi.load(c_path, &w, &h, &channels, 4)
+	shared.asset_trace(filename, data != nil)
 	if data == nil {
 		return tex, false
 	}

@@ -96,6 +96,7 @@ audio-settings.json
 client-settings.json
 
 Krodin-*.zip
+dist/
 Krodin-Windows/
 Krodin-Linux/
 

@@ -48,6 +48,7 @@ audio_load_sample :: proc(audio: ^Audio_System, path: string) -> ^Audio_Sample {
 	defer delete(cpath)
 	result := ma.sound_init_from_file(&audio.engine, cpath, {.DECODE}, nil, nil, &sample.sound)
 	sample.ready = result == .SUCCESS
+	shared.asset_trace(path, sample.ready)
 	if !sample.ready { fmt.eprintf("[Audio] Cannot load %s (%v); this effect will be silent.\n", path, result) }
 	return sample
 }
@@ -68,6 +69,7 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 	manifest_path := shared.concat(shared.assets_path(), "config/sound-assets.txt")
 	defer delete(manifest_path)
 	manifest, err := os.read_entire_file_from_path(manifest_path, context.allocator)
+	shared.asset_trace(manifest_path, err == nil)
 	if err == nil {
 		contents := string(manifest)
 		for raw_line in strings.split_lines_iterator(&contents) {

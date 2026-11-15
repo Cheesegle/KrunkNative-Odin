@@ -31,6 +31,7 @@ assets_path :: proc() -> string {
 
 read_file :: proc(path: string) -> (data: []byte, ok: bool) {
 	buffer, err := os.read_entire_file_from_path(path, context.allocator)
+	asset_trace(path, err == nil)
 	if err != nil {
 		return nil, false
 	}

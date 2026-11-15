@@ -265,6 +265,7 @@ Client_Options :: struct {
 	show_help: bool,
 	show_fps:  bool,
 	offline:   bool,
+	asset_sweep: string,
 }
 
 print_client_help :: proc() {
@@ -278,6 +279,9 @@ print_client_help :: proc() {
 	fmt.println("  -c, --class <name>    Spawn as the given class (for example: hunter)")
 	fmt.println("      --fps             Show an FPS meter")
 	fmt.println("      --offline         Run the local authoritative simulation")
+	fmt.println("      --asset-sweep <manifest.txt>")
+	fmt.println("                        Load every map, model, icon and sound in a hidden")
+	fmt.println("                        window and list the asset files used (for packaging)")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -340,6 +344,14 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 
 			i += 1
 			options.map_name = normalize_map_name(os.args[i])
+		case "--asset-sweep":
+			if i + 1 >= len(os.args) {
+				fmt.eprintf("Missing manifest path after %s.\n\n", arg)
+				return options, false
+			}
+
+			i += 1
+			options.asset_sweep = os.args[i]
 		case "-c", "--class":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing class name after %s.\n\n", arg)
@@ -779,6 +791,7 @@ set_window_icon :: proc(client: ^Client) {
 
 	w, h, channels: i32
 	pixels := stbi.load(c_icon_path, &w, &h, &channels, 4)
+	shared.asset_trace(icon_path, pixels != nil)
 	if pixels == nil {
 		fmt.eprintln("Failed to load window icon: img/icon.png")
 		return
@@ -1265,6 +1278,9 @@ main :: proc() {
 	if !options_ok {
 		print_client_help()
 		return
+	}
+	if len(options.asset_sweep) > 0 {
+		os.exit(asset_sweep_run(options.asset_sweep))
 	}
 
 	if !bool(glfw.Init()) {
