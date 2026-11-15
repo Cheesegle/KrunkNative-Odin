@@ -130,7 +130,7 @@ when ODIN_TEST {
 		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals }
 		toggles := [?]Batch_Eq_Toggles{{"details-shown", false, false}, {"details-hidden", true, true}, {"cats-hidden", true, false}}
 		failures := 0
-		for map_name in ([]string{"burg", "bastion", "stockade"}) {
+		for map_name in ([]string{"burg", "bastion", "sandstorm_v3", "undergrowth"}) {
 			client := Client{scene = scene_init(), render_batching = true}
 			g_client = &client
 			map_inst, ok := shared.map_load_from_file(fmt.tprintf("assets/maps/%s.json", map_name))
