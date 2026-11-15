@@ -37,9 +37,22 @@ krunker_client_reset_prediction :: proc(client: ^Client) {
 	client.krunker.render_sample_ready = false
 }
 
+// One display frame of live input. after_scroll is the frame's command
+// without its Scroll press. Returns true when the frame built no command, so
+// a Scroll press must wait for the next frame instead of being dropped.
+krunker_client_predict_frame :: proc(client: ^Client, frame: ^shared.Input, after_scroll: shared.Input, now: f64 = -1) -> (scroll_pending: bool) {
+	rest := after_scroll
+	rest.seq, rest.delta, rest.x_dir, rest.y_dir, rest.scope = frame.seq, frame.delta, frame.x_dir, frame.y_dir, frame.scope
+	commands := krunker_client_predict_input(client, frame, now, &rest)
+	return commands == 0 && client.krunker.bootstrapped && client.krunker.spawned
+}
+
 // Store and predict exactly the commands that q will transmit. Rendering frames
 // never acquire sequence numbers or enter the authoritative replay history.
-krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now: f64 = -1) {
+// after_scroll, when set, replaces frame for every command after the first:
+// a Scroll press is held for one command, as Krunker releases key 20000
+// right after the input packet that read it. Returns the commands built.
+krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now: f64 = -1, after_scroll: ^shared.Input = nil) -> (commands: int) {
 	state := &client.krunker
 	shot_time := now < 0 ? glfw.GetTime() : now
 	if frame.swap != 0 { state.input_swap = frame.swap }
@@ -60,7 +73,7 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 	// Frame delta originates as f32; tolerate its sub-microsecond rounding at
 	// an exact command boundary without losing an entire input command.
 	for state.input_elapsed + 1e-7 >= KRUNKER_INPUT_SECONDS {
-		command := frame^
+		command := commands > 0 && after_scroll != nil ? after_scroll^ : frame^
 		command.seq = state.input_sequence
 		// Carry fractional milliseconds so 360 commands advance one second,
 		// rather than 1.08 seconds from rounding every command to 3 ms.
@@ -88,9 +101,11 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		state.render_current = {client.me.position, client.me.aim_val}
 		state.input_sequence += 1
 		state.input_elapsed = max(0, state.input_elapsed - KRUNKER_INPUT_SECONDS)
+		commands += 1
 	}
 	// Mouse look remains responsive on every display frame.
 	client.me.direction = look
+	return
 }
 
 krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, source: ^kproto.Krunker_World_Player, respawned: bool) {

@@ -44,6 +44,10 @@ Client :: struct {
 	audio_save_delay: f32,
 	bindings: menuui.Bindings,
 	binding_event: i32,
+	// Krunker's wheel "key" (bind code 20000): latched by a wheel notch while
+	// the cursor is locked and released once a gameplay command has read it.
+	scroll_press: bool,
+	scroll_press_time: f64, // GetTime of the last latched press (50 ms throttle).
 	hud_settings: menuui.HUD_Settings,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
@@ -1270,8 +1274,13 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client_scoreboard_update(client)
 	inspect_cancel := false
 
+	// A Scroll press is held for exactly one gameplay command, like Krunker
+	// releasing key 20000 right after the next input packet. Only the live
+	// path can build zero commands in a frame; it then keeps the press.
+	scroll_pending := false
 	if client.me != nil && client.me.active {
 		input := shared.Input{}
+		after_scroll: shared.Input
 		mouse_delta := shared.Vec2{0, 0}
 
 		mouse_delta.x = f32(x) - client.mouse_state.last_pos.x
@@ -1283,6 +1292,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 		input.x_dir = client.me.direction.x
 		input.y_dir = client.me.direction.y
+		after_scroll = input
 
 		if client.mouse_state.locked && !client.freecam_enabled {
 			if noclip_key && !client.last_noclip_key && !client.krunker.connected {
@@ -1293,11 +1303,12 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			input.x_dir -= rotation.y
 			input.y_dir -= rotation.x
 
-			held: [menuui.Binding_Action]bool
-			for action in menuui.Binding_Action { held[action] = client_action_down(client, action) }
-			bound := client_bound_input(held, &client.last_swap_key)
+			bound, sustained := client_gameplay_bound_input(client)
 			input.jump, input.crouch, input.reload, input.shoot, input.scope = bound.jump, bound.crouch, bound.reload, bound.shoot, scope_input
 			input.swap, input.move_dir = bound.swap, bound.move_dir
+			after_scroll = input
+			after_scroll.jump, after_scroll.crouch, after_scroll.reload, after_scroll.shoot = sustained.jump, sustained.crouch, sustained.reload, sustained.shoot
+			after_scroll.move_dir = sustained.move_dir
 		}
 		inspect_cancel = input.shoot || input.scope || input.reload || input.swap != 0
 
@@ -1308,7 +1319,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		input.seq = client.net_input_seq
 		client.net_input_seq += 1
 		if client.krunker.connected {
-			krunker_client_predict_input(client, &input)
+			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
@@ -1323,6 +1334,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		// Freecam is only valid while the player is spawned.
 		client.freecam_enabled = false
 	}
+	client_scroll_frame_end(client, scroll_pending)
 
 	client.mouse_state.last_pos.x = f32(x)
 	client.mouse_state.last_pos.y = f32(y)
@@ -1523,7 +1535,7 @@ main :: proc() {
 	set_window_icon(client)
 
 	glfw.SetFramebufferSizeCallback(client.window, resize_viewport)
-	glfw.SetScrollCallback(client.window, menu_scroll)
+	glfw.SetScrollCallback(client.window, client_scroll)
 	glfw.SetCharCallback(client.window, menu_character)
 	glfw.SetKeyCallback(client.window, client_binding_key)
 	glfw.SetMouseButtonCallback(client.window, client_binding_mouse)
