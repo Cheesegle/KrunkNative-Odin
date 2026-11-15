@@ -12,7 +12,9 @@ scene_add_mesh :: proc(scene: ^Scene, mesh: ^Mesh) {
 }
 
 scene_remove_mesh :: proc(scene: ^Scene, mesh: ^Mesh) {
-	for i := 0; i < len(scene.meshes); i += 1 {
+	// Effects (tracers, trails, bullet holes) are added after every map mesh,
+	// so search from the end.
+	for i := len(scene.meshes) - 1; i >= 0; i -= 1 {
 		if scene.meshes[i] == mesh {
 			ordered_remove(&scene.meshes, i)
 			scene.mesh_count = i32(len(scene.meshes))
