@@ -308,6 +308,7 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 				did_wall_jump = player.did_wall_jump,
 				can_slide = player.can_slide,
 				on_wall = player.on_wall,
+				wall_jump_count = u8(clamp(player.wall_jump_count, 0, 255)),
 				crouch_val = player.crouch_val,
 				aim_val = player.aim_val,
 				slide_timer = player.slide_timer,

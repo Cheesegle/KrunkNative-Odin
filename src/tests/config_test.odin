@@ -107,7 +107,7 @@ team2_name = "Bravo custom"
 	}
 	if embedded.classes[13].speed != 0.9 || embedded.classes[13].slide_time != 1.1 ||
 		embedded.classes[3].slide_accel != 0.98 || embedded.classes[9].throw_charge != 600 ||
-		embedded.classes[9].wall_jump_mlt != 100 || !embedded.classes[10].hidden ||
+		embedded.classes[9].wall_jump_max != 100 || !embedded.classes[10].hidden ||
 		embedded.classes[6].colors[1] != 4605741 || len(embedded.classes[15].colors) != 7 ||
 		embedded.classes[15].colors[6] != 10066329 || len(embedded.classes[4].texts) != 3 ||
 		embedded.classes[4].texts[1] != "Don't ever call me Shotgunner" {
@@ -769,6 +769,7 @@ test_objective_combat_state :: proc() -> bool {
 		score = 1250,
 		kills = 11,
 		deaths = 4,
+		wall_jump_count = 2,
 	}
 	player_packet_size := shared.packet_serialize_state(buf[:], &player_state)
 	header_payload_size, _ := endian.get_u16(buf[5:7], .Little)
@@ -779,7 +780,7 @@ test_objective_combat_state :: proc() -> bool {
 	wire_projectile_seq, _ := endian.get_u32(buf[96:100], .Little)
 	wire_score, _ := endian.get_u32(buf[104:108], .Little)
 	wire_deaths, _ := endian.get_u32(buf[112:116], .Little)
-	if player_packet_size != 116 || wire_score != player_state.score || wire_deaths != player_state.deaths || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
+	if player_packet_size != 117 || buf[116] != player_state.wall_jump_count || wire_score != player_state.score || wire_deaths != player_state.deaths || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
 		fmt.eprintln("Player-state fixed wire layout test failed")
 		return false
 	}

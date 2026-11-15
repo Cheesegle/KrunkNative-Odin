@@ -4,8 +4,8 @@ import "core:encoding/endian"
 
 PACKET_MAGIC :: 0x4B52554E // 'KRUN'
 PACKET_HEADER_SIZE :: 7
-PROTOCOL_VERSION :: 9
-PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 109
+PROTOCOL_VERSION :: 10 // 10: wall-jump count appended to player state
+PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 110
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
 MAX_PLAYERS_PER_MATCH :: 32
 // The server broadcasts one snapshot per N simulation ticks.
@@ -144,6 +144,7 @@ Packet_Player_State :: struct {
 	did_wall_jump: bool,
 	can_slide: bool,
 	on_wall: u8,
+	wall_jump_count: u8, // wall jumps since landing, so prediction honours the class limit
 	crouch_val: f32,
 	aim_val: f32,
 	slide_timer: f32,
@@ -377,6 +378,8 @@ packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int 
 	endian.put_u32(buf[offset + 4:offset + 8], .Little, state.kills)
 	endian.put_u32(buf[offset + 8:offset + 12], .Little, state.deaths)
 	offset += 12
+	buf[offset] = state.wall_jump_count
+	offset += 1
 
 	return offset
 }
@@ -463,6 +466,7 @@ packet_deserialize_state :: proc(buf: []byte) -> (state: Packet_Player_State, ok
 	state.score, _ = endian.get_u32(buf[offset:offset + 4], .Little)
 	state.kills, _ = endian.get_u32(buf[offset + 4:offset + 8], .Little)
 	state.deaths, _ = endian.get_u32(buf[offset + 8:offset + 12], .Little)
+	state.wall_jump_count = buf[offset + 12]
 
 	return state, true
 }

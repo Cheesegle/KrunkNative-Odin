@@ -183,3 +183,82 @@ test_movement_animation :: proc() -> bool {
 	fmt.println("Movement animation prediction/landing/respawn tests OK")
 	return true
 }
+
+// Krunker caps wall jumps per airtime with the class's wallJM ("Walljumps
+// Max"): Run N Gun 2, Agent/Trooper 3, Runner/Survivor 100. The count resets
+// on landing.
+test_wall_jump_limit :: proc() -> bool {
+	map_inst := shared.Map{death_y = -100, config = shared.Map_Config{speed = {1, 1, 1}, air_accel = 1}}
+	wall := shared.Object{active = true, collision_type = .BOX, scale = {20, 100, 20}, wall_jumpable = true}
+	append(&map_inst.objects, &wall)
+	defer delete(map_inst.objects)
+	game := shared.Game{}
+	player := physics_game_init(&game, &map_inst, true)
+	defer shared.game_destroy(&game)
+	game.config.wall_jump = 1
+
+	press := shared.Input{delta = PHYSICS_DT, move_dir = -1, jump = true}
+	release := press
+	release.jump = false
+	// Back beside the wall in the air, keeping this airtime's count.
+	reattach :: proc(player: ^shared.Player) {
+		player.on_ground = false
+		player.position = {10 + player.scale, 20, 0}
+		player.last_position = player.position
+		player.velocity = {}
+	}
+	attempt :: proc(player: ^shared.Player, press, release: ^shared.Input) -> bool {
+		reattach(player)
+		shared.player_proc_input(player, release, true, false)
+		reattach(player)
+		shared.player_proc_input(player, press, true, false)
+		return player.velocity.y > 0.05
+	}
+
+	for class, index in shared.CLASSES_LIST {
+		if !class.wall_jump { continue }
+		limit := int(class.wall_jump_max)
+		wall_jump_place(player, 0, i32(index))
+		if player.wall_jump_max != i32(limit) {
+			fmt.printf("Wall-jump limit wiring failed for %s: %d != %d\n", class.name, player.wall_jump_max, limit)
+			return false
+		}
+		tries := min(limit, 12) // Runner/Survivor allow 100; a dozen proves no early cap.
+		for n in 0 ..< tries {
+			if !attempt(player, &press, &release) {
+				fmt.printf("%s: wall jump %d of %d was refused\n", class.name, n + 1, limit)
+				return false
+			}
+		}
+		if limit <= 12 && attempt(player, &press, &release) {
+			fmt.printf("%s: wall jump %d exceeded the limit of %d\n", class.name, limit + 1, limit)
+			return false
+		}
+		// Landing resets the count (Krunker resetStep).
+		player.position = {0, 100.5, 0}
+		player.last_position = player.position
+		player.velocity = {}
+		for _ in 0 ..< 8 { shared.player_proc_input(player, &release, true, false) }
+		if !player.on_ground || player.wall_jump_count != 0 {
+			fmt.printf("%s: landing did not reset the wall-jump count (grounded=%v count=%d)\n", class.name, player.on_ground, player.wall_jump_count)
+			return false
+		}
+		if !attempt(player, &press, &release) {
+			fmt.printf("%s: wall jump after landing was refused\n", class.name)
+			return false
+		}
+	}
+
+	// A class with a zero limit can never wall jump, even with the flag set.
+	configured := shared.CLASSES_LIST[0]
+	configured.wall_jump, configured.wall_jump_max = true, 0
+	game.classes = []shared.Class_Config{configured}
+	wall_jump_place(player, 0, 0)
+	if attempt(player, &press, &release) {
+		fmt.eprintln("A zero wall-jump limit still allowed a wall jump")
+		return false
+	}
+	game.classes = shared.CLASSES_LIST[:]
+	fmt.println("Wall-jump limits (Run N Gun 2, Agent/Trooper 3, Runner/Survivor 100) and landing reset OK")
+	return true
+}
