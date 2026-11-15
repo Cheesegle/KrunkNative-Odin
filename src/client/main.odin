@@ -175,11 +175,13 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 }
 
 // Menus and loading screens wait for about one display refresh per frame
-// instead of spinning a core. Gameplay (cursor locked on a ready map) stays
-// uncapped. client_tick still runs every frame, so sockets keep being polled.
+// instead of spinning a core. Whenever the cursor is captured for play, frames
+// stay uncapped. Readiness flags are deliberately not checked: Krunker's
+// "ready" packet clears krunker_world.ready during waiting and warmup phases
+// while the player still moves, and capping then causes visible hitches.
+// client_tick still runs every frame, so sockets keep being polled.
 client_idle_frame_interval :: proc(client: ^Client) -> f64 {
-	ready := client.game.ready || client.krunker.connected && client.krunker_world.ready
-	if client.mouse_state.locked && ready { return 0 }
+	if client.mouse_state.locked { return 0 }
 	if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
 	return client.monitor_cache.idle_frame_interval
 }

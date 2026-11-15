@@ -141,5 +141,11 @@ when ODIN_TEST {
 		client.game.ready = false
 		client.krunker.connected, client.krunker_world.ready = true, true
 		testing.expect(t, client_idle_frame_interval(&client) == 0, "live Krunker gameplay must stay uncapped")
+		// Krunker's "ready" packet clears this during waiting/warmup while the
+		// player still moves; capping then caused hitches.
+		client.krunker_world.ready = false
+		testing.expect(t, client_idle_frame_interval(&client) == 0, "live play during warmup must stay uncapped")
+		client.mouse_state.locked = false
+		testing.expect(t, client_idle_frame_interval(&client) > 0, "releasing the cursor must cap again")
 	}
 }
