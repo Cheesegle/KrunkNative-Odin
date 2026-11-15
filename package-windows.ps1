@@ -10,7 +10,7 @@
 param([switch]$SkipBuild)
 
 $ErrorActionPreference = "Stop"
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 
 $root = (Resolve-Path $PSScriptRoot).Path
 $version = (Get-Content -LiteralPath (Join-Path $root "VERSION") -Raw).Trim()
@@ -108,7 +108,16 @@ try {
 
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
-    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+    # Name entries with "/" ourselves; Windows PowerShell's CreateFromDirectory
+    # writes "\", which other unzip tools turn into literal file names.
+    $writer = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File) {
+            $entry = "$name/" + $file.FullName.Substring($stage.Length + 1).Replace("\", "/")
+            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($writer, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+        }
+    }
+    finally { $writer.Dispose() }
 
     Write-Host "Verifying the zip in a clean folder..."
     $verify = Join-Path $work "verify"
