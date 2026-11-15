@@ -1,124 +1,132 @@
-param(
-    [string]$AssetArchive = (Join-Path $PSScriptRoot "Krodin-Windows.zip"),
-    [string]$OutputArchive = "",
-    [switch]$SkipBuild
-)
+# Builds the tester zip: dist\Krodin-Testing-<VERSION>-<sha>.zip
+#
+#   .\package-windows.ps1              build release binaries, then package
+#   .\package-windows.ps1 -SkipBuild   package the binaries already in bin\
+#
+# The asset list is not maintained by hand. The client's --asset-sweep mode
+# loads every map, class, weapon, icon and sound through the normal loaders and
+# records each file it opened; only those files are packaged. The zip is then
+# unpacked into a temp folder and swept again to prove nothing went missing.
+param([switch]$SkipBuild)
 
 $ErrorActionPreference = "Stop"
-
-$versionFile = Join-Path $PSScriptRoot "VERSION"
-if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
-    throw "Missing version file: $versionFile"
-}
-$version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
-if ([string]::IsNullOrEmpty($version)) {
-    throw "Version file is empty: $versionFile"
-}
-if ([string]::IsNullOrEmpty($OutputArchive)) {
-    $OutputArchive = Join-Path $PSScriptRoot ("Krodin-Windows-" + $version + ".zip")
-}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = (Resolve-Path $PSScriptRoot).Path
-# Existing asset seeds predate the Krodin name.
-if (-not $PSBoundParameters.ContainsKey("AssetArchive") -and -not (Test-Path -LiteralPath $AssetArchive -PathType Leaf)) {
-    $legacyArchive = Join-Path $root "KrunkNative-Windows.zip"
-    if (Test-Path -LiteralPath $legacyArchive -PathType Leaf) { $AssetArchive = $legacyArchive }
-}
-$assetArchive = (Resolve-Path $AssetArchive).Path
-$stage = Join-Path ([IO.Path]::GetTempPath()) ("Krodin-package-" + [guid]::NewGuid().ToString("N"))
+$version = (Get-Content -LiteralPath (Join-Path $root "VERSION") -Raw).Trim()
+$sha = (& git -C $root rev-parse --short HEAD).Trim()
+if (-not $version -or -not $sha) { throw "Could not read VERSION or the git commit." }
+$name = "Krodin-Testing-$version-$sha"
+$dist = Join-Path $root "dist"
+$zip = Join-Path $dist "$name.zip"
+$work = Join-Path ([IO.Path]::GetTempPath()) ("krodin-package-" + [guid]::NewGuid().ToString("N"))
+$stage = Join-Path $work $name
 
+$binaries = @("krodin_client.exe", "krodin_server.exe", "krodin_browser.exe",
+    "WebView2Loader.dll", "WebView2-LICENSE.txt", "WebView2-NOTICE.txt")
+$extras = @("VERSION", "assets/css/fonts/Rajdhani-OFL.txt")
+# Only game data may come from the sweep manifest; anything else is a bug.
+$allowedRoots = @("assets/", "krunker-configs/")
+# User-specific, secret or test files that must never ship.
+$forbidden = @(".env", "client-settings.json", "audio-settings.json", "mod.zip", "*_tests.exe", "*_dev.exe", "*.ppm", "*.pdb")
+
+$readme = @"
+Krodin $version ($sha) - tester build
+
+1. Unzip this folder anywhere and keep the files together.
+2. Run krodin_client.exe.
+3. To join live lobbies, press Login first and sign in. If Join asks for
+   Microsoft Edge WebView2, install the Evergreen Runtime from
+   https://developer.microsoft.com/microsoft-edge/webview2/ and try again.
+4. If something goes wrong, send us logs\krunker-network.log from this
+   folder. It is created next to krodin_client.exe when you join a lobby.
+
+krodin_server.exe is an optional local server; you do not need it to play.
+"@
+
+function Read-List([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    return @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() })
+}
+
+# Runs the client's asset sweep with $Directory as the working directory.
+function Invoke-AssetSweep([string]$Directory, [string]$Client, [string]$Manifest) {
+    $log = "$Manifest.log"
+    $process = Start-Process -FilePath $Client -ArgumentList @("--asset-sweep", "`"$Manifest`"") `
+        -WorkingDirectory $Directory -NoNewWindow -Wait -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    Get-Content -LiteralPath $log, "$log.err" | Where-Object { $_.StartsWith("[Sweep]") } | ForEach-Object { Write-Host "  $_" }
+    # 0 = complete, 2 = some required files are missing (the caller decides).
+    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 2) {
+        throw "The asset sweep in $Directory failed with exit code $($process.ExitCode)."
+    }
+    $base = $Manifest -replace "\.txt$", ""
+    return @{
+        Used = Read-List $Manifest
+        Missing = Read-List "$base-missing.txt"
+        Optional = Read-List "$base-optional-missing.txt"
+    }
+}
+
+function Copy-ToStage([string]$Relative) {
+    $destination = Join-Path $stage $Relative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root $Relative) -Destination $destination
+}
+
+Push-Location $root
 try {
     if (-not $SkipBuild) {
-        & cmd.exe /c (Join-Path $root "build.bat") all
-        if ($LASTEXITCODE -ne 0) {
-            throw "The binary build failed with exit code $LASTEXITCODE."
+        Write-Host "Building release binaries..."
+        & cmd.exe /c "build.bat all aggressive"
+        if ($LASTEXITCODE -ne 0) { throw "build.bat all failed with exit code $LASTEXITCODE." }
+    }
+    foreach ($file in $binaries) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root "bin\$file"))) { throw "Missing bin\$file; build first." }
+    }
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+    Write-Host "Sweeping assets in the repository..."
+    $repo = Invoke-AssetSweep $root (Join-Path $root "bin\krodin_client.exe") (Join-Path $work "repo-assets.txt")
+    foreach ($path in $repo.Missing) { Write-Warning "Missing in the repository: $path" }
+
+    foreach ($file in $binaries) { Copy-Item -LiteralPath (Join-Path $root "bin\$file") -Destination $stage }
+    foreach ($path in @($repo.Used) + $extras) {
+        if ($path -ne "VERSION" -and -not ($allowedRoots | Where-Object { $path.StartsWith($_) })) {
+            throw "Refusing to package unexpected path from the sweep: $path"
+        }
+        Copy-ToStage $path
+    }
+    Set-Content -LiteralPath (Join-Path $stage "README-TESTERS.txt") -Value $readme -Encoding UTF8
+
+    foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File -Force) {
+        $relative = $file.FullName.Substring($stage.Length + 1)
+        if ($relative -like "logs\*" -or ($forbidden | Where-Object { $file.Name -like $_ })) {
+            throw "Refusing to package user-specific file: $relative"
         }
     }
 
-    $clientBinary = Join-Path $root "bin\krodin_client.exe"
-    $serverBinary = Join-Path $root "bin\krodin_server.exe"
-    $browserBinary = Join-Path $root "bin\krodin_browser.exe"
-    $browserLoader = Join-Path $root "bin\WebView2Loader.dll"
-    $browserLicense = Join-Path $root "bin\WebView2-LICENSE.txt"
-    $browserNotice = Join-Path $root "bin\WebView2-NOTICE.txt"
-    foreach ($required in @($clientBinary, $serverBinary, $browserBinary, $browserLoader, $browserLicense, $browserNotice)) {
-        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-            throw "Missing binary: $required"
-        }
-    }
+    New-Item -ItemType Directory -Path $dist -Force | Out-Null
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
+    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
 
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    Expand-Archive -LiteralPath $assetArchive -DestinationPath $stage
-    foreach ($name in @("krunknative_client.exe", "krunknative_server.exe")) {
-        $legacyBinary = Join-Path $stage $name
-        if (Test-Path -LiteralPath $legacyBinary -PathType Leaf) { Remove-Item -LiteralPath $legacyBinary }
+    Write-Host "Verifying the zip in a clean folder..."
+    $verify = Join-Path $work "verify"
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip, $verify)
+    $unpacked = Join-Path $verify $name
+    $package = Invoke-AssetSweep $unpacked (Join-Path $unpacked "krodin_client.exe") (Join-Path $work "package-assets.txt")
+    $lost = @(@($package.Missing) + @($package.Optional) | Where-Object { $repo.Used -contains $_ })
+    if ($lost.Count -gt 0) {
+        throw "The zip is missing assets the repository has:`n  " + ($lost -join "`n  ")
     }
+    foreach ($path in $package.Missing) { Write-Warning "Missing in the zip and the repository: $path" }
 
-    $copies = @{
-        $clientBinary = (Join-Path $stage "krodin_client.exe")
-        $serverBinary = (Join-Path $stage "krodin_server.exe")
-        $browserBinary = (Join-Path $stage "krodin_browser.exe")
-        $browserLoader = (Join-Path $stage "WebView2Loader.dll")
-        $browserLicense = (Join-Path $stage "WebView2-LICENSE.txt")
-        $browserNotice = (Join-Path $stage "WebView2-NOTICE.txt")
-        (Join-Path $root "assets\config\game.toml") = (Join-Path $stage "assets\config\game.toml")
-        (Join-Path $root "assets\config\sound-assets.txt") = (Join-Path $stage "assets\config\sound-assets.txt")
-        (Join-Path $root "assets\shaders\basic.frag") = (Join-Path $stage "assets\shaders\basic.frag")
-        (Join-Path $root "assets\textures\objective_4.png") = (Join-Path $stage "assets\textures\objective_4.png")
-        (Join-Path $root "assets\textures\objective_5.png") = (Join-Path $stage "assets\textures\objective_5.png")
-    }
-
-    # Refresh the full map catalog instead of retaining old maps in the seed.
-    foreach ($map in Get-ChildItem -LiteralPath (Join-Path $root "assets\maps") -Filter "*.json" -File) {
-        $copies[$map.FullName] = Join-Path $stage (Join-Path "assets\maps" $map.Name)
-    }
-    $obsoleteSandstorm = Join-Path $stage "assets\maps\sandstorm.json"
-    if (Test-Path -LiteralPath $obsoleteSandstorm -PathType Leaf) { Remove-Item -LiteralPath $obsoleteSandstorm }
-
-    # Replace every supported default weapon from the installed modern pack;
-    # the archive seed may contain an older generation of these same filenames.
-    $weaponAssets = Get-Content -LiteralPath (Join-Path $root "assets\config\weapon-assets.txt")
-    foreach ($asset in $weaponAssets) {
-        $asset = $asset.Trim()
-        if (-not $asset -or $asset.StartsWith("#")) { continue }
-        $relative = Join-Path "assets" $asset
-        $copies[(Join-Path $root $relative)] = Join-Path $stage $relative
-    }
-
-    # Hosted map art is absent from mod.zip and older seed archives.
-    foreach ($asset in Get-Content -LiteralPath (Join-Path $root "assets\config\map-assets.txt")) {
-        $asset = $asset.Trim()
-        if (-not $asset -or $asset.StartsWith("#")) { continue }
-        $relative = Join-Path "assets" $asset
-        $copies[(Join-Path $root $relative)] = Join-Path $stage $relative
-    }
-
-    foreach ($asset in Get-Content -LiteralPath (Join-Path $root "assets\config\sound-assets.txt")) {
-        $asset = $asset.Trim()
-        if (-not $asset -or $asset.StartsWith("#")) { continue }
-        $relative = Join-Path "assets" $asset
-        $copies[(Join-Path $root $relative)] = Join-Path $stage $relative
-    }
-
-    foreach ($source in $copies.Keys) {
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw "Missing package input: $source"
-        }
-
-        $destination = $copies[$source]
-        $parent = Split-Path -Parent $destination
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-        Copy-Item -LiteralPath $source -Destination $destination -Force
-    }
-
-    if (Test-Path -LiteralPath $OutputArchive) {
-        Remove-Item -LiteralPath $OutputArchive -Force
-    }
-    Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $OutputArchive -CompressionLevel Optimal
-    Write-Host "Created $OutputArchive"
+    $archive = Get-Item -LiteralPath $zip
+    $reader = [IO.Compression.ZipFile]::OpenRead($zip)
+    try { $count = @($reader.Entries | Where-Object { $_.Name }).Count } finally { $reader.Dispose() }
+    Write-Host ("Created {0} ({1:N1} MB, {2} files, {3} assets)" -f $archive.FullName, ($archive.Length / 1MB), $count, $repo.Used.Count)
 }
 finally {
-    if (Test-Path -LiteralPath $stage) {
-        Remove-Item -LiteralPath $stage -Recurse -Force
-    }
+    Pop-Location
+    if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 }

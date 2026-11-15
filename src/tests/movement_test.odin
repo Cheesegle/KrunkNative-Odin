@@ -294,6 +294,9 @@ main :: proc() {
 		fmt.eprintln("Settings search tests failed")
 		os.exit(1)
 	}
+	if !test_asset_trace() {
+		os.exit(1)
+	}
 	if !test_join_link_parser() {
 		os.exit(1)
 	}

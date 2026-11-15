@@ -503,7 +503,9 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		material.unlit = true
 		material.face_mask = 0x0f
 		path := shared.concat(shared.assets_path(), "textures/objective_4.png")
+		shared.asset_trace_optional_begin()
 		material.texture = load_texture(path)
+		shared.asset_trace_optional_end()
 		delete(path)
 		if material.texture == 0 {
 			// Use the borderless gradient if the bordered texture is unavailable.
@@ -559,8 +561,11 @@ model_geometry_variant :: proc(prefab_id, texture_variant: int) -> int {
 // when a variant is unavailable; keep that behavior instead of binding the
 // white blank texture and making an entire map surface disappear.
 load_texture_with_fallback :: proc(primary, fallback: string) -> u32 {
+	has_fallback := len(fallback) > 0 && primary != fallback
+	if has_fallback { shared.asset_trace_optional_begin() }
 	texture_id := load_texture(primary)
-	if texture_id == 0 && len(fallback) > 0 && primary != fallback {
+	if has_fallback { shared.asset_trace_optional_end() }
+	if texture_id == 0 && has_fallback {
 		fmt.eprintf("[assets] missing texture %s; falling back to %s\n", primary, fallback)
 		texture_id = load_texture(fallback)
 	}

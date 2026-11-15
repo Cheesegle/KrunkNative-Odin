@@ -583,6 +583,7 @@ load_texture :: proc(path: string) -> u32 {
 
 	w, h, channels: i32
 	data := stbi.load(c_path, &w, &h, &channels, 4)
+	shared.asset_trace(path, data != nil)
 
 	if data == nil {
 		return 0

@@ -145,6 +145,7 @@ unload_default_maps :: proc() {
 // Loads and parses a Krunker map JSON into a Map. Returns nil on failure.
 map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 	data, err := os.read_entire_file_from_path(filename, context.allocator)
+	asset_trace(filename, err == nil)
 	if err != nil {
 		fmt.eprintf("Failed to read map file: %s\n", filename)
 		return nil, false
@@ -201,7 +202,10 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 	// object. Older maps omit most fields and naturally use browser defaults.
 	map_inst.lighting, _ = lighting_parse_json(json_val)
 	if override_path := lighting_map_override_path(filename); len(override_path) > 0 {
-		if override, override_ok := lighting_load_from_file(override_path); override_ok {
+		asset_trace_optional_begin()
+		override, override_ok := lighting_load_from_file(override_path)
+		asset_trace_optional_end()
+		if override_ok {
 			map_inst.lighting = override
 		}
 	}

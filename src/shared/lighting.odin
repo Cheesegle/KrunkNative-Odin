@@ -138,6 +138,7 @@ lighting_parse_json :: proc(value: json.Value) -> (config: Lighting_Config, ok: 
 
 lighting_load_from_file :: proc(filename: string) -> (config: Lighting_Config, ok: bool) {
 	data, err := os.read_entire_file_from_path(filename, context.allocator)
+	asset_trace(filename, err == nil)
 	if err != nil {
 		fmt.eprintf("Failed to read lighting config %s: %v\n", filename, err)
 		return DEFAULT_LIGHTING_CONFIG, false

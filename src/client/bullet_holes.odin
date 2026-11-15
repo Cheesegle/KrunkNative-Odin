@@ -53,6 +53,7 @@ bullet_hole_texture :: proc() -> (texture: u32, use_source: bool) {
 	defer delete(cpath)
 	w, h, channels: i32
 	data := stbi.load(cpath, &w, &h, &channels, 4)
+	shared.asset_trace(path, data != nil)
 	if data != nil {
 		defer stbi.image_free(data)
 		pixels := data[:int(w) * int(h) * 4]

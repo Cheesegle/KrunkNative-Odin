@@ -92,7 +92,9 @@ config_load_gameplay :: proc(config_path := CONFIG_GAME_PATH, class_path := CONF
 
 	// Read live edits when the export is present; otherwise the embedded copy
 	// supplies the same modern defaults. Explicit local overrides apply last.
+	asset_trace_optional_begin()
 	config_load_class_json_file(config, class_path)
+	asset_trace_optional_end()
 	if len(config_path) > 0 {
 		config_load_toml_file(config, config_path)
 	}
@@ -127,6 +129,7 @@ config_parse_class_json :: proc(source: string, allocator: mem.Allocator) -> (cl
 config_load_class_json_file :: proc(config: ^Gameplay_Config, path: string) -> bool {
 	if config == nil || len(path) == 0 { return false }
 	data, err := os.read_entire_file_from_path(path, context.temp_allocator)
+	asset_trace(path, err == nil)
 	if err != nil { return false }
 	allocator := mem.dynamic_arena_allocator(&config.arena)
 	classes, ok := config_parse_class_json(string(data), allocator)
@@ -146,6 +149,7 @@ config_destroy_gameplay :: proc(config: ^Gameplay_Config) {
 
 config_load_toml_file :: proc(config: ^Gameplay_Config, path: string) -> bool {
 	data, err := os.read_entire_file_from_path(path, context.temp_allocator)
+	asset_trace(path, err == nil)
 	if err != nil {
 		fmt.eprintf("config: could not read %s\n", path)
 		return false
