@@ -218,10 +218,13 @@ client_idle_frame_deadline :: proc(previous, frame_start, interval: f64) -> f64 
 	return deadline
 }
 
-// Coarse waits keep window messages and input flowing; Windows wakes up to
-// about 1 ms late even at 1 ms timer resolution, and GLFW truncates the
-// timeout to whole milliseconds, so the last stretch yields on the clock.
-IDLE_FRAME_SPIN_MARGIN :: 0.0015
+// Event waits keep window messages and input flowing until the last stretch,
+// which yields on the clock. With 1 ms timer resolution the waits land within
+// a fraction of a millisecond, and the deadline schedule absorbs the rest, so
+// a short margin keeps frame times even without burning a core: at 240 FPS a
+// 1.5 ms margin cost about a third of a core more than 0.5 ms for no gain in
+// rate (measured on a 240 Hz Windows laptop).
+IDLE_FRAME_SPIN_MARGIN :: 0.0005
 
 client_pace_idle_frame :: proc(client: ^Client, frame_start, interval: f64) {
 	if interval <= 0 { client.idle_frame_deadline = 0; return }
