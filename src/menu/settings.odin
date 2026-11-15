@@ -34,6 +34,7 @@ settings_window :: proc(state: ^State, view: View) {
 				}
 				spacer()
 				if state.settings_tab == .GAMEPLAY { settings_crosshair_preview(state) }
+				if state.settings_tab == .HUD && !settings_searching(state) { settings_damage_preview(state) }
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("KRODIN", 16, s, SETTINGS_MUTED) }
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
@@ -120,6 +121,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Players")
 		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
 		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+		settings_damage(state)
 	}
 }
 

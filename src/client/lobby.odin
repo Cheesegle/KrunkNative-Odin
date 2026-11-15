@@ -31,6 +31,7 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	client.access.retried = false
 	audio_stop_all(client.audio)
 	if client.audio != nil { client.audio.hit_revision = 0 }
+	client.damage_feedback = {}
 	net_client_disconnect(&client.net)
 	krunker_ws_disconnect(&client.krunker)
 	kproto.krunker_world_reset(&client.krunker_world)
@@ -261,7 +262,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
-		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings,
+		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, damage = client.damage_settings,
 		audio_volumes = {client.audio_settings.master, client.audio_settings.effects, client.audio_settings.footsteps, client.audio_settings.ui},
 		resolution = fmt.tprintf("%d x %d", window_resolution.width, window_resolution.height),
 		match_status = client.game.move_lock ? "Waiting for match to start" : "Match in progress",
@@ -329,6 +330,7 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
 	client.trail_settings = values.trails
 	client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
+	client.damage_settings = menuui.damage_settings_validate(values.damage)
 	client.aim_toggled = false
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
@@ -349,7 +351,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_SEARCH, .NIGHT_STRENGTH:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .DAMAGE_VALUE, .DAMAGE_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)

@@ -106,7 +106,9 @@ settings_crosshair_color :: proc(state: ^State, label: string, field: i32) {
 	if !settings_search_show(state, label) { return }
 	s := state.scale
 	id := clay.ID("CrosshairColor", u32(field))
-	value := field == 1 ? state.settings_draft.crosshair.color : state.settings_draft.crosshair.shadow_color
+	target := settings_color_value(&state.settings_draft, field)
+	if target == nil { return }
+	value := target^
 	editing := state.color_edit == field
 	if clay.UI(clay.ID("CrosshairColorRow", u32(field)))(settings_row(state)) {
 		settings_label(label, s)
@@ -135,19 +137,29 @@ crosshair_parse_color :: proc(text: string) -> (value: u32, ok: bool) {
 	return value, true
 }
 
+// The draft color an edit field names: 1 crosshair, 2 crosshair shadow, then
+// DAMAGE_COLOR_FIELDS. Unknown fields are nil.
+settings_color_value :: proc(values: ^Settings_Values, field: i32) -> ^u32 {
+	switch field {
+	case 1: return &values.crosshair.color
+	case 2: return &values.crosshair.shadow_color
+	}
+	for color in Damage_Color { if DAMAGE_COLOR_FIELDS[color] == field { return &values.damage.colors[color] } }
+	return nil
+}
+
 settings_color_begin :: proc(state: ^State, field: i32) {
-	if field != 1 && field != 2 { return }
+	target := settings_color_value(&state.settings_draft, field)
+	if target == nil { return }
 	state.color_edit, state.color_invalid, state.color_replace = field, false, true
-	value := field == 1 ? state.settings_draft.crosshair.color : state.settings_draft.crosshair.shadow_color
-	state.color_length = copy(state.color_buffer[:], transmute([]u8)fmt.tprintf("#%06X", value))
+	state.color_length = copy(state.color_buffer[:], transmute([]u8)fmt.tprintf("#%06X", target^))
 	state.pressed = 0
 }
 
 settings_color_commit :: proc(state: ^State) -> bool {
 	value, ok := crosshair_parse_color(string(state.color_buffer[:state.color_length]))
 	if !ok { state.color_invalid = true; return false }
-	if state.color_edit == 1 { state.settings_draft.crosshair.color = value }
-	if state.color_edit == 2 { state.settings_draft.crosshair.shadow_color = value }
+	if target := settings_color_value(&state.settings_draft, state.color_edit); target != nil { target^ = value }
 	state.color_edit, state.color_invalid = 0, false
 	return true
 }

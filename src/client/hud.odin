@@ -146,6 +146,13 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 				crosshair_render(ui, preview.settings, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, menuui.crosshair_opacity(preview.settings, 1))
 				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
 			}
+			if command.id == clay.ID("DamagePreview").id && command.renderData.custom.customData != nil {
+				preview := cast(^menuui.Damage_Preview)command.renderData.custom.customData
+				gl.Enable(gl.SCISSOR_TEST)
+				menu_scissor(ui, box)
+				damage_preview_render(ui, preview.settings, box.x, box.y, box.width, box.height, glfw.GetTime())
+				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
+			}
 		case .None, .OverlayColorStart, .OverlayColorEnd:
 		}
 	}

@@ -76,6 +76,7 @@ krunker_world_init_match :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.interact_manual_visible = false
 	state.lives = 0
 	state.hit_revision, state.last_hit_at = 0, 0
+	state.damage_revision = 0
 	state.winner_team, state.end_result = -1, -1
 	// A new match starts with an empty board until the next UPDATE_LEADERS.
 	state.has_leaders = false

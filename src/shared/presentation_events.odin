@@ -9,6 +9,9 @@ Presentation_Event :: struct {
 	position: Vec3,
 	value: f32,
 	headshot: bool,
+	// DAMAGE only: where the attacker stood, for hit indicators.
+	source: Vec3,
+	has_source: bool,
 }
 
 game_emit_presentation :: proc(game: ^Game, event: Presentation_Event) {
@@ -17,7 +20,7 @@ game_emit_presentation :: proc(game: ^Game, event: Presentation_Event) {
 	append(&game.presentation_events, event)
 }
 
-player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind) {
+player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind, source: ^Player = nil) {
 	if player == nil || player.game == nil || !player.game.presentation_enabled { return }
 	weapon_id: i32 = -1
 	if player.loadout_index >= 0 && player.loadout_index < player.loadout_size { weapon_id = player.loadout[player.loadout_index] }
@@ -25,5 +28,6 @@ player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind) {
 		kind = kind, uid = player.uid, weapon_id = weapon_id,
 		position = player.position + Vec3{0, player.height - GAME_CONSTANTS.camera_height, 0},
 		value = player.crouch_val,
+		source = source != nil ? source.position : {}, has_source = source != nil,
 	})
 }

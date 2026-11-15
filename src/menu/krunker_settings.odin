@@ -23,6 +23,7 @@ Krunker_Key :: enum {
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
 	SATURATION,
+	SHOW_HIT_INDICATORS, HIT_INDICATOR_COLOR, USE_DAMAGE_OVERLAY,
 }
 Krunker_Value_Kind :: enum { NUMBER, SWITCH, COLOR }
 Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min, max: f64 }
@@ -73,6 +74,10 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.SHOW_WEAPON_MEL = {"showWeaponMel", .SWITCH, 1, 0, 0},
 	.LEFT_HAND = {"leftHand", .SWITCH, 0, 0, 0},
 	.SATURATION = {"saturationn", .NUMBER, 1, 0, 3}, // Krunker's spelling.
+	// Damage feedback (krunkbox current.analysis.js near lines 251334 and 254710).
+	.SHOW_HIT_INDICATORS = {"showHitInd", .SWITCH, 1, 0, 0},
+	.HIT_INDICATOR_COLOR = {"hitColor", .COLOR, 0xff3f3f, 0, 0},
+	.USE_DAMAGE_OVERLAY = {"useDamageOverlay", .SWITCH, 1, 0, 0},
 }
 KRUNKER_CROSSHAIR_PRECISION :: 5
 KRUNKER_VIEWMODEL := [Viewmodel_Control]Krunker_Key{
@@ -297,6 +302,10 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string) -> (resu
 		color = colors[.CROSSHAIR_COLOR], shadow_color = colors[.CROSSHAIR_SHADOW],
 	}
 	draft.crosshair = crosshair_settings_validate(draft.crosshair)
+	// Krodin's own damage values are kept; Krunker's three keys are applied.
+	draft.damage = damage_settings_validate(draft.damage)
+	draft.damage.toggles[.OVERLAY], draft.damage.toggles[.INDICATORS] = switches[.USE_DAMAGE_OVERLAY], switches[.SHOW_HIT_INDICATORS]
+	draft.damage.colors[.INDICATOR] = colors[.HIT_INDICATOR_COLOR]
 
 	known := make(map[string]bool, allocator = context.temp_allocator)
 	for setting in KRUNKER_SETTINGS { known[setting.key] = true }
@@ -377,6 +386,9 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	numbers[.CROSSHAIR_THICKNESS], numbers[.CROSSHAIR_LENGTH], numbers[.CROSSHAIR_GAP] = f64(crosshair.values[.THICKNESS]), f64(crosshair.values[.SIZE]), f64(crosshair.values[.GAP])
 	switches[.CROSSHAIR_USE_OPACITY], switches[.CROSSHAIR_ALWAYS], switches[.CROSSHAIR_DOT] = crosshair.toggles[.CUSTOM_OPACITY], crosshair.toggles[.ALWAYS_SHOW], crosshair.toggles[.DOT]
 	colors[.CROSSHAIR_COLOR], colors[.CROSSHAIR_SHADOW] = crosshair.color, crosshair.shadow_color
+	damage := damage_settings_validate(values.damage)
+	switches[.USE_DAMAGE_OVERLAY], switches[.SHOW_HIT_INDICATORS] = damage.toggles[.OVERLAY], damage.toggles[.INDICATORS]
+	colors[.HIT_INDICATOR_COLOR] = damage.colors[.INDICATOR]
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
 
