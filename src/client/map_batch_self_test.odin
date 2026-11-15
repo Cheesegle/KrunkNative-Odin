@@ -136,6 +136,16 @@ g_map_batch_self_tests: int
 // off for both renders, so every batch is drawn once. GL bindings that the
 // frame loop relies on (framebuffer, viewport, pack alignment) are restored.
 // `ran` is false when the scene has no batch geometry to test.
+//
+// Both renders use one fixed, plain configuration: Normal lighting, no shadow
+// sampling, night tints neutral. Map loads happen before the frame that
+// prepares shadows and night lighting, so the live values may still describe
+// the previous map; and with shadows on, each path would first have to draw
+// its own shadow map (the batched depth pass vs per object), where a depth tie
+// on a caster can move a soft shadow edge by a texel and fail the comparison
+// for no visible reason. The batched depth pass reads the same per-vertex
+// layout as the colour pass tested here, and the equality test covers the
+// shadowed and night renders pixel for pixel.
 map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bool, compare: Map_Batch_Compare, ran: bool) {
 	g_map_batch_self_tests += 1
 	if scene == nil || map_inst == nil || scene.batches == nil || scene.batches.vao == 0 {
@@ -161,6 +171,7 @@ map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bo
 	gl.GetIntegerv(gl.PACK_ALIGNMENT, &pack_alignment)
 	gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
 	saved_stats, saved_culling, saved_enabled := g_draw_stats, g_render_culling, scene.batching_enabled
+	saved_quality, saved_low_tint, saved_unlit_tint := g_render_quality, g_night_low_tint, g_night_unlit_tint
 	target := bench_target_init(w, h)
 	defer {
 		bench_target_fini(&target)
@@ -169,10 +180,13 @@ map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bo
 		gl.PixelStorei(gl.PACK_ALIGNMENT, pack_alignment)
 		gl.Viewport(viewport[0], viewport[1], viewport[2], viewport[3])
 		g_draw_stats, g_render_culling, scene.batching_enabled = saved_stats, saved_culling, saved_enabled
+		g_render_quality, g_night_low_tint, g_night_unlit_tint = saved_quality, saved_low_tint, saved_unlit_tint
 	}
 
 	camera := map_batch_self_test_camera(map_inst)
 	g_render_culling = false
+	g_render_quality = Render_Quality{lighting = .NORMAL}
+	g_night_low_tint, g_night_unlit_tint = {1, 1, 1}, {1, 1, 1}
 	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
 	gl.Viewport(0, 0, w, h)
 	gl.PixelStorei(gl.PACK_ALIGNMENT, 1)

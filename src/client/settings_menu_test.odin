@@ -146,7 +146,7 @@ when ODIN_TEST {
 		testing.expect(t, previous_viewmodel == expected_viewmodel, "existing viewmodel preferences must preserve edits and default new weapon visibility to on and left handed to off")
 		testing.expect(t, os.write_entire_file(path, `{"version":1,"sensitivity":-9,"display_mode":-5}`) == nil)
 		loaded := client_settings_load(path)
-		testing.expect(t, loaded.sensitivity == 1 && loaded.display_mode == 0 && loaded.bindings == menuui.default_bindings() && loaded.visuals == menuui.DEFAULT_VISUAL_SETTINGS && loaded.quality == menuui.Quality_Settings{}, "older preferences must keep neutral graphics and reject invalid sensitivity")
+		testing.expect(t, loaded.sensitivity == 1 && loaded.display_mode == 0 && loaded.bindings == menuui.default_bindings() && loaded.visuals == menuui.DEFAULT_VISUAL_SETTINGS && loaded.quality == menuui.DEFAULT_QUALITY_SETTINGS, "older preferences must keep neutral graphics, get Krunker's Shadows and Lighting defaults, and reject invalid sensitivity")
 		settings.bindings[.FORWARD] = {96, -99}
 		loaded = client_settings_validate(settings)
 		testing.expect(t, loaded.bindings[.FORWARD] == menuui.default_bindings()[.FORWARD], "invalid and reserved key codes must never reach GLFW")

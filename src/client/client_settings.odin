@@ -28,7 +28,7 @@ Client_Settings :: struct {
 }
 
 client_settings_defaults :: proc() -> Client_Settings {
-	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
+	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
 }
 
 client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {

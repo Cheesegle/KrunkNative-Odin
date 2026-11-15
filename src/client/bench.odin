@@ -33,6 +33,7 @@ Bench_Config :: struct {
 	quality:  menuui.Quality_Settings,
 	batching: bool, // Static map batches (map_batch.odin).
 	culling:  bool, // Frustum culling; only used on the batched path.
+	soft_4tap: bool, // Krunker mode with Sharp's 4-tap soft kernel (cost comparison).
 }
 
 Bench_Result :: struct {
@@ -53,10 +54,20 @@ Bench_Result :: struct {
 }
 
 // Static: bench_map frees the temp allocator after every configuration.
+// Baseline is Shadows off with Lighting Normal (the renderer before these
+// settings). Every row except the two per-object ones uses the default
+// batched + culled path.
 BENCH_CONFIGS := [?]Bench_Config{
-	{"per-object (batching off)", {}, false, false},
-	{"batched, no culling", {}, true, false},
-	{"batched + culled", {}, true, true},
+	{name = "baseline: shadows off", quality = {lighting = 1}, batching = true, culling = true},
+	{name = "Krunker default", quality = {shadows = true, lighting = 1}, batching = true, culling = true},
+	{name = "Krunker + soft", quality = {shadows = true, soft_shadows = true, lighting = 1}, batching = true, culling = true},
+	{name = "Krunker + soft (4-tap kernel)", quality = {shadows = true, soft_shadows = true, lighting = 1}, batching = true, culling = true, soft_4tap = true},
+	{name = "Krunker + dynamic", quality = {shadows = true, dynamic_shadows = true, lighting = 1}, batching = true, culling = true},
+	{name = "Krunker everything on", quality = {shadows = true, soft_shadows = true, high_res_shadows = true, dynamic_shadows = true, lighting = 3}, batching = true, culling = true},
+	{name = "Krunker + self shadow", quality = {shadows = true, self_shadow = true, lighting = 1}, batching = true, culling = true},
+	{name = "Sharp", quality = {shadows = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
+	{name = "Sharp + soft + dynamic", quality = {shadows = true, soft_shadows = true, dynamic_shadows = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
+	{name = "Sharp + self shadow", quality = {shadows = true, self_shadow = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
 }
 
 bench_parse_size :: proc(text: string) -> (w, h: i32, ok: bool) {
@@ -172,6 +183,7 @@ bench_frame :: proc(client: ^Client, target: ^Bench_Target, frame: int) {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
 	gl.Viewport(0, 0, target.width, target.height)
 	client.viewport_width, client.viewport_height = target.width, target.height
+	client.render_framebuffer = target.fbo
 	client_render_world(client)
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 }
@@ -182,6 +194,8 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	client.visual_settings = menuui.DEFAULT_VISUAL_SETTINGS
 	client.render_batching = config.batching
 	g_render_culling = config.culling
+	g_shadow_soft_kernel_override = config.soft_4tap
+	defer g_shadow_soft_kernel_override = false
 	defer g_render_culling = true
 	result := Bench_Result{map_name = map_name, width = target.width, height = target.height, config = config.name}
 
@@ -267,7 +281,17 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 // One PNG per configuration from the same viewpoint, for checking by eye.
 @(private = "file")
 bench_screenshot :: proc(client: ^Client, target: ^Bench_Target, config_name, map_name: string) {
-	bench_frame(client, target, 0)
+	// View 0 is the menu camera; view 1 a spawn at eye height.
+	for view in 0 ..< 2 {
+		bench_screenshot_view(client, target, config_name, map_name, view)
+	}
+}
+
+@(private = "file")
+bench_screenshot_view :: proc(client: ^Client, target: ^Bench_Target, config_name, map_name: string, view: int) {
+	frame := view * BENCH_FRAMES_PER_VIEW + 8
+	for warm in 0 ..< 3 { bench_frame(client, target, frame - 3 + warm) }
+	bench_frame(client, target, frame)
 	w, h := target.width, target.height
 	pixels := make([]u8, int(w * h * 3), context.temp_allocator)
 	gl.BindFramebuffer(gl.READ_FRAMEBUFFER, target.fbo)
@@ -282,7 +306,7 @@ bench_screenshot :: proc(client: ^Client, target: ^Bench_Target, config_name, ma
 		}
 	}
 	os.make_directory("bin/bench")
-	path := fmt.ctprintf("bin/bench/%s_%dx%d_%s.png", map_name, w, h, strings.trim(strings.to_string(slug), "-"))
+	path := fmt.ctprintf("bin/bench/%s_%dx%d_view%d_%s.png", map_name, w, h, view, strings.trim(strings.to_string(slug), "-"))
 	// GL rows are bottom-up; write with a negative stride from the last row.
 	stbi.write_png(path, w, h, 3, &pixels[int((h - 1) * w * 3)], -w * 3)
 }
@@ -385,6 +409,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	client.scene = scene_init()
 	client.fps_scene = scene_init()
 	defer {
+		shadow_fini()
 		scene_fini(client.fps_scene)
 		scene_fini(client.scene)
 		resource_cache_fini()

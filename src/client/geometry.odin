@@ -795,6 +795,7 @@ resource_cache_fini :: proc() {
 		basic_batched_shader_program = 0
 	}
 	g_map_batch_shader_layout_reason = ""
+	shadow_placeholders_fini()
 	if quad_shader_program != 0 {
 		gl.DeleteProgram(quad_shader_program)
 		quad_shader_program = 0

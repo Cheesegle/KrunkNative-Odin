@@ -29,6 +29,8 @@ when ODIN_TEST {
 		name:             string,
 		hide_cats:        bool,
 		hide_extra_props: bool,
+		night:            bool, // Night mode at the default strength.
+		lighting:         i32,  // Lighting quality (Normal unless set).
 	}
 
 	@(private = "file")
@@ -63,9 +65,13 @@ when ODIN_TEST {
 	}
 
 	@(private = "file")
-	batch_eq_render :: proc(client: ^Client, camera: ^Camera, target: ^Bench_Target, batched: bool, sampler: u32, pixels: []u8, depth: []u32 = nil) -> Draw_Stats {
+	batch_eq_render :: proc(client: ^Client, camera: ^Camera, target: ^Bench_Target, batched: bool, sampler: u32, pixels: []u8, depth: []u32 = nil, quality := menuui.Quality_Settings{lighting = 1}) -> Draw_Stats {
 		client.scene.batching_enabled = batched
 		g_draw_stats = {}
+		// Rebuild the shadow map through the path under test (batched or per
+		// object), as client_render_world does. Off, this does nothing.
+		shadow_mark_dirty()
+		shadow_prepare(client.scene, client.game.map_inst, quality, target.fbo, {0, 0, target.width, target.height})
 		gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
 		gl.Viewport(0, 0, target.width, target.height)
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -128,8 +134,12 @@ when ODIN_TEST {
 		_ = gl.GetError()
 
 		old_lighting, old_visuals := g_lighting_config, g_visual_settings
-		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals }
-		toggles := [?]Batch_Eq_Toggles{{"details-shown", false, false}, {"details-hidden", true, true}, {"cats-hidden", true, false}}
+		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals; g_night_low_tint, g_night_unlit_tint = {1, 1, 1}, {1, 1, 1} }
+		defer shadow_fini()
+		toggles := [?]Batch_Eq_Toggles{
+			{"details-shown", false, false, false, 1}, {"details-hidden", true, true, false, 1}, {"cats-hidden", true, false, false, 1},
+			{"night", false, false, true, 1}, {"night-low", false, false, true, 0},
+		}
 		failures := 0
 		for map_name in ([]string{"burg", "bastion", "sandstorm_v3", "undergrowth"}) {
 			client := Client{scene = scene_init(), render_batching = true}
@@ -153,21 +163,30 @@ when ODIN_TEST {
 				for toggle, toggle_index in toggles {
 					visuals := menuui.DEFAULT_VISUAL_SETTINGS
 					visuals.hide_cats, visuals.hide_extra_props = toggle.hide_cats, toggle.hide_extra_props
+					visuals.night_mode = toggle.night
 					g_visual_settings = visuals
+					// As client_update_graphics: night rewrites the frame's lighting.
+					g_lighting_config = toggle.night ? night_lighting(map_inst.lighting, visuals.night_strength) : map_inst.lighting
+					g_night_low_tint, g_night_unlit_tint = night_tints(visuals)
 					client_update_map_details(&client, visuals)
 					samplers := [2]u32{0, smooth}
 					// The smooth sampler pass runs once per view to cover mip selection.
 					for sampler, sampler_index in samplers {
 						if sampler_index == 1 && toggle_index != 0 do continue
-						stats_off := batch_eq_render(&client, &camera, &target, false, sampler, off, depth_off)
-						stats_on := batch_eq_render(&client, &camera, &target, true, sampler, on, depth_on)
+					// Shadows on (Krunker's default) with nearest sampling: the shadow
+					// map built from batches must match the one built per object.
+					for shadows in ([2]bool{false, true}) {
+						if shadows && sampler_index != 0 do continue
+						quality := menuui.Quality_Settings{lighting = toggle.lighting, shadows = shadows}
+						stats_off := batch_eq_render(&client, &camera, &target, false, sampler, off, depth_off, quality)
+						stats_on := batch_eq_render(&client, &camera, &target, true, sampler, on, depth_on, quality)
 						// A pixel may differ by more than 1 only where both renders
 						// stored the same depth: two surfaces tied in the depth
 						// buffer and draw order picked the colour (see PR notes).
 						compare := map_batch_compare(off, on, depth_off, depth_on)
 						max_diff, max_geometry_diff, tie_pixels, geometry_pixels := compare.max_diff, compare.max_geometry_diff, compare.tie_pixels, compare.geometry_pixels
 						first := compare.first_geometry
-						label := fmt.tprintf("%s_%s_%s_%s", map_name, view.name, toggle.name, sampler == 0 ? "nearest" : "smooth")
+						label := fmt.tprintf("%s_%s_%s_%s%s", map_name, view.name, toggle.name, sampler == 0 ? "nearest" : "smooth", shadows ? "_shadows" : "")
 						fmt.printf("[batch-eq] %-48s max diff %3d; depth-tie pixels %3d, other pixels %d; draws %5d -> %4d (batches %d, culled %d)\n",
 							label, max_diff, tie_pixels, geometry_pixels, stats_off.draw_calls, stats_on.draw_calls, stats_on.batch_draws, stats_on.batches_culled)
 						testing.expect(t, stats_on.draw_calls <= stats_off.draw_calls, fmt.tprintf("%s: batching must not add draw calls", label))
@@ -184,6 +203,7 @@ when ODIN_TEST {
 							delete(diff)
 						}
 						_ = view_index
+					}
 					}
 				}
 			}

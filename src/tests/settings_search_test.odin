@@ -101,6 +101,11 @@ test_settings_search :: proc() -> bool {
 		fmt.println("Searching Disable must list Hide cats and Hide extra props"); return false
 	}
 	if search_test_shown(&state, clay.ID("VSync")) { fmt.println("Searching Disable must hide unrelated rows"); return false }
+
+	// "night" finds Night mode and its strength slider.
+	search_test_type(&state, view, "night")
+	if !search_test_shown(&state, clay.ID("NightMode", 2)) || !search_test_shown(&state, clay.ID("NightStrength")) { fmt.println("Searching night must list Night mode and Night strength"); return false }
+	if search_test_shown(&state, clay.ID("HideCats")) { fmt.println("Searching night must hide unrelated rows"); return false }
 	search_test_type(&state, view, "reload")
 
 	// Fuzzy abbreviations, and toggling a result in place.

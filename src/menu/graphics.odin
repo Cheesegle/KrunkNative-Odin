@@ -13,10 +13,34 @@ Visual_Settings :: struct {
 	color_override: [Visual_Color]bool,
 	colors: [Visual_Color][3]f32,
 	hide_cats, hide_extra_props: bool,
+	// Krodin's night mode (not in Krunker): a moonlit transform of each map's
+	// own lighting. night_strength 0..1 scales it; 0 or off renders as before.
+	night_mode:     bool,
+	night_strength: f32,
 }
-Quality_Settings :: struct { smooth_textures: bool, anisotropy: i32 } // 0 = off; otherwise 2, 4, 8 or 16.
+DEFAULT_NIGHT_STRENGTH :: 0.7
+// Krunker's Settings > Video quality options (game.deob.js settings list near
+// line 210198): "Shadows" (shadows, default on), its advanced "Soft Shadows"
+// (softShad), "High-Res Shadows" (highResShad) and "Dynamic Shadows"
+// (shadowsDynamic), all default off, and "Lighting" (lighting): 0 Low,
+// 1 Normal (default), 2 High, 3 Physical.
+Quality_Settings :: struct {
+	smooth_textures: bool,
+	anisotropy:      i32, // 0 = off; otherwise 2, 4, 8 or 16.
+	shadows, soft_shadows, high_res_shadows, dynamic_shadows: bool,
+	lighting:        i32,
+	// Krodin additions, beyond Krunker parity.
+	shadow_quality:  i32,  // Shadow_Quality: 0 Krunker (whole-map map), 1 Sharp (cascades).
+	self_shadow:     bool, // Your own body casts a shadow (default on).
+}
+Shadow_Quality :: enum i32 { KRUNKER, SHARP }
+SHADOW_QUALITY_LABELS := [Shadow_Quality]string{.KRUNKER = "Krunker", .SHARP = "Sharp"}
+Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
+DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
+LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
+Quality_Toggle :: enum { SHADOWS, SOFT_SHADOWS, HIGH_RES_SHADOWS, DYNAMIC_SHADOWS, SELF_SHADOW }
 
-DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}}
+DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}, night_strength = DEFAULT_NIGHT_STRENGTH}
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}
@@ -38,6 +62,8 @@ visual_settings_validate :: proc(settings: Visual_Settings) -> Visual_Settings {
 	result.values[.FOG_DISTANCE] = 1
 	result.color_override = {}
 	result.colors = DEFAULT_VISUAL_SETTINGS.colors
+	if math.is_nan(result.night_strength) || math.is_inf(result.night_strength) { result.night_strength = DEFAULT_NIGHT_STRENGTH }
+	result.night_strength = clamp(result.night_strength, 0, 1)
 	return result
 }
 
@@ -61,6 +87,8 @@ settings_menu_fps_limit_row :: proc(state: ^State) {
 quality_settings_validate :: proc(settings: Quality_Settings) -> Quality_Settings {
 	result := settings
 	switch result.anisotropy { case 0, 2, 4, 8, 16: case: result.anisotropy = 0 }
+	if result.lighting < i32(Lighting_Quality.LOW) || result.lighting > i32(Lighting_Quality.PHYSICAL) { result.lighting = DEFAULT_QUALITY_SETTINGS.lighting }
+	if result.shadow_quality < 0 || result.shadow_quality > i32(Shadow_Quality.SHARP) { result.shadow_quality = DEFAULT_QUALITY_SETTINGS.shadow_quality }
 	return result
 }
 
@@ -78,6 +106,10 @@ settings_visuals :: proc(state: ^State) {
 	settings_toggle_row(state, "Hide cats", "HideCats", state.settings_draft.visuals.hide_cats, {kind=.VISUAL_TOGGLE, index=0})
 	settings_toggle_row(state, "Hide extra props", "HideExtraProps", state.settings_draft.visuals.hide_extra_props, {kind=.VISUAL_TOGGLE, index=1})
 	settings_note(state, "Hide extra props removes loose rubble, planks, fabric and grass. Cats have their own toggle.")
+	settings_section(state, "Night")
+	settings_toggle_row(state, "Night mode", "NightMode", state.settings_draft.visuals.night_mode, {kind=.VISUAL_TOGGLE, index=2})
+	settings_slider(state, "Night strength", "NightStrength", state.settings_draft.visuals.night_strength, 0, 1, {kind = .NIGHT_STRENGTH})
+	settings_note(state, "Night mode turns every map into a moonlit night: a dark blue sky and fog, and dim, cool light. Map lights still glow. Night strength sets how dark it gets.")
 	settings_note(state, "Reset restores the original appearance of every map.")
 	if settings_search_show(state, "Reset visuals") { settings_button(state, "Reset visuals", "ResetVisuals", {kind = .VISUAL_RESET}) }
 }
@@ -100,6 +132,29 @@ settings_quality :: proc(state: ^State, view: View) {
 		}
 	}
 	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
+	quality := state.settings_draft.quality
+	settings_toggle_row(state, "Shadows", "QualityShadows", quality.shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SHADOWS)})
+	settings_toggle_row(state, "Soft Shadows", "QualitySoftShadows", quality.soft_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SOFT_SHADOWS)})
+	settings_toggle_row(state, "High-Res Shadows", "QualityHighResShadows", quality.high_res_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.HIGH_RES_SHADOWS)})
+	settings_toggle_row(state, "Dynamic Shadows", "QualityDynamicShadows", quality.dynamic_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.DYNAMIC_SHADOWS)})
+	settings_toggle_row(state, "Self shadow", "QualitySelfShadow", quality.self_shadow, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SELF_SHADOW)})
+	if settings_search_show(state, "Shadow quality") {
+		if clay.UI(clay.ID("ShadowQualityRow"))(settings_row(state)) {
+			settings_label("Shadow quality", state.scale)
+			spacer()
+			settings_dropdown_field(state, SHADOW_QUALITY_LABELS[Shadow_Quality(clamp(quality.shadow_quality, 0, 1))], "ShadowQuality", .SHADOW_QUALITY)
+		}
+	}
+	settings_note(state, "Self shadow shows your own shadow. Shadow quality Krunker draws one shadow map over the whole map, like Krunker; Sharp uses cascades around you for crisper shadows nearby.")
+	settings_note(state, "Shadows renders shadows from players and objects. Soft Shadows gives them a softer appearance, High-Res Shadows improves their quality, and Dynamic Shadows updates them in real time.")
+	if settings_search_show(state, "Lighting") {
+		if clay.UI(clay.ID("LightingRow"))(settings_row(state)) {
+			settings_label("Lighting", state.scale)
+			spacer()
+			settings_dropdown_field(state, LIGHTING_LABELS[Lighting_Quality(clamp(quality.lighting, 0, 3))], "Lighting", .LIGHTING)
+		}
+	}
+	settings_note(state, "Lighting sets the render quality of game lighting. Low is unlit, Normal is the default, High adds specular highlights and map lights, and Physical uses physically based shading.")
 }
 
 settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 {
@@ -116,6 +171,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
+	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	}
 	return values.sensitivity
 }

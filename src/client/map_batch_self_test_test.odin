@@ -46,9 +46,9 @@ when ODIN_TEST {
 		testing.expect(t, strings.contains(string(vert), "vec4 objects[];"), "basic.vert must declare the buffer as a vec4 array")
 
 		// Pack two records and read them back as the shader indexes them.
-		material := Basic_Material{face_mask = 0x15, color = {0.1, 0.2, 0.3, 0.4}, emissive = {1, 1, 1, 1}, face_scale = {3, 4, 5}, texture_scale = 2, alpha_test = 0.5, texture_repeat = {1, 1}, unlit = true}
+		material := Basic_Material{face_mask = 0x15, color = {0.1, 0.2, 0.3, 0.4}, emissive = {1, 1, 1, 1}, face_scale = {3, 4, 5}, texture_scale = 2, alpha_test = 0.5, texture_repeat = {1, 1}, unlit = true, receive_shadow = true}
 		transform := linalg.matrix4_translate_f32({7, 8, 9}) * linalg.matrix4_scale_f32({2, 3, 4})
-		records := [2]Batch_Object{{}, batch_object_from_material(&material, transform)}
+		records := [2]Batch_Object{{}, batch_object_from_material(&material, transform, .STATIC)}
 		floats := transmute([2 * 40]f32)records
 		object := 1
 		vec4 :: proc(floats: []f32, index: int) -> shared.Vec4 { return {floats[index * 4], floats[index * 4 + 1], floats[index * 4 + 2], floats[index * 4 + 3]} }
@@ -60,7 +60,17 @@ when ODIN_TEST {
 		}
 		testing.expect(t, vec4(floats[:], base + int(offset_of(Batch_Object, color) / 16)) == material.color)
 		testing.expect(t, vec4(floats[:], base + int(offset_of(Batch_Object, face_scale) / 16)) == shared.Vec4{3, 4, 5, 2})
-		testing.expect(t, vec4(floats[:], base + int(offset_of(Batch_Object, params) / 16)) == shared.Vec4{0x15, BATCH_FLAG_UNLIT, 0.5, 0})
+		testing.expect(t, vec4(floats[:], base + int(offset_of(Batch_Object, params) / 16)) == shared.Vec4{0x15, BATCH_FLAG_UNLIT | BATCH_FLAG_RECEIVE_SHADOW | BATCH_FLAG_CAST_SHADOW, 0.5, 0})
+		// Shadow flags live in params.y with the other bits; casters only with .STATIC.
+		testing.expect_value(t, batch_object_from_material(&material, transform, .NONE).params.y, f32(BATCH_FLAG_UNLIT | BATCH_FLAG_RECEIVE_SHADOW))
+		testing.expect_value(t, batch_object_from_material(&material, transform, .DYNAMIC).params.y, f32(BATCH_FLAG_UNLIT | BATCH_FLAG_RECEIVE_SHADOW))
+		// The shaders test these bits through generated defines, not literals.
+		testing.expect(t, strings.contains(defines, fmt.tprintf("#define BATCH_FLAG_RECEIVE_SHADOW %d\n", BATCH_FLAG_RECEIVE_SHADOW)))
+		testing.expect(t, strings.contains(defines, fmt.tprintf("#define BATCH_FLAG_CAST_SHADOW %d\n", BATCH_FLAG_CAST_SHADOW)))
+		testing.expect(t, strings.contains(string(vert), "BATCH_FLAG_CAST_SHADOW"), "the batched depth pass must test the cast flag")
+		frag, frag_ok := shared.read_file("assets/shaders/basic.frag")
+		defer delete(frag)
+		testing.expect(t, frag_ok && strings.contains(string(frag), "BATCH_FLAG_RECEIVE_SHADOW"), "basic.frag must test the receive flag")
 		testing.expect(t, floats[base * 4 + 12] == 7 && floats[base * 4 + 13] == 8 && floats[base * 4 + 14] == 9, "translation in column 3")
 
 		// Vertex attributes 2 and 3 are plain floats holding exact integers.
@@ -157,6 +167,22 @@ when ODIN_TEST {
 			client_load_current_map(&client)
 			testing.expect(t, client.scene.batches != nil, "reloading keeps batching on")
 			self_test_unload(&client)
+		}
+
+		// Live shadow/night/lighting state (left from the previous frame) must
+		// not make a correct driver fail, and comes back unchanged afterwards.
+		{
+			old_quality, old_low, old_unlit := g_render_quality, g_night_low_tint, g_night_unlit_tint
+			defer { g_render_quality, g_night_low_tint, g_night_unlit_tint = old_quality, old_low, old_unlit }
+			live := Render_Quality{shadows = true, soft_shadows = true, player_shadows = true, lighting = .HIGH, mode = .SHARP}
+			g_render_quality = live
+			g_night_low_tint, g_night_unlit_tint = {0.2, 0.25, 0.4}, {0.5, 0.5, 0.6}
+			if self_test_load(t, &client, "sandstorm_v3") {
+				testing.expect(t, client.batch_self_test_done && client.render_batching && client.scene.batches != nil, "shadow/night state must not fail the self-test")
+				testing.expect(t, g_render_quality == live, "the self-test restores the render quality")
+				testing.expect(t, g_night_low_tint == {0.2, 0.25, 0.4} && g_night_unlit_tint == {0.5, 0.5, 0.6}, "the self-test restores the night tints")
+				self_test_unload(&client)
+			}
 		}
 
 		g_map_batch_fault_inject = true

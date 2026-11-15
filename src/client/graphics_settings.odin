@@ -57,6 +57,9 @@ client_update_graphics :: proc(client: ^Client) {
 	base := shared.DEFAULT_LIGHTING_CONFIG
 	if client.game.map_inst != nil { base = client.game.map_inst.lighting }
 	g_lighting_config = base
+	// Night mode rewrites only this per-frame copy; off, it is never called.
+	if night_active(g_visual_settings) { g_lighting_config = night_lighting(base, g_visual_settings.night_strength) }
+	g_night_low_tint, g_night_unlit_tint = night_tints(g_visual_settings)
 	sky := visual_adjust_color(g_lighting_config.sky_color, g_visual_settings)
 	gl.ClearColor(sky.x, sky.y, sky.z, 1)
 	if client.graphics_sampler == 0 { return }
