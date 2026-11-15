@@ -1530,11 +1530,12 @@ main :: proc() {
 	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.MakeContextCurrent(client.window)
 
-	if bool(glfw.RawMouseMotionSupported()) {
-		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
-	}
+	// The native Windows path owns raw mouse input (and decides whether GLFW's
+	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
 	if client_mouse_init(client.window) {
-		fmt.println("[Input] Buffered Windows raw mouse enabled")
+		fmt.println("[Input] Native Windows raw mouse enabled")
+	} else if bool(glfw.RawMouseMotionSupported()) {
+		glfw.SetInputMode(client.window, glfw.RAW_MOUSE_MOTION, 1)
 	}
 	defer client_mouse_fini()
 
