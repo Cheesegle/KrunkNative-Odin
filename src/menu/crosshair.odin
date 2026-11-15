@@ -65,12 +65,12 @@ crosshair_opacity :: proc(settings: Crosshair_Settings, normal_opacity: f32) -> 
 	return clamp(normal_opacity, 0, 1)
 }
 
-Crosshair_Preview :: struct { settings: Crosshair_Settings, scale: f32 }
+Crosshair_Preview :: struct { settings: Crosshair_Settings, hitmarker: Hitmarker_Settings, scale: f32 }
 settings_crosshair_preview :: proc(state: ^State) {
 	s := state.scale
-	state.crosshair_preview = {state.settings_draft.crosshair, s}
+	state.crosshair_preview = {state.settings_draft.crosshair, state.settings_draft.hitmarker, s}
 	if clay.UI()({layout={sizing={width=clay.SizingGrow()}, layoutDirection=.TopToBottom, padding={left=u16(24*s), right=u16(24*s)}, childGap=u16(8*s)}}) {
-		text("Crosshair preview", 16, s, SETTINGS_MUTED)
+		text("Crosshair and hitmarker preview", 16, s, SETTINGS_MUTED)
 		// Clay emits a custom command before an element's own background.
 		// Keep the background on a parent so it cannot cover the reticle.
 		if clay.UI()({layout={sizing={width=clay.SizingGrow(), height=clay.SizingFixed(124*s)}}, backgroundColor={65,75,82,255}, cornerRadius=clay.CornerRadiusAll(4*s)}) {
@@ -138,12 +138,13 @@ crosshair_parse_color :: proc(text: string) -> (value: u32, ok: bool) {
 }
 
 // The draft color an edit field names: 1 crosshair, 2 crosshair shadow, then
-// DAMAGE_COLOR_FIELDS. Unknown fields are nil.
+// HITMARKER_COLOR_FIELDS and DAMAGE_COLOR_FIELDS. Unknown fields are nil.
 settings_color_value :: proc(values: ^Settings_Values, field: i32) -> ^u32 {
 	switch field {
 	case 1: return &values.crosshair.color
 	case 2: return &values.crosshair.shadow_color
 	}
+	for color in Hitmarker_Color { if HITMARKER_COLOR_FIELDS[color] == field { return &values.hitmarker.colors[color] } }
 	for color in Damage_Color { if DAMAGE_COLOR_FIELDS[color] == field { return &values.damage.colors[color] } }
 	return nil
 }

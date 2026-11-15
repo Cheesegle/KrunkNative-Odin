@@ -436,6 +436,50 @@ create_ramp_geo :: proc() -> ^Geometry {
 	return g_ramp_geometry
 }
 
+// Krunker's SPHERE prefab: generateSphere -> THREE.SphereGeometry(1, 12, 8)
+// scaled by size/2 and moved to y + height/2 (addSphere). Built here as a
+// unit-diameter sphere resting on y = 0, like the cube, so the object's
+// position and scale place it exactly as Krunker does. Same vertex order and
+// UVs as three.js.
+SPHERE_WIDTH_SEGMENTS :: 12
+SPHERE_HEIGHT_SEGMENTS :: 8
+
+create_sphere_geo :: proc() -> ^Geometry {
+	if g_sphere_geometry != nil {
+		return g_sphere_geometry
+	}
+
+	vertices: [(SPHERE_WIDTH_SEGMENTS + 1) * (SPHERE_HEIGHT_SEGMENTS + 1)]Vertex
+	for iy in 0 ..= SPHERE_HEIGHT_SEGMENTS {
+		v := f32(iy) / SPHERE_HEIGHT_SEGMENTS
+		for ix in 0 ..= SPHERE_WIDTH_SEGMENTS {
+			u := f32(ix) / SPHERE_WIDTH_SEGMENTS
+			phi, theta := u * 2 * math.PI, v * math.PI
+			vertices[iy * (SPHERE_WIDTH_SEGMENTS + 1) + ix] = {
+				{-0.5 * math.cos(phi) * math.sin(theta), 0.5 + 0.5 * math.cos(theta), 0.5 * math.sin(phi) * math.sin(theta)},
+				{u, 1 - v},
+			}
+		}
+	}
+
+	indices: [dynamic]u32
+	defer delete(indices)
+	for iy in 0 ..< SPHERE_HEIGHT_SEGMENTS {
+		for ix in 0 ..< SPHERE_WIDTH_SEGMENTS {
+			a := u32(iy * (SPHERE_WIDTH_SEGMENTS + 1) + ix + 1)
+			b := u32(iy * (SPHERE_WIDTH_SEGMENTS + 1) + ix)
+			c := u32((iy + 1) * (SPHERE_WIDTH_SEGMENTS + 1) + ix)
+			d := u32((iy + 1) * (SPHERE_WIDTH_SEGMENTS + 1) + ix + 1)
+			if iy != 0 { append(&indices, a, b, d) }
+			if iy != SPHERE_HEIGHT_SEGMENTS - 1 { append(&indices, b, c, d) }
+		}
+	}
+
+	g_sphere_geometry = create_geometry(vertices[:], indices[:])
+	g_sphere_geometry.permanent = true
+	return g_sphere_geometry
+}
+
 create_geometry :: proc(vertices: []Vertex, indices: []u32) -> ^Geometry {
 	geometry := new(Geometry)
 
@@ -776,6 +820,10 @@ resource_cache_fini :: proc() {
 	if g_ramp_geometry != nil {
 		geometry_destroy(g_ramp_geometry)
 		g_ramp_geometry = nil
+	}
+	if g_sphere_geometry != nil {
+		geometry_destroy(g_sphere_geometry)
+		g_sphere_geometry = nil
 	}
 	if g_blank_texture != 0 {
 		gl.DeleteTextures(1, &g_blank_texture)

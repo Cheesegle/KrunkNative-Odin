@@ -144,6 +144,7 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 				gl.Enable(gl.SCISSOR_TEST)
 				menu_scissor(ui, clip)
 				crosshair_render(ui, preview.settings, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, menuui.crosshair_opacity(preview.settings, 1))
+				hit_marker_preview(ui, preview.hitmarker, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, glfw.GetTime())
 				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
 			}
 			if command.id == clay.ID("DamagePreview").id && command.renderData.custom.customData != nil {
@@ -176,6 +177,8 @@ hud_render :: proc(client: ^Client, delta: f32, pointer_blocked := false) {
 		scroll = client.menu_scroll,
 		text = string(client.menu_text[:client.menu_text_length]),
 		backspace = glfw.GetKey(client.window, glfw.KEY_BACKSPACE) == glfw.PRESS,
+		delete_key = glfw.GetKey(client.window, glfw.KEY_DELETE) == glfw.PRESS,
+		right_down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS,
 		clear_text = glfw.GetKey(client.window, glfw.KEY_LEFT_CONTROL) == glfw.PRESS && glfw.GetKey(client.window, glfw.KEY_A) == glfw.PRESS,
 		paste = glfw.GetKey(client.window, glfw.KEY_LEFT_CONTROL) == glfw.PRESS && glfw.GetKey(client.window, glfw.KEY_V) == glfw.PRESS,
 		up = glfw.GetKey(client.window, glfw.KEY_UP) == glfw.PRESS,

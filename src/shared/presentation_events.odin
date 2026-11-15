@@ -9,6 +9,7 @@ Presentation_Event :: struct {
 	position: Vec3,
 	value: f32,
 	headshot: bool,
+	lethal: bool, // HIT only: the damage killed the victim.
 	// DAMAGE only: where the attacker stood, for hit indicators.
 	source: Vec3,
 	has_source: bool,
@@ -26,8 +27,18 @@ player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind, sourc
 	if player.loadout_index >= 0 && player.loadout_index < player.loadout_size { weapon_id = player.loadout[player.loadout_index] }
 	game_emit_presentation(player.game, {
 		kind = kind, uid = player.uid, weapon_id = weapon_id,
-		position = player.position + Vec3{0, player.height - GAME_CONSTANTS.camera_height, 0},
+		// Krunker's playerSound/playSound emit from the player's x, y, z (feet).
+		position = player.position,
 		value = player.crouch_val,
 		source = source != nil ? source.position : {}, has_source = source != nil,
 	})
+}
+
+// Kill events feed the killfeed. Unlike presentation events they are recorded
+// on every authority (the native server forwards them to its clients), so the
+// queue is bounded in case nothing drains it.
+game_push_kill_event :: proc(game: ^Game, event: Kill_Event) {
+	if game == nil { return }
+	if len(game.kill_events) >= KILL_EVENTS_CAPACITY { ordered_remove(&game.kill_events, 0) }
+	append(&game.kill_events, event)
 }

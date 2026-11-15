@@ -238,6 +238,7 @@ MAX_CACHED_GEOMETRIES :: 64
 g_cube_geometry:  ^Geometry
 g_plane_geometry: ^Geometry
 g_ramp_geometry:  ^Geometry
+g_sphere_geometry: ^Geometry
 
 g_blank_texture:  u32
 g_active_texture: u32

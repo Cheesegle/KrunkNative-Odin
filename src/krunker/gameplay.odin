@@ -2,6 +2,7 @@ package krunker
 
 import "core:fmt"
 import "core:math"
+import "core:strconv"
 import "core:strings"
 import shared "../shared"
 
@@ -9,6 +10,21 @@ import shared "../shared"
 krunker_world_bounded_number :: proc(value: Krunker_Msgpack_Value, low, high: f64) -> (f64, bool) {
 	n, ok := krunker_world_number(value)
 	return n, ok && !math.is_nan(n) && !math.is_inf(n) && n >= low && n <= high
+}
+
+// END's didWin and team winner. The server's team winner is getWinTeam's
+// for..in key of teamScores, so normal team endings send "1"/"2" as strings;
+// draws and FFA send -1, and a winnerless forfeit sends null. The browser
+// only tests these loosely (-1 ==, truthiness, == 1), so null reads as 0.
+krunker_world_end_number :: proc(value: Krunker_Msgpack_Value, high: i32) -> (i32, bool) {
+	#partial switch typed in value {
+	case Krunker_Msgpack_Nil: return 0, true
+	case string:
+		n, ok := strconv.parse_int(typed, 10)
+		return i32(n), ok && n >= -1 && n <= int(high)
+	}
+	n, ok := krunker_world_bounded_number(value, -1, f64(high))
+	return i32(n), ok
 }
 
 krunker_world_parse_time :: proc(text: string) -> (f32, bool) {
@@ -78,6 +94,7 @@ krunker_world_init_match :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.hit_revision, state.last_hit_at = 0, 0
 	state.damage_revision = 0
 	state.winner_team, state.end_result = -1, -1
+	state.end_received = false
 	// A new match starts with an empty board until the next UPDATE_LEADERS.
 	state.has_leaders = false
 	state.end_index = 0
@@ -329,9 +346,10 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		return true
 	case "end":
 		if len(packet) < 5 { return false }
-		result, ok := krunker_world_bounded_number(packet[2], -1, 1); if !ok { return false }
-		winner, valid := krunker_world_bounded_number(packet[4], -1, 2); if !valid { return false }
-		state.end_result, state.winner_team = i32(result), i32(winner)
+		result, ok := krunker_world_end_number(packet[2], 1); if !ok { return false }
+		winner, valid := krunker_world_end_number(packet[4], 2); if !valid { return false }
+		state.end_result, state.winner_team = result, winner
+		state.end_received = true
 		// The final normal round sends END instead of RDS. Its winner is
 		// authoritative; abnormal endings (forfeit/abandon) award no extra win.
 		normal_end := len(packet) <= 5
@@ -452,7 +470,8 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		// Hit confirmation is presentation only. Health arrives separately in h.
 		if len(packet) < 5 { return false }
 		if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
-		state.last_hit_at, state.hit_lethal = state.received_at, krunker_world_bool(packet[4])
+		// DO_DAMAGE (sid, damage, headshot, kill, ...), handled by the browser D4e.
+		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, krunker_world_bool(packet[3]), krunker_world_bool(packet[4])
 		state.hit_revision += 1
 		return true
 	case "6":

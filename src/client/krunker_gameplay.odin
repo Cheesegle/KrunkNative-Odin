@@ -111,8 +111,3 @@ krunker_client_match_reason :: proc(client: ^Client) -> string {
 	return ""
 }
 
-krunker_client_hit_color :: proc(client: ^Client, now: f64) -> (shared.Vec4, bool) {
-	world := &client.krunker_world
-	visible := client.krunker.connected && world.hit_revision > 0 && now >= world.last_hit_at && now-world.last_hit_at < 0.35
-	return (shared.Vec4{1, 0.25, 0.2, 1} if world.hit_lethal else shared.Vec4{1, 1, 1, 1}), visible
-}

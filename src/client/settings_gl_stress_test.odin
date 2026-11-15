@@ -122,7 +122,7 @@ when ODIN_TEST {
 			visual_settings = menuui.DEFAULT_VISUAL_SETTINGS, bindings = menuui.default_bindings(), audio_settings = DEFAULT_AUDIO_SETTINGS,
 			viewmodel_settings = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair_settings = menuui.DEFAULT_CROSSHAIR_SETTINGS,
 			viewport_width = 1280, viewport_height = 720, menu_fps_limit = menuui.MENU_FPS_LIMIT_MONITOR,
-			quality_settings = {smooth_textures = true, anisotropy = 16}}
+			quality_settings = {anisotropy = 16}}
 		client.camera = camera_init(menuui.DEFAULT_FOV * 3.14159265 / 180)
 		client.scene, client.fps_scene, client.ui = scene_init(), scene_init(), ui_init()
 		client_graphics_init(client)
@@ -190,7 +190,6 @@ when ODIN_TEST {
 					menuui.activate(menu, {action = {kind = .MONITOR, index = i32(round % 2)}})
 					menuui.activate(menu, {action = {kind = .RESOLUTION, index = 1}})
 					menuui.activate(menu, {action = {kind = .MENU_FPS_LIMIT, index = i32(round * 2 % len(menuui.MENU_FPS_LIMITS))}})
-					menuui.activate(menu, {action = {kind = .TEXTURE_FILTER, index = i32(round % 2)}})
 					for level in 0 ..< 5 {
 						menuui.activate(menu, {action = {kind = .ANISOTROPY, index = i32(level)}})
 						stress_frame(client)
