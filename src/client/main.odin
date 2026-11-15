@@ -677,6 +677,7 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	player.did_wall_jump = state.did_wall_jump
 	player.can_slide = state.can_slide
 	player.on_wall = state.on_wall
+	player.wall_jump_count = i32(state.wall_jump_count)
 	player.crouch_val = state.crouch_val
 	player.aim_val = state.aim_val
 	player.spread_plus = state.spread_plus

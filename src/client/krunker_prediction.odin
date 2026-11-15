@@ -153,6 +153,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	player.on_terrain = source.on_terrain
 	player.did_jump = source.did_jump
 	player.did_wall_jump = source.did_wall_jump
+	player.wall_jump_count = max(source.wall_jump_count, 0)
 	player.on_wall = u8(clamp(source.on_wall, 0, 255))
 	player.slide_timer = source.slide_timer
 	player.can_slide = source.can_slide
