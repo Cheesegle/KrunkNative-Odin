@@ -27,3 +27,12 @@ player_emit_presentation :: proc(player: ^Player, kind: Presentation_Kind) {
 		value = player.crouch_val,
 	})
 }
+
+// Kill events feed the killfeed. Unlike presentation events they are recorded
+// on every authority (the native server forwards them to its clients), so the
+// queue is bounded in case nothing drains it.
+game_push_kill_event :: proc(game: ^Game, event: Kill_Event) {
+	if game == nil { return }
+	if len(game.kill_events) >= KILL_EVENTS_CAPACITY { ordered_remove(&game.kill_events, 0) }
+	append(&game.kill_events, event)
+}

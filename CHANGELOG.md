@@ -8,6 +8,11 @@ round of performance work.
 
 ### Added
 
+- **Killfeed** — Krunker's top-right kill notifications: killer, mirrored weapon
+  icon, wallbang/headshot markers and victim, "You" in white, teammates green
+  and enemies red. Lines last 4 s; Settings > HUD has Show killfeed and
+  Killfeed limit (1–10, default 8). Works in live lobbies, on the native server
+  and in local practice.
 - **Melee** — flat 50 damage matching the original, plus a shoulder-pivot
   swing that sweeps left↔right each attack with the knife gripped in the hand.
 - **Bullet tracers** — instant full-length beams that fade in ~80 ms, plus wall

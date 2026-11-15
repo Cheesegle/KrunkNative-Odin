@@ -111,6 +111,33 @@ overlay_match_render :: proc(client: ^Client) {
 	ui_fill_text(ui, white, rotation, (ui.width-ui_measure_text(ui, rotation, 24*s))*0.5, overlay_numeric_baseline(countdown_y, 32*s, 24*s), 24*s)
 }
 
+overlay_icon_filter :: proc(icon: u32) {
+	if icon == 0 { return }
+	gl.BindTexture(gl.TEXTURE_2D, icon)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	g_active_texture = 0
+}
+
+// HUD silhouettes (textures/weapons or textures/melee), shared by the loadout
+// list and the killfeed. Returns 0 when the icon is missing.
+overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.Weapon) {
+	if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { return 0, nil }
+	weapon := client.game.weapons[weapon_id]
+	if weapon == nil { return 0, nil }
+	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
+	icon, cached := weapon_icons[weapon_id]
+	if !cached {
+		folder := "melee" if weapon.melee else "weapons"
+		path := shared.concat(shared.assets_path(), fmt.tprintf("textures/%s/%s.png", folder, weapon.icon))
+		icon = load_texture(path)
+		delete(path)
+		weapon_icons[weapon_id] = icon
+		overlay_icon_filter(icon)
+	}
+	return icon, weapon
+}
+
 overlay_loadout_render :: proc(client: ^Client, right, bottom: f32) {
 	if client.me == nil { return }
 	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
@@ -132,20 +159,7 @@ overlay_loadout_render :: proc(client: ^Client, right, bottom: f32) {
 		if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { continue }
 		weapon := client.game.weapons[weapon_id]
 		if weapon == nil { continue }
-		icon, cached := weapon_icons[weapon_id]
-		if !cached {
-			folder := "melee" if weapon.melee else "weapons"
-			path := shared.concat(shared.assets_path(), fmt.tprintf("textures/%s/%s.png", folder, weapon.icon))
-			icon = load_texture(path)
-			delete(path)
-			weapon_icons[weapon_id] = icon
-			if icon != 0 {
-				gl.BindTexture(gl.TEXTURE_2D, icon)
-				gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-				gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-				g_active_texture = 0
-			}
-		}
+		icon, _ := overlay_weapon_icon(client, weapon_id)
 		active := i32(slot) == client.me.loadout_index
 		color := shared.Vec4{1, 1, 1, 1} if active else shared.Vec4{0.8, 0.8, 0.8, 0.6}
 		top := bottom - f32(len(client.me.loadout)) * row_height + row * row_height
@@ -355,6 +369,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	}
 
 	overlay_match_render(client)
+	kill_feed_render(client)
 	if client.scoreboard_open {
 		// Keep clear of the round/objective HUD at the top center.
 		board := client_scoreboard(client)
@@ -363,6 +378,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 }
 
 overlay_fini :: proc() {
+	kill_feed_fini()
 	for _, icon in weapon_icons {
 		texture_release(icon)
 	}

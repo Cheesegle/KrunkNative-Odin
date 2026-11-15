@@ -172,6 +172,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
+	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
 	}
 	return values.sensitivity
 }
