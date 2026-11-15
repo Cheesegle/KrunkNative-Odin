@@ -5,6 +5,7 @@ import "core:math"
 import "core:os"
 import "core:slice"
 import "core:encoding/json"
+import "core:strconv"
 import "core:strings"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
@@ -61,6 +62,7 @@ Client :: struct {
 	graphics_sampler_ready: bool,
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
+	bench_seconds: f32, // Benchmark mode only.
 	settings_dirty, vsync: bool,
 	monitor_index: i32,
 
@@ -266,6 +268,9 @@ Client_Options :: struct {
 	show_fps:  bool,
 	offline:   bool,
 	asset_sweep: string,
+	bench_maps: string, // Comma-separated; empty when not benchmarking.
+	bench_seconds: f32,
+	bench_sizes: string, // Comma-separated WxH or "native".
 }
 
 print_client_help :: proc() {
@@ -282,6 +287,11 @@ print_client_help :: proc() {
 	fmt.println("      --asset-sweep <manifest.txt>")
 	fmt.println("                        Load every map, model, icon and sound in a hidden")
 	fmt.println("                        window and list the asset files used (for packaging)")
+	fmt.println("      --bench <maps> <seconds> [--bench-size <sizes>]")
+	fmt.println("                        Render fixed viewpoints of each map (comma-separated)")
+	fmt.println("                        offscreen with an uncapped frame rate, once per")
+	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
+	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -352,6 +362,26 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 
 			i += 1
 			options.asset_sweep = os.args[i]
+		case "--bench":
+			if i + 2 >= len(os.args) {
+				fmt.eprintf("Missing map list or seconds after %s.\n\n", arg)
+				return options, false
+			}
+			options.bench_maps = os.args[i + 1]
+			seconds, seconds_ok := strconv.parse_f32(os.args[i + 2])
+			if !seconds_ok || seconds <= 0 {
+				fmt.eprintf("Invalid benchmark duration: %s\n\n", os.args[i + 2])
+				return options, false
+			}
+			options.bench_seconds = seconds
+			i += 2
+		case "--bench-size":
+			if i + 1 >= len(os.args) {
+				fmt.eprintf("Missing size after %s.\n\n", arg)
+				return options, false
+			}
+			i += 1
+			options.bench_sizes = os.args[i]
 		case "-c", "--class":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing class name after %s.\n\n", arg)
@@ -1230,16 +1260,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client_tick_textures(client, now)
 
-	client_update_graphics(client)
-	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-	saved_fov := client.camera.fov
-	client.camera.fov = client_world_fov(client)
-	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
-	client.camera.fov = saved_fov
-
-	gl.Clear(gl.DEPTH_BUFFER_BIT)
-	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
-	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	client_render_world(client)
 
 	// Overlay pass: bars use the world camera for projection only.
 	player_healthbars_update_visibility(client, now)
@@ -1255,6 +1276,21 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		overlay_render(client, delta)
 	}
 	fps_render(client)
+}
+
+// World and viewmodel passes. The benchmark mode draws through this too, so its
+// numbers cover the same work as a real frame minus the HUD.
+client_render_world :: proc(client: ^Client) {
+	client_update_graphics(client)
+	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	saved_fov := client.camera.fov
+	client.camera.fov = client_world_fov(client)
+	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
+	client.camera.fov = saved_fov
+
+	gl.Clear(gl.DEPTH_BUFFER_BIT)
+	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
+	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
@@ -1281,6 +1317,9 @@ main :: proc() {
 	}
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))
+	}
+	if len(options.bench_maps) > 0 {
+		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
 	}
 
 	if !bool(glfw.Init()) {
