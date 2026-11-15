@@ -58,6 +58,9 @@ Krunker_WS_State :: struct {
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
+	// Predicted ramp snap target after the newest acknowledged command.
+	acked_ramp_fix: f32,
+	acked_has_ramp_fix: bool,
 	input_sequence: i32,
 	input_logged: int,
 	heartbeat_logged: int,
