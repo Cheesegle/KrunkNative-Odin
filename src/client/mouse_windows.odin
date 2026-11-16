@@ -335,6 +335,10 @@ raw_input_thread_main :: proc(data: rawptr) {
 	}
 	t.ok = true
 	sync.sema_post(&t.started)
+	// The input thread joins the MMCSS "Games" task like the render thread,
+	// so bursts of high-rate mouse reports are not delayed by background work.
+	mmcss := client_platform_mmcss_register_thread("Raw mouse input")
+	defer client_platform_mmcss_revert_thread(&mmcss)
 	msg: win.MSG
 	for win.GetMessageW(&msg, nil, 0, 0) > 0 {
 		win.DispatchMessageW(&msg)
