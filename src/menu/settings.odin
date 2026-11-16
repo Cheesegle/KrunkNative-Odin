@@ -94,9 +94,10 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Display")
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_game_fps_limit_row(state)
 		settings_menu_fps_limit_row(state)
 		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.")
-		settings_note(state, "Menu FPS limit caps menus, loading and the end screen. Gameplay is never capped.")
+		settings_note(state, "Game FPS limit (Krunker's Frame Cap) caps frames while you play; 0 is unlimited, Krunker's default. With V-Sync also on, the lower rate wins. Menu FPS limit caps menus, loading and the end screen.")
 		settings_quality(state, view)
 	case .VISUALS:
 		settings_visuals(state)
@@ -143,11 +144,22 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_fps_row(state)
 		settings_section(state, "Players")
 		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
+		settings_slider(state, "Nametag size", "HudNametagSize", nametag_scale(values.hud), NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX, {kind = .NAMETAG_SIZE})
+		settings_crosshair_color(state, "Nametag color", NAMETAG_TEAM_COLOR_FIELD)
+		settings_crosshair_color(state, "Enemy nametag color", NAMETAG_ENEMY_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Nametag size scales the name only (75-200% of Krunker's size). As in Krunker, names are white, with enemies in team modes #EB5656; FFA names use Nametag color.")
 		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+		settings_toggle_row(state, "Healthbar border", "HudHealthbarBorder", values.hud.healthbar_border, {kind = .HUD_TOGGLE, index = 7})
+		// Krunker healthColE / healthColT (interface category).
+		settings_crosshair_color(state, "Enemy healthbar color", HEALTHBAR_ENEMY_COLOR_FIELD)
+		settings_crosshair_color(state, "Team healthbar color", HEALTHBAR_TEAM_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Krunker's defaults are #EB5656 for enemies (also their names in team modes) and #9EEB56 for teammates. Click a color to type or paste #RRGGBB.")
 		settings_section(state, "Killfeed")
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
 		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
+		// Krodin's own: scales the whole feed, 1x is Krunker's CSS size.
+		settings_slider(state, "Killfeed size", "HudKillFeedSize", kill_feed_size(values.hud), KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE, {kind = .KILL_FEED_SIZE}, step = 0.1)
 		settings_damage(state)
 	}
 }
@@ -264,7 +276,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .VIDEO:
 		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
 		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
-		draft.vsync, draft.menu_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.quality
+		draft.vsync, draft.menu_fps_limit, draft.game_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.game_fps_limit, defaults.quality
 	case .VISUALS:
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
@@ -512,8 +524,10 @@ slider_value_at :: proc(progress, minimum, maximum, curve, step: f32) -> f32 {
 	return clamp(value, minimum, maximum)
 }
 
-settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05, curve: f32 = 1) {
-	if !settings_search_show(state, label) { return }
+// zero_label replaces the value text at 0 (e.g. "Unlimited"); search_alias is
+// a second name search finds the row by (e.g. Krunker's name for it).
+settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05, curve: f32 = 1, zero_label := "", search_alias := "") {
+	if !settings_search_show(state, label) && (len(search_alias) == 0 || !settings_search_show(state, search_alias)) { return }
 	s := state.scale
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, s)
@@ -537,6 +551,7 @@ settings_slider :: proc(state: ^State, label, name: string, value, minimum, maxi
 			clip={horizontal=editing, childOffset=clay.GetScrollOffset()},
 		}) {
 			label := settings_percent_action(action.kind) ? fmt.tprintf("%g%%", value*100) : fmt.tprintf("%g", value)
+			if value == 0 && len(zero_label) > 0 { label = zero_label }
 			if editing { label = fmt.tprintf("%s|", string(state.number_buffer[:state.number_length])) }
 			text(label, 20, s, SETTINGS_DARK)
 		}

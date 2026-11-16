@@ -61,6 +61,7 @@ Phase :: enum u8 {
 	DEBUG_WINDOW,
 	SWAP_BUFFERS,
 	POLL_EVENTS,
+	GAME_FRAME_WAIT,
 	IDLE_WAIT,
 	SHUTDOWN,
 }
@@ -95,6 +96,7 @@ PHASE_NAMES := [Phase]string{
 	.DEBUG_WINDOW          = "debug window",
 	.SWAP_BUFFERS          = "swap buffers",
 	.POLL_EVENTS           = "poll events",
+	.GAME_FRAME_WAIT       = "game FPS limit wait",
 	.IDLE_WAIT             = "idle frame wait",
 	.SHUTDOWN              = "shutdown",
 }

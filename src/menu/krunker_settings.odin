@@ -15,7 +15,8 @@ import "core:strings"
 // text to their defaults; binds missing from "controls" stay unchanged.
 
 Krunker_Key :: enum {
-	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS,
+	UPDATE_RATE,
+	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS, HEALTH_COL_T, HEALTH_COL_E,
 	CROSSHAIR_TYPE, CROSSHAIR_OPACITY, CROSSHAIR_USE_OPACITY, CROSSHAIR_ALWAYS, CROSSHAIR_COLOR, CROSSHAIR_SHADOW,
 	CROSSHAIR_SHADOW_THICKNESS, CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, CROSSHAIR_GAP, CROSSHAIR_DOT,
 	HITMARKER_SHOW, HITMARKER_COLOR, HITMARKER_KILL_COLOR, HITMARKER_OPACITY, HITMARKER_LENGTH, HITMARKER_THICKNESS, HITMARKER_SPACING, HITMARKER_ANIM_SIZE, HITMARKER_FADE,
@@ -32,10 +33,15 @@ Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min,
 // Names, desktop defaults and ranges from Krunker's settings list (game.deob.js
 // `this["list"] = {` near line 209768), in its declaration (export) order.
 KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
+	// Frame Cap (krunkbox current.analysis.js near line 250731), the game FPS limit.
+	.UPDATE_RATE = {"updateRate", .NUMBER, GAME_FPS_LIMIT_UNLIMITED, 0, GAME_FPS_LIMIT_MAX},
 	.SHOW_TRAILS = {"showTrails", .SWITCH, 1, 0, 0},
 	.YOUR_TRAILS = {"yourTrails", .SWITCH, 1, 0, 0},
 	.SHOW_KILLS = {"showKills", .SWITCH, 1, 0, 0},
 	.SHOW_FPS = {"showFPS", .SWITCH, 0, 0, 0},
+	// Nameplate health colors (krunkbox game.min.js `healthColT:{name:`; R8=["#9eeb56","#eb5656"]).
+	.HEALTH_COL_T = {"healthColT", .COLOR, 0x9eeb56, 0, 0},
+	.HEALTH_COL_E = {"healthColE", .COLOR, 0xeb5656, 0, 0},
 	.CROSSHAIR_TYPE = {"crosshairSho", .NUMBER, 1, 0, 5}, // 1 Dynamic ... 5 Precision.
 	.CROSSHAIR_OPACITY = {"crosshairOpacity", .NUMBER, 1, 0, 1},
 	.CROSSHAIR_USE_OPACITY = {"crosshairUseOpacity", .SWITCH, 0, 0, 0},
@@ -341,9 +347,11 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string, exclude:
 	draft.invert_mouse = switches[.INVERT_Y]
 	draft.fov = fov_validate(f32(numbers[.FOV]))
 	draft.show_fps = switches[.SHOW_FPS]
+	draft.game_fps_limit = game_fps_limit_from_value(f32(numbers[.UPDATE_RATE]))
 	draft.trails = {hide_others = !switches[.SHOW_TRAILS], hide_yours = !switches[.YOUR_TRAILS]}
 	draft.hud.hide_kill_feed = !switches[.SHOW_KILLS]
 	draft.hud.kill_feed_limit = i32(clamp(math.round(numbers[.FEED_LIMIT]), 1, KILL_FEED_MAX_LIMIT))
+	draft.hud.healthbar_colors = {enemy = colors[.HEALTH_COL_E], team = colors[.HEALTH_COL_T]}
 	if .SOUND not_in exclude {
 		draft.audio_volumes[0] = f32(numbers[.SOUND])
 		draft.audio_volumes[2] = f32(numbers[.PLAYER_VOLUME])
@@ -483,7 +491,10 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	colors[.HIT_INDICATOR_COLOR] = damage.colors[.INDICATOR]
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
+	numbers[.UPDATE_RATE] = f64(game_fps_limit_validate(values.game_fps_limit))
 	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))
+	healthbar_colors := healthbar_colors_validate(values.hud.healthbar_colors)
+	colors[.HEALTH_COL_E], colors[.HEALTH_COL_T] = healthbar_colors.enemy, healthbar_colors.team
 
 	builder := strings.builder_make(allocator)
 	strings.write_byte(&builder, '{')

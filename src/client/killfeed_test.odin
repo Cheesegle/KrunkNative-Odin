@@ -272,7 +272,8 @@ when ODIN_TEST {
 			scratch := make([]u8, len(empty)); defer delete(scratch)
 
 			kill_feed_clear(&client.kill_feed)
-			client.hud_settings = {}
+			// 1x: Krunker's own CSS sizes; killfeed_size_test covers the size setting.
+			client.hud_settings = {kill_feed_size = 1}
 			feed_frame(&client, empty)
 			for entry in entries { kill_feed_push(&client.kill_feed, entry, menuui.kill_feed_limit(client.hud_settings)) }
 			feed_frame(&client, full)

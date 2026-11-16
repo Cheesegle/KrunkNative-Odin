@@ -19,6 +19,8 @@ import kproto "../krunker"
 //   - Before adding, the oldest lines are dropped while the feed holds
 //     feedLimit (Settings > "Killfeed Limit", 1..10, default 8) lines.
 //   - Settings > "Display Kill feed" (showKills, default on) hides it.
+//   - Settings > "Killfeed size" (Krodin's own, 1x..3x, default 2x) scales
+//     all of the above on top of the HUD scale.
 //   - No killer: "<victim> committed <random phrase>".
 KILL_FEED_LIFE :: 4.0
 KILL_FEED_CAPACITY :: menuui.KILL_FEED_MAX_LIMIT
@@ -199,7 +201,7 @@ kill_feed_load_icon :: proc(icon: ^u32, relative: string) -> u32 {
 // measures, so drawing and measuring can never disagree.
 kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, top: f32, draw: bool, width_in: f32 = 0) -> (width: f32) {
 	ui := client.ui
-	s := ui.scale
+	s := kill_feed_scale(client)
 	text_size := KILL_FEED_TEXT_SIZE * s
 	x := right - width_in + 10 * s
 	baseline := top + 27 * s
@@ -246,10 +248,17 @@ kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, 
 	return x - (right - width_in) + 10 * s
 }
 
+// Krunker's CSS pixels times the HUD scale (#uiBase's scale, see ui_update)
+// times Settings > Killfeed size, so text, icons, padding, corners, gaps and
+// the inset from the screen edge all grow together.
+kill_feed_scale :: proc(client: ^Client) -> f32 {
+	return client.ui.scale * menuui.kill_feed_size(client.hud_settings)
+}
+
 kill_feed_render :: proc(client: ^Client) {
 	feed := &client.kill_feed
 	if client.hud_settings.hide_kill_feed || feed.count == 0 { return }
-	s := client.ui.scale
+	s := kill_feed_scale(client)
 	right, top := client.ui.width - 20 * s, 20 * s
 	// Lowering the limit in Settings trims the oldest visible lines at once.
 	first := max(0, feed.count - menuui.kill_feed_limit(client.hud_settings))
