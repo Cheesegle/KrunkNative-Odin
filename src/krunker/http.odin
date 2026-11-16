@@ -136,7 +136,7 @@ network_http_cancel_check :: proc "c" (user: rawptr, dltotal, dlnow, ultotal, ul
 // A request for worker threads: no logging, a caller-owned cancel flag and
 // a total timeout. Uses the same Origin, Referer and User-Agent headers as
 // network_http. Initialise libcurl globally before starting the worker.
-network_http_quiet :: proc(url, method, body: string, timeout_ms: int, cancel: ^bool) -> (result: Network_HTTP_Result) {
+network_http_quiet :: proc(url, method, body: string, timeout_ms: int, cancel: ^bool, authorization: string = "") -> (result: Network_HTTP_Result) {
 	handle := curl.easy_init()
 	if handle == nil { result.code = .E_FAILED_INIT; result.error_text = strings.clone("curl.easy_init returned nil"); return }
 	defer curl.easy_cleanup(handle)
@@ -152,6 +152,13 @@ network_http_quiet :: proc(url, method, body: string, timeout_ms: int, cancel: ^
 	headers = curl.slist_append(headers, "Referer: https://krunker.io/")
 	headers = curl.slist_append(headers, "User-Agent: Mozilla/5.0 (Krodin)")
 	if method == "POST" { headers = curl.slist_append(headers, "Content-Type: application/json") }
+	// Bearer access for Krunker's API (the page's au interceptor); never logged here.
+	if len(authorization) > 0 {
+		line := strings.concatenate({"Authorization: Bearer ", authorization})
+		header := strings.clone_to_cstring(line)
+		headers = curl.slist_append(headers, header)
+		delete(header); delete(line)
+	}
 	defer curl.slist_free_all(headers)
 	timeout := c.long(max(timeout_ms, 1))
 	setup := []curl.code{

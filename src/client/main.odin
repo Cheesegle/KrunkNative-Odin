@@ -125,6 +125,8 @@ Client :: struct {
 	join_queued: int,
 	access: Client_Access,
 	guest: Client_Guest,
+	ranked: Ranked_Queue,
+	ranked_prefs: menuui.Ranked_Preferences,
 	menu:             menuui.State,
 	menu_scroll:      clay.Vector2,
 	display_mode:      Display_Mode,
@@ -1258,6 +1260,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client_access_tick(client)
 	client_guest_tick(client)
+	// The ranked queue keeps running while menus are browsed or a lobby is played.
+	ranked_tick(client)
 	if client.join_queued > 0 {
 		client.join_queued -= 1
 		if client.join_queued == 0 { client_join_invite(client) }
@@ -1622,6 +1626,7 @@ main :: proc() {
 	client.crosshair_settings = preferences.crosshair
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
+	client.ranked_prefs = preferences.ranked
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
@@ -1834,6 +1839,7 @@ main :: proc() {
 
 	client_access_cancel(client)
 	client_guest_shutdown(client)
+	ranked_shutdown(client)
 	delete(client.access.token)
 	delete(client.access.assignment_url)
 	client_unload_map(client)

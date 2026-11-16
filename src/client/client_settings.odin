@@ -28,6 +28,8 @@ Client_Settings :: struct {
 	crosshair: menuui.Crosshair_Settings,
 	hitmarker: menuui.Hitmarker_Settings,
 	damage: menuui.Damage_Settings,
+	// Ranked queue choices, saved when changed in the Ranked menu (not a Settings tab).
+	ranked: menuui.Ranked_Preferences,
 }
 
 client_settings_defaults :: proc() -> Client_Settings {
@@ -72,6 +74,7 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.hud.healthbar_colors = menuui.healthbar_colors_validate(result.hud.healthbar_colors)
 	result.hud.nametag_scale = menuui.nametag_scale(result.hud)
 	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
+	result.ranked = menuui.ranked_preferences_validate(result.ranked)
 	defaults := menuui.default_bindings()
 	for action in menuui.Binding_Action {
 		for code, slot in result.bindings[action] {
@@ -102,7 +105,7 @@ client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
 		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
-		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings}
+		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings, ranked = client.ranked_prefs}
 }
 
 client_settings_save :: proc(settings: Client_Settings, path: string = CLIENT_SETTINGS_PATH) -> bool {
