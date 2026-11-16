@@ -33,3 +33,7 @@ crash_hang_log_path :: proc() -> string { return HANG_LOG_PATH }
 
 // The GPU reset notice; Windows shows a message box.
 gpu_reset_show_message :: proc(text: string) { fmt.eprintln(text) }
+
+// Dumps are Windows-only, and here the KRUNKER_ACCESS_TOKEN / .env fallback
+// still reads the environment, so nothing is removed.
+env_scrub_secrets :: proc(names: ^[dynamic]string) {}

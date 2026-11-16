@@ -1558,6 +1558,8 @@ resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
 }
 
 main :: proc() {
+	// Token safety net: no secret-named environment variable may reach a dump.
+	env_scrub_secrets_and_log()
 	options, options_ok := parse_client_options()
 	if options.show_help {
 		print_client_help()

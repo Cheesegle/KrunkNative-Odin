@@ -400,3 +400,39 @@ crash_handler_uninstall :: proc() {
 	g_crash.hang_reported = false
 }
 
+
+// Removes every environment variable whose name env_name_is_secret matches
+// from this process's environment and appends the names (allocated) to
+// `names`. Each value is first overwritten in place with '*'s of the same
+// length, so no stale copy is left in the environment block, then deleted.
+// Values are never read.
+env_scrub_secrets :: proc(names: ^[dynamic]string) {
+	block := win.GetEnvironmentStringsW()
+	if block == nil { return }
+	first := len(names)
+	entries := ([^]u16)(block)
+	for at := 0; entries[at] != 0; {
+		length := 0
+		for entries[at + length] != 0 { length += 1 }
+		entry := entries[at:at + length]
+		at += length + 1
+		// Skip the name's first character: "=C:=C:\dir" entries start with '='.
+		equals := -1
+		for c, i in entry[1:] { if c == '=' { equals = i + 1; break } }
+		if equals <= 0 { continue }
+		name, err := win.wstring_to_utf8_alloc(cstring16(&entry[0]), equals, context.allocator)
+		if err != nil { continue }
+		if env_name_is_secret(name) { append(names, name) } else { delete(name) }
+	}
+	win.FreeEnvironmentStringsW(block)
+	for name in names[first:] {
+		wide := win.utf8_to_wstring(name, context.temp_allocator)
+		size := win.GetEnvironmentVariableW(wide, nil, 0)
+		if size > 1 {
+			stars := make([]u16, int(size), context.temp_allocator)
+			for &c in stars[:size - 1] { c = '*' }
+			win.SetEnvironmentVariableW(wide, cstring16(&stars[0]))
+		}
+		win.SetEnvironmentVariableW(wide, nil)
+	}
+}
