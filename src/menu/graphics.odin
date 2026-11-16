@@ -220,6 +220,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
+	case .KILL_FEED_SIZE: return kill_feed_size(state.settings_active ? values.hud : view.hud)
 	case .GAME_FPS_LIMIT: return f32(game_fps_limit_validate(state.settings_active ? values.game_fps_limit : view.game_fps_limit))
 	}
 	return values.sensitivity
