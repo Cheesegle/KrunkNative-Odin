@@ -125,6 +125,14 @@ test_settings_search :: proc() -> bool {
 	menu_test_click(&state, view, healthbars)
 	if state.settings_draft.hud.hide_healthbars != before { fmt.println("Toggling a result twice must restore it"); return false }
 
+	// "border" finds the healthbar border toggle, which works in place.
+	menu_test_click(&state, view, search)
+	search_test_type(&state, view, "border")
+	border := clay.ID("HudHealthbarBorder", 7)
+	if !search_test_shown(&state, border) || search_test_shown(&state, healthbars) { fmt.println("\"border\" must find Healthbar border only"); return false }
+	if menu_test_click(&state, view, border).kind != .NONE || !state.settings_draft.hud.healthbar_border { fmt.println("The Healthbar border result must toggle in place"); return false }
+	menu_test_click(&state, view, border)
+
 	// Sliders in results stay interactive, and section names match their rows.
 	menu_test_click(&state, view, search)
 	search_test_type(&state, view, "players")
