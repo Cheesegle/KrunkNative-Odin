@@ -519,7 +519,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 	case .FPS: client.show_fps = !client.show_fps
 	case .RANKED_OPEN: ranked_open(client)
 	case .RANKED_QUEUE: ranked_queue_action(client)
-	case .RANKED_REGION, .RANKED_ALL_REGIONS, .RANKED_MAP: ranked_preferences_action(client, action)
+	case .RANKED_REGION, .RANKED_MAP: ranked_preferences_action(client, action)
 	case .RANKED_POPUP_CLOSE: client.ranked.popup = .NONE
 	}
 }

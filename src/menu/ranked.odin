@@ -7,24 +7,37 @@ import clay "../third_party/clay"
 // component DXe). Krunker queues a fixed map list, preferredMaps
 // [0,2,4,11,14,17,42], in either the player's region (C2().regionAcronym,
 // "eu" when unset) or, with "All regions" (s_rankedAllRegions), every key of
-// {as, eu, na}. Choosing maps and several single regions is Krodin's own.
+// {as, eu, na}. Krodin picks one of these in a dropdown; choosing maps is
+// Krodin's own.
 RANKED_MAPS := [?]i32{0, 2, 4, 11, 14, 17, 42}
 RANKED_MAP_NAMES := [?]string{"Burg", "Sandstorm", "Undergrowth", "Industry", "Site", "Bureau", "Frontier"}
 RANKED_REGIONS := [?]string{"as", "eu", "na"}
-RANKED_REGION_NAMES := [?]string{"Asia", "Europe", "North America"}
 RANKED_DEFAULT_REGION :: 1 // Krunker's C2() falls back to "eu".
+// Region dropdown entries: one region (RANKED_REGIONS order) or all of them.
+RANKED_REGION_CHOICES := [?]string{"Asia", "Europe", "North America", "All regions"}
+RANKED_ALL_REGIONS_CHOICE :: 3
 
 // Stored in client-settings.json. Zero values (older files) mean Krunker's
 // defaults: the default region and every ranked map.
 Ranked_Preferences :: struct {
-	region_mask: u32, // Bit i selects RANKED_REGIONS[i]; 0 is the default region.
-	all_regions: bool, // Krunker's "All regions" checkbox (s_rankedAllRegions, default false).
+	region_mask: u32, // One bit, RANKED_REGIONS[i]; 0 is the default region.
+	all_regions: bool, // Krunker's "All regions" (s_rankedAllRegions, default false).
 	excluded_maps: u32, // Bit i leaves RANKED_MAPS[i] out of the queue.
 }
 
-ranked_region_mask :: proc(prefs: Ranked_Preferences) -> u32 {
+// The dropdown entry: 0-2 one region, RANKED_ALL_REGIONS_CHOICE all of them.
+// Older saves could tick several regions; those queue all regions.
+ranked_region_choice :: proc(prefs: Ranked_Preferences) -> i32 {
 	mask := prefs.region_mask & (1 << len(RANKED_REGIONS) - 1)
-	return mask == 0 ? 1 << RANKED_DEFAULT_REGION : mask
+	if prefs.all_regions || mask & (mask - 1) != 0 { return RANKED_ALL_REGIONS_CHOICE }
+	for i in 0 ..< len(RANKED_REGIONS) { if mask == 1 << u32(i) { return i32(i) } }
+	return RANKED_DEFAULT_REGION
+}
+
+ranked_set_region :: proc(prefs: ^Ranked_Preferences, choice: i32) {
+	if choice < 0 || choice > RANKED_ALL_REGIONS_CHOICE { return }
+	if choice == RANKED_ALL_REGIONS_CHOICE { prefs.region_mask, prefs.all_regions = 0, true }
+	else { prefs.region_mask, prefs.all_regions = 1 << u32(choice), false }
 }
 
 ranked_map_mask :: proc(prefs: Ranked_Preferences) -> u32 {
@@ -37,16 +50,13 @@ ranked_preferences_validate :: proc(prefs: Ranked_Preferences) -> Ranked_Prefere
 	all := u32(1 << len(RANKED_MAPS) - 1)
 	excluded := prefs.excluded_maps & all
 	if excluded == all { excluded = 0 }
-	return {region_mask = prefs.region_mask & (1 << len(RANKED_REGIONS) - 1), all_regions = prefs.all_regions, excluded_maps = excluded}
+	result := Ranked_Preferences{excluded_maps = excluded}
+	// An unset region stays 0 (the default, Europe) so older files round-trip.
+	if prefs.all_regions || prefs.region_mask & (1 << len(RANKED_REGIONS) - 1) != 0 { ranked_set_region(&result, ranked_region_choice(prefs)) }
+	return result
 }
 
-// Toggles a region or map; the last selected one stays selected, as the queue
-// needs at least one of each.
-ranked_toggle_region :: proc(prefs: ^Ranked_Preferences, index: i32) {
-	if index < 0 || int(index) >= len(RANKED_REGIONS) { return }
-	mask := ranked_region_mask(prefs^) ~ (1 << u32(index))
-	if mask != 0 { prefs.region_mask = mask }
-}
+// Toggles a map; the last selected one stays selected, as the queue needs one.
 
 ranked_toggle_map :: proc(prefs: ^Ranked_Preferences, index: i32) {
 	if index < 0 || int(index) >= len(RANKED_MAPS) { return }
@@ -100,16 +110,7 @@ ranked_button_label :: proc(view: Ranked_View) -> string {
 }
 
 ranked_region_label :: proc(prefs: Ranked_Preferences) -> string {
-	if prefs.all_regions { return "Region: All regions" }
-	mask := ranked_region_mask(prefs)
-	label := "Region:"
-	first := true
-	for name, i in RANKED_REGION_NAMES {
-		if mask & (1 << u32(i)) == 0 { continue }
-		label = fmt.tprintf("%s%s %s", label, first ? "" : ",", name)
-		first = false
-	}
-	return label
+	return fmt.tprintf("Region: %s", RANKED_REGION_CHOICES[ranked_region_choice(prefs)])
 }
 
 RANKED_TONE_COLORS := [Ranked_Tone]clay.Color{.INFO = {92, 224, 90, 255}, .WARNING = {255, 204, 51, 255}, .ERROR = {255, 57, 57, 255}}
@@ -139,14 +140,14 @@ ranked_page :: proc(state: ^State, view: View) {
 		return
 	}
 	idle := ranked.phase == .IDLE && !ranked.checking
-	text("Regions", 20, s, MUTED)
-	if clay.UI(clay.ID("RankedRegions"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52*s)}, childGap = u16(12*s)}}) {
-		mask := ranked_region_mask(ranked.prefs)
-		for name, i in RANKED_REGION_NAMES {
-			on := ranked.prefs.all_regions || mask & (1 << u32(i)) != 0
-			button(state, fmt.tprintf("%s %s", on ? "[x]" : "[ ]", name), "RankedRegion", {kind = .RANKED_REGION, index = i32(i)}, selected = on, enabled = idle && !ranked.prefs.all_regions)
-		}
-		button(state, fmt.tprintf("%s All regions", ranked.prefs.all_regions ? "[x]" : "[ ]"), "RankedAllRegions", {kind = .RANKED_ALL_REGIONS}, selected = ranked.prefs.all_regions, enabled = idle)
+	choice := ranked_region_choice(ranked.prefs)
+	state.ranked_region = choice
+	// Locked while queued, like the map choices.
+	if !idle && state.settings_dropdown == .RANKED_REGION { state.settings_dropdown = .NONE }
+	if clay.UI(clay.ID("RankedRegionRow"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52*s)}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
+		text("Region", 20, s, MUTED)
+		spacer()
+		settings_dropdown_field(state, RANKED_REGION_CHOICES[choice], "RankedRegion", .RANKED_REGION, enabled = idle)
 	}
 	text("Maps (Krodin extra: Krunker always queues all seven)", 20, s, MUTED)
 	if clay.UI(clay.ID("RankedMaps"))({layout = {sizing = {width = clay.SizingGrow()}, layoutDirection = .TopToBottom, childGap = u16(12*s)}}) {
@@ -173,6 +174,7 @@ ranked_page :: proc(state: ^State, view: View) {
 	}
 	if len(ranked.popup_title) > 0 {
 		// Krunker's modal: only OK can be used while it shows.
+		if state.settings_dropdown == .RANKED_REGION { state.settings_dropdown = .NONE }
 		state.control_count = 0
 		if clay.UI(clay.ID("RankedPopup"))({layout = {sizing = {width = clay.SizingFixed(520*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(28*s)), childGap = u16(16*s), childAlignment = {x = .Center}}, backgroundColor = {28, 32, 39, 255}, cornerRadius = clay.CornerRadiusAll(6*s), border = {color = RANKED_TONE_COLORS[ranked.tone], width = clay.BorderOutside(2)}, floating = {attachTo = .ElementWithId, parentId = clay.ID("Overlay").id, zIndex = 20, attachment = {element = .CenterCenter, parent = .CenterCenter}}}) {
 			text(ranked.popup_title, 28, s)
@@ -182,4 +184,6 @@ ranked_page :: proc(state: ^State, view: View) {
 			}
 		}
 	}
+	// The Settings dropdown popup, floating above the map choices.
+	if state.settings_dropdown == .RANKED_REGION { settings_dropdown_menu(state, view) }
 }

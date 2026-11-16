@@ -311,9 +311,14 @@ when ODIN_TEST {
 		url = ranked_queue_url("http://127.0.0.1:1", token, ranked_selected_maps(prefs), ranked_selected_regions(prefs))
 		testing.expectf(t, url == "ws://127.0.0.1:1/v1/matchmaking/queue?token=a.b%2Bc%2Fd%3De&maps=0,2,4,11,14,17,42&regions=as,eu,na", "all regions: %s", url)
 		delete(url)
-		prefs = {region_mask = 0b101, excluded_maps = 0b1111110}
+		prefs = {region_mask = 0b100, excluded_maps = 0b1111110}
 		url = ranked_queue_url("https://x", token, ranked_selected_maps(prefs), ranked_selected_regions(prefs))
-		testing.expectf(t, strings.has_suffix(url, "&maps=0&regions=as,na"), "chosen maps and regions: %s", url)
+		testing.expectf(t, strings.has_suffix(url, "&maps=0&regions=na"), "chosen map and region: %s", url)
+		delete(url)
+		// An older save with several regions ticked queues all of them.
+		prefs = {region_mask = 0b101}
+		url = ranked_queue_url("https://x", token, ranked_selected_maps(prefs), ranked_selected_regions(prefs))
+		testing.expectf(t, strings.has_suffix(url, "&regions=as,eu,na"), "several old regions: %s", url)
 		delete(url)
 
 		Case :: struct { connection, url: string, ok: bool }
@@ -491,21 +496,38 @@ when ODIN_TEST {
 	@(test)
 	ranked_preferences_persist :: proc(t: ^testing.T) {
 		prefs: menuui.Ranked_Preferences
-		testing.expect(t, menuui.ranked_region_mask(prefs) == 0b010 && menuui.ranked_map_mask(prefs) == 0b1111111, "older files queue Krunker's defaults")
-		menuui.ranked_toggle_region(&prefs, 1)
-		testing.expect(t, menuui.ranked_region_mask(prefs) == 0b010, "the last region stays selected")
-		menuui.ranked_toggle_region(&prefs, 2)
-		menuui.ranked_toggle_region(&prefs, 1)
-		testing.expect(t, menuui.ranked_region_mask(prefs) == 0b100, "regions toggle")
+		testing.expect(t, menuui.ranked_region_choice(prefs) == 1 && menuui.ranked_map_mask(prefs) == 0b1111111, "older files queue Krunker's defaults (Europe, every map)")
+		// Migration from the checkbox saves: several regions or All regions -> All regions; one region -> it.
+		Migration :: struct { old: menuui.Ranked_Preferences, choice: i32, migrated: menuui.Ranked_Preferences }
+		migrations := []Migration{
+			{{}, 1, {}},
+			{{region_mask = 0b001}, 0, {region_mask = 0b001}},
+			{{region_mask = 0b100}, 2, {region_mask = 0b100}},
+			{{region_mask = 0b101}, 3, {all_regions = true}},
+			{{region_mask = 0b111}, 3, {all_regions = true}},
+			{{region_mask = 0b010, all_regions = true}, 3, {all_regions = true}},
+			{{region_mask = 0xf8}, 1, {}},
+		}
+		for m in migrations {
+			testing.expectf(t, menuui.ranked_region_choice(m.old) == m.choice && menuui.ranked_preferences_validate(m.old) == m.migrated, "%v migrates to choice %d", m.old, m.choice)
+		}
+		menuui.ranked_set_region(&prefs, 3)
+		testing.expect(t, prefs.all_regions && prefs.region_mask == 0, "All regions")
+		menuui.ranked_set_region(&prefs, 0)
+		testing.expect(t, !prefs.all_regions && prefs.region_mask == 0b001, "one region")
+		menuui.ranked_set_region(&prefs, 9)
+		testing.expect(t, menuui.ranked_region_choice(prefs) == 0, "out-of-range choices are ignored")
 		for i in 0 ..< 6 { menuui.ranked_toggle_map(&prefs, i32(i)) }
 		menuui.ranked_toggle_map(&prefs, 6)
 		testing.expect(t, menuui.ranked_map_mask(prefs) == 0b1000000, "the last map stays selected")
-		testing.expect(t, menuui.ranked_preferences_validate({excluded_maps = 0xffff, region_mask = 0xff}) == menuui.Ranked_Preferences{region_mask = 0b111}, "validation drops unknown bits")
+		testing.expect(t, menuui.ranked_preferences_validate({excluded_maps = 0xffff, region_mask = 0xff}) == menuui.Ranked_Preferences{all_regions = true}, "validation drops unknown bits")
 
 		client: Client
 		apply := ranked_preferences_action
-		apply(&client, {kind = .RANKED_ALL_REGIONS}, ranked_test_save)
+		apply(&client, {kind = .RANKED_REGION, index = 3}, ranked_test_save)
 		testing.expect(t, client.ranked_prefs.all_regions && ranked_test_saved.ranked.all_regions, "All regions saves immediately")
+		apply(&client, {kind = .RANKED_REGION, index = 2}, ranked_test_save)
+		testing.expect(t, ranked_test_saved.ranked.region_mask == 0b100 && !ranked_test_saved.ranked.all_regions, "a single region saves immediately")
 		apply(&client, {kind = .RANKED_MAP, index = 3}, ranked_test_save)
 		testing.expect(t, ranked_test_saved.ranked.excluded_maps == 0b1000, "map choices save immediately")
 		client.ranked.phase = .SEARCHING
@@ -518,10 +540,16 @@ when ODIN_TEST {
 		settings.ranked = {region_mask = 0b001, all_regions = true, excluded_maps = 0b0000110}
 		testing.expect(t, client_settings_save(settings, path), "settings saved")
 		loaded := client_settings_load(path)
-		testing.expect(t, loaded.ranked == settings.ranked, "ranked choices persist in client-settings.json")
+		testing.expect(t, loaded.ranked == menuui.Ranked_Preferences{all_regions = true, excluded_maps = 0b0000110}, "ranked choices persist in client-settings.json")
+		testing.expect(t, os.write_entire_file(path, transmute([]byte)string(`{"version":1,"ranked":{"region_mask":5,"all_regions":false,"excluded_maps":0}}`)) == nil, "checkbox-era file written")
+		loaded = client_settings_load(path)
+		testing.expect(t, loaded.ranked == menuui.Ranked_Preferences{all_regions = true}, "two ticked regions load as All regions")
+		testing.expect(t, os.write_entire_file(path, transmute([]byte)string(`{"version":1,"ranked":{"region_mask":4,"all_regions":false,"excluded_maps":0}}`)) == nil, "checkbox-era file written")
+		loaded = client_settings_load(path)
+		testing.expect(t, loaded.ranked == menuui.Ranked_Preferences{region_mask = 0b100}, "one ticked region loads as that region")
 		testing.expect(t, os.write_entire_file(path, transmute([]byte)string(`{"version":1}`)) == nil, "older file written")
 		loaded = client_settings_load(path)
-		testing.expect(t, loaded.ranked == menuui.Ranked_Preferences{}, "an older file uses Krunker's defaults")
+		testing.expect(t, loaded.ranked == menuui.Ranked_Preferences{}, "an older file uses Krunker's defaults (Europe, every map)")
 		os.remove(path)
 	}
 
@@ -553,13 +581,14 @@ when ODIN_TEST {
 		testing.expect(t, action.kind == .RANKED_OPEN && state.page == .RANKED, "the Ranked button opens the page and tells the client")
 
 		os.make_directory("bin/ranked-queue")
-		Scene :: struct { name: string, ranked: menuui.Ranked_View, labels: []string, controls: int }
+		Scene :: struct { name: string, ranked: menuui.Ranked_View, labels: []string, controls: int, dropdown: bool }
 		scenes := []Scene{
-			{"logged_out", {login_supported = true, status = "Ready to compete? Join the ranked queue!"}, {"Log in to play ranked", "Login"}, 2},
-			{"idle", {logged_in = true, status = "Ready to compete? Join the ranked queue!", prefs = {excluded_maps = 0b0100000}}, {"FIND MATCH", "[x] Europe", "[ ] Asia", "[ ] All regions", "[x] Burg", "[ ] Bureau", "[x] Frontier"}, 13},
-			{"searching", {logged_in = true, phase = .SEARCHING, elapsed = 75, status = "Looking for match... (1:15)", prefs = {all_regions = true}}, {"CANCEL", "Looking for match... (1:15)", "Searching for match... (1:15)", "[x] All regions"}, 13},
-			{"cooldown", {logged_in = true, status = "On cooldown: queue again in 1:30", tone = .WARNING, popup_title = "Cooldown", popup_text = "You are on cooldown and cannot queue for ranked matches. Cooldown will end in 1:30"}, {"Cooldown", "OK"}, 1},
-			{"rejoin", {logged_in = true, rejoin = true, status = "You are already in a Ranked game.", tone = .WARNING}, {"REJOIN", "You are already in a Ranked game."}, 13},
+			{"logged_out", {login_supported = true, status = "Ready to compete? Join the ranked queue!"}, {"Log in to play ranked", "Login"}, 2, false},
+			{"idle", {logged_in = true, status = "Ready to compete? Join the ranked queue!", prefs = {excluded_maps = 0b0100000}}, {"FIND MATCH", "Region", "Europe", "Region: Europe", "[x] Burg", "[ ] Bureau", "[x] Frontier"}, 10, false},
+			{"region_dropdown", {logged_in = true, status = "Ready to compete? Join the ranked queue!", prefs = {region_mask = 0b100}}, {"Asia", "Europe", "North America", "All regions", "Region: North America"}, 4, true},
+			{"searching", {logged_in = true, phase = .SEARCHING, elapsed = 75, status = "Looking for match... (1:15)", prefs = {all_regions = true}}, {"CANCEL", "Looking for match... (1:15)", "Searching for match... (1:15)", "All regions"}, 10, false},
+			{"cooldown", {logged_in = true, status = "On cooldown: queue again in 1:30", tone = .WARNING, popup_title = "Cooldown", popup_text = "You are on cooldown and cannot queue for ranked matches. Cooldown will end in 1:30"}, {"Cooldown", "OK"}, 1, false},
+			{"rejoin", {logged_in = true, rejoin = true, status = "You are already in a Ranked game.", tone = .WARNING}, {"REJOIN", "You are already in a Ranked game."}, 10, false},
 		}
 		view := menuui.View{resolution = "1280 x 720", sensitivity = 1, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS}
 		for size in ([?][2]i32{{1280, 720}, {1920, 1080}}) {
@@ -572,6 +601,7 @@ when ODIN_TEST {
 			for scene in scenes {
 				view.ranked_queue = scene.ranked
 				state.page = .RANKED
+				state.settings_dropdown = scene.dropdown ? .RANKED_REGION : .NONE
 				menuui.build(&state, view, {}, ui.width, ui.height, 1.0/60.0)
 				commands := menuui.build(&state, view, {}, ui.width, ui.height, 1.0/60.0)
 				testing.expect(t, state.errors == 0, "menu layout reported an error")
@@ -590,6 +620,19 @@ when ODIN_TEST {
 					testing.expectf(t, found, "%s: %q is drawn at %v", scene.name, label, size)
 				}
 				testing.expectf(t, state.control_count == scene.controls, "%s: %d controls (expected %d)", scene.name, state.control_count, scene.controls)
+				if scene.dropdown {
+					options := clay.GetElementData(clay.ID("SettingsOptions")).boundingBox
+					field := clay.GetElementData(clay.ID("RankedRegion")).boundingBox
+					maps := clay.GetElementData(clay.ID("RankedMaps")).boundingBox
+					testing.expectf(t, ranked_test_inside(options, overlay) && options.y >= field.y + field.height - 1 && options.y < maps.y + maps.height, "the region list opens below its field over the maps at %v: %v", size, options)
+					on_top := false
+					for command in commands.internalArray[:commands.length] {
+						if command.commandType != .Text || command.zIndex <= 10 { continue }
+						text := command.renderData.text.stringContents
+						if string(text.chars[:text.length]) == "North America" { on_top = true }
+					}
+					testing.expectf(t, on_top, "the region list draws above the page at %v", size)
+				}
 				if len(scene.ranked.popup_title) > 0 {
 					popup := clay.GetElementData(clay.ID("RankedPopup")).boundingBox
 					testing.expectf(t, ranked_test_inside(popup, overlay), "the popup sits in the ranked page at %v", size)
@@ -602,8 +645,32 @@ when ODIN_TEST {
 				testing.expect(t, stbi.write_png(fmt.ctprintf("bin/ranked-queue/%s_%dx%d.png", scene.name, size[0], size[1]), size[0], size[1], 3, &pixels[(size[1]-1)*size[0]*3], -size[0]*3) != 0, "preview PNG written")
 			}
 		}
-		// Escape closes the popup before the page.
+		// The region dropdown: choosing closes it and tells the client; Escape
+		// and a click outside close it; it stays closed while queued.
+		view.ranked_queue = scenes[1].ranked
+		state.page, state.settings_dropdown = .RANKED, .NONE
+		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
+		opened := menuui.activate(&state, {action = {kind = .SETTINGS_DROPDOWN, index = i32(menuui.Settings_Dropdown.RANKED_REGION)}})
+		testing.expect(t, opened.kind == .NONE && state.settings_dropdown == .RANKED_REGION && state.focus == clay.ID("SettingsOption", 1).id, "the dropdown opens on the current region")
+		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
+		testing.expect(t, state.settings_dropdown == .RANKED_REGION, "the dropdown stays open on the ranked page")
+		chosen := menuui.activate(&state, {action = {kind = .RANKED_REGION, index = 3}})
+		testing.expect(t, chosen.kind == .RANKED_REGION && chosen.index == 3 && state.settings_dropdown == .NONE, "choosing closes the dropdown and tells the client")
+		menuui.activate(&state, {action = {kind = .SETTINGS_DROPDOWN, index = i32(menuui.Settings_Dropdown.RANKED_REGION)}})
+		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
+		state.previous = {}
+		testing.expect(t, menuui.interact(&state, {escape = true}, view).kind == .NONE && state.settings_dropdown == .NONE && state.page == .RANKED, "Escape closes the dropdown, not the page")
+		menuui.activate(&state, {action = {kind = .SETTINGS_DROPDOWN, index = i32(menuui.Settings_Dropdown.RANKED_REGION)}})
+		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
+		state.previous = {}
+		testing.expect(t, menuui.interact(&state, {down = true, pointer = {5, 700}}, view).kind == .NONE && state.settings_dropdown == .NONE, "a click outside closes the dropdown")
+		state.settings_dropdown = .RANKED_REGION
 		view.ranked_queue = scenes[3].ranked
+		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
+		testing.expect(t, state.settings_dropdown == .NONE, "the dropdown closes while queued")
+
+		// Escape closes the popup before the page.
+		view.ranked_queue = scenes[4].ranked
 		state.page = .RANKED
 		menuui.build(&state, view, {}, 1280, 720, 1.0/60.0)
 		state.previous = {}

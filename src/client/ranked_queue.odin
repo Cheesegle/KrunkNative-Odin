@@ -140,9 +140,10 @@ ranked_selected_maps :: proc(prefs: menuui.Ranked_Preferences, allocator := cont
 }
 
 ranked_selected_regions :: proc(prefs: menuui.Ranked_Preferences, allocator := context.temp_allocator) -> []string {
-	mask := prefs.all_regions ? u32(1 << len(menuui.RANKED_REGIONS) - 1) : menuui.ranked_region_mask(prefs)
+	// One region, or Object.keys({as, eu, na}) for All regions.
+	choice := menuui.ranked_region_choice(prefs)
 	regions := make([dynamic]string, 0, len(menuui.RANKED_REGIONS), allocator)
-	for region, i in menuui.RANKED_REGIONS { if mask & (1 << u32(i)) != 0 { append(&regions, region) } }
+	for region, i in menuui.RANKED_REGIONS { if choice == menuui.RANKED_ALL_REGIONS_CHOICE || choice == i32(i) { append(&regions, region) } }
 	return regions[:]
 }
 
@@ -667,13 +668,12 @@ ranked_view :: proc(client: ^Client, page_open: bool) -> menuui.Ranked_View {
 	return view
 }
 
-// Region, all-regions and map choices save immediately, like Krunker's
+// Region and map choices save immediately, like Krunker's
 // s_rankedAllRegions localStorage entry.
 ranked_preferences_action :: proc(client: ^Client, action: menuui.Action, save: proc(Client_Settings) -> bool = ranked_settings_save) {
 	if client.ranked.phase != .IDLE { return }
 	#partial switch action.kind {
-	case .RANKED_REGION: menuui.ranked_toggle_region(&client.ranked_prefs, action.index)
-	case .RANKED_ALL_REGIONS: client.ranked_prefs.all_regions = !client.ranked_prefs.all_regions
+	case .RANKED_REGION: menuui.ranked_set_region(&client.ranked_prefs, action.index)
 	case .RANKED_MAP: menuui.ranked_toggle_map(&client.ranked_prefs, action.index)
 	case: return
 	}

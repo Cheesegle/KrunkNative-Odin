@@ -8,10 +8,10 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, RANKED }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_ALL_REGIONS, RANKED_MAP, RANKED_POPUP_CLOSE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
@@ -244,13 +244,18 @@ State :: struct {
 	search_tab: Settings_Tab,
 	search_section: string,
 	search_tab_pending, search_section_pending, search_tab_match, search_section_match, search_found: bool,
+	// The ranked region choice shown by the last build (ranked_region_choice),
+	// so the region dropdown opens on it.
+	ranked_region: i32,
 }
 
 prepare_settings :: proc(state: ^State, view: View) {
 	if state.page != .SETTINGS && state.page != .CONTROLS {
 		state.settings_active = false
 		state.scrollbar_dragging = false
-		state.binding_capture, state.settings_dropdown = 0, .NONE
+		state.binding_capture = 0
+		// The ranked page shares the Settings dropdown popup for its region.
+		if !(state.page == .RANKED && state.settings_dropdown == .RANKED_REGION) { state.settings_dropdown = .NONE }
 		state.number_edit = .NONE
 		state.color_edit = 0
 		settings_import_close(state)
@@ -504,6 +509,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .ANISOTROPY:
 			for value, i in ([5]i32{0, 2, 4, 8, 16}) { if value == state.settings_draft.quality.anisotropy { index = i32(i) } }
 		case .MENU_FPS_LIMIT: index = menu_fps_limit_index(state.settings_draft.menu_fps_limit)
+		case .RANKED_REGION: index = clamp(state.ranked_region, 0, RANKED_ALL_REGIONS_CHOICE)
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
 		return {}
@@ -725,6 +731,11 @@ activate :: proc(state: ^State, control: Control) -> Action {
 	if control.action.kind == .INSPECT_CLASS || control.action.kind == .EDIT_INVITE { return {} }
 	// Opening Ranked is navigation the client also hears: it checks the login
 	// and, like Krunker's ranked menu, whether a ranked match is already running.
+	// Choosing a region closes the dropdown, as Settings options do.
+	if control.action.kind == .RANKED_REGION {
+		state.settings_dropdown, state.pressed, state.focus = .NONE, 0, clay.ID("RankedRegion").id
+		return control.action
+	}
 	if control.action.kind == .RANKED_OPEN {
 		if state.page == .HOME { state.return_focus = control.id.id }
 		state.page, state.focus, state.pressed = .RANKED, 0, 0
@@ -766,7 +777,7 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .CLASSES { container = "ClassPicker" }
 	}
 	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF { container = "SettingsOptions" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))
