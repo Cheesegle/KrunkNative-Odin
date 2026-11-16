@@ -144,7 +144,16 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_fps_row(state)
 		settings_section(state, "Players")
 		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
+		settings_slider(state, "Nametag size", "HudNametagSize", nametag_scale(values.hud), NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX, {kind = .NAMETAG_SIZE})
+		settings_crosshair_color(state, "Nametag color", NAMETAG_TEAM_COLOR_FIELD)
+		settings_crosshair_color(state, "Enemy nametag color", NAMETAG_ENEMY_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Nametag size scales the name only (75-200% of Krunker's size). As in Krunker, names are white, with enemies in team modes #EB5656; FFA names use Nametag color.")
 		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+		settings_toggle_row(state, "Healthbar border", "HudHealthbarBorder", values.hud.healthbar_border, {kind = .HUD_TOGGLE, index = 7})
+		// Krunker healthColE / healthColT (interface category).
+		settings_crosshair_color(state, "Enemy healthbar color", HEALTHBAR_ENEMY_COLOR_FIELD)
+		settings_crosshair_color(state, "Team healthbar color", HEALTHBAR_TEAM_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Krunker's defaults are #EB5656 for enemies (also their names in team modes) and #9EEB56 for teammates. Click a color to type or paste #RRGGBB.")
 		settings_section(state, "Killfeed")
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
@@ -167,7 +176,8 @@ settings_import_close :: proc(state: ^State) {
 }
 
 // Mirrors Krunker's importSettingsPopup: a header, a paste field and one
-// Import button. Enter imports; Escape or a click outside closes the popup.
+// Import button, plus Krodin's exclude toggles. Enter imports (or flips a
+// focused toggle; Tab reaches them); Escape or a click outside closes it.
 settings_import_popup :: proc(state: ^State) {
 	if !state.import_open { return }
 	s := state.scale
@@ -188,8 +198,30 @@ settings_import_popup :: proc(state: ^State) {
 			label := len(value) == 0 ? "Press Ctrl+V to paste, or type here." : fmt.tprintf("%s|", shorten(value, 48))
 			text(label, 18, s, len(value) == 0 ? SETTINGS_LINE : SETTINGS_DARK)
 		}
+		settings_import_exclude_rows(state)
 		if state.settings_message_length > 0 && state.settings_message_error { text(settings_message(state), 16, s, {255, 100, 100, 255}) }
 		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Import", "ImportConfirm", {kind = .SETTINGS_IMPORT}, selected = true) }
+	}
+}
+
+SETTINGS_IMPORT_EXCLUDE_LABELS := [Krunker_Import_Group]string{.SENSITIVITY = "Exclude sensitivity", .KEYBINDS = "Exclude keybinds", .SOUND = "Exclude sound"}
+
+// Krodin's import filter: one On/Off toggle per group, like the settings rows.
+// Krunker's popup has none; excluded groups keep their current values.
+settings_import_exclude_rows :: proc(state: ^State) {
+	s := state.scale
+	if clay.UI(clay.ID("ImportExclude"))({layout = {sizing = {width = clay.SizingGrow()}, layoutDirection = .TopToBottom, childGap = u16(6*s)}}) {
+		text("Krodin extra: excluded settings keep their current values.", 16, s, SETTINGS_MUTED)
+		for group in Krunker_Import_Group {
+			excluded := group in state.import_exclude
+			if clay.UI(clay.ID("ImportExcludeRow", u32(group)))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childAlignment = {y = .Center}}}) {
+				text(SETTINGS_IMPORT_EXCLUDE_LABELS[group], 20, s)
+				spacer()
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(128*s)}}}) {
+					settings_button(state, excluded ? "On" : "Off", "ImportExcludeToggle", {kind = .SETTINGS_IMPORT_EXCLUDE, index = i32(group)}, selected = excluded)
+				}
+			}
+		}
 	}
 }
 
@@ -278,7 +310,13 @@ settings_import_interact :: proc(state: ^State, input: Input) -> (action: Action
 		state.import_buffer[state.import_length] = c
 		state.import_length += 1
 	}
-	if input.enter && !state.previous.enter { return activate(state, {action = {kind = .SETTINGS_IMPORT}}), true }
+	if input.enter && !state.previous.enter {
+		// Typed text always goes to the paste field, so Enter flips a focused toggle.
+		for control in state.controls[:state.control_count] {
+			if control.id.id == state.focus && control.action.kind == .SETTINGS_IMPORT_EXCLUDE { return activate(state, control), true }
+		}
+		return activate(state, {action = {kind = .SETTINGS_IMPORT}}), true
+	}
 	if input.down && !state.previous.down && !clay.PointerOver(clay.ID("ImportPopup")) {
 		settings_import_close(state)
 		state.settings_message_length, state.pressed = 0, 0

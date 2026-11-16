@@ -69,6 +69,9 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.crosshair = menuui.crosshair_settings_validate(result.crosshair)
 	result.hitmarker = menuui.hitmarker_settings_validate(result.hitmarker)
 	result.damage = menuui.damage_settings_validate(result.damage)
+	result.hud.healthbar_colors = menuui.healthbar_colors_validate(result.hud.healthbar_colors)
+	result.hud.nametag_scale = menuui.nametag_scale(result.hud)
+	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
 	defaults := menuui.default_bindings()
 	for action in menuui.Binding_Action {
 		for code, slot in result.bindings[action] {
@@ -80,13 +83,16 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 }
 
 client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Settings {
+	// Every path is validated: settings stored as 0 mean "Krunker's default"
+	// (healthbar and nametag colours, nametag size), and the settings menu
+	// shows the stored value, so an unvalidated 0 appeared as black (#000000).
 	settings := client_settings_defaults()
 	data, err := os.read_entire_file_from_path(path, context.allocator)
-	if err != nil { return settings }
+	if err != nil { return client_settings_validate(settings) }
 	defer delete(data)
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
-		return client_settings_defaults()
+		return client_settings_validate(client_settings_defaults())
 	}
 	return client_settings_validate(settings)
 }

@@ -244,7 +244,8 @@ test_menu :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("SettingsImport")).kind != .NONE || !state.import_open { fmt.println("Import popup did not open"); return false }
 	menu_test_frame(&state, view, {})
-	if !clay.GetElementData(clay.ID("ImportPopup")).found || state.control_count != 1 { fmt.println("Import popup must cover the settings controls"); return false }
+	// Import plus Krodin's three exclude toggles; nothing behind the popup.
+	if !clay.GetElementData(clay.ID("ImportPopup")).found || state.control_count != 1+len(menuui.Krunker_Import_Group) || state.import_exclude != {} { fmt.println("Import popup must cover the settings controls, toggles off"); return false }
 	menu_test_frame(&state, view, {text = "not krunker settings"})
 	draft_before_import := state.settings_draft
 	if menu_test_click(&state, view, clay.ID("ImportConfirm")).kind != .NONE || !state.import_open || !state.settings_message_error || state.settings_draft != draft_before_import { fmt.println("Invalid import text must leave settings untouched"); return false }
@@ -258,6 +259,7 @@ test_menu :: proc() -> bool {
 		fmt.println("Valid Krunker settings must import into the draft and be applied", value, state.settings_draft.fov); return false
 	}
 	if menuui.settings_message(&state) != "Imported 3 Krunker settings. Ignored 2 unsupported." { fmt.println("Import result message:", menuui.settings_message(&state)); return false }
+	if !test_menu_import_exclude(&state, view) { return false }
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("SettingsExport")).kind != .SETTINGS_EXPORT { fmt.println("Export must request a clipboard copy"); return false }
 	menu_test_frame(&state, view, {})
@@ -879,4 +881,54 @@ test_menu_unbind :: proc(state: ^menuui.State, view: menuui.View) -> bool {
 	menu_test_frame(state, view, {})
 	if state.settings_draft.bindings != before || state.errors != 0 { fmt.println("Delete must only unbind a focused slot"); return false }
 	return true
+}
+
+// Krodin's import filter: three toggles in the Import popup, reachable by mouse
+// and keyboard, that keep the excluded groups and are remembered for the session.
+test_menu_import_exclude :: proc(state: ^menuui.State, view: menuui.View) -> bool {
+	inside :: proc(box, parent: clay.BoundingBox) -> bool {
+		return box.width > 0 && box.height > 0 && box.x >= parent.x-1 && box.y >= parent.y-1 && box.x+box.width <= parent.x+parent.width+1 && box.y+box.height <= parent.y+parent.height+1
+	}
+	toggle :: proc(group: menuui.Krunker_Import_Group) -> clay.ElementId { return clay.ID("ImportExcludeToggle", u32(group)) }
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, clay.ID("SettingsImport"))
+	menu_test_frame(state, view, {})
+	popup := clay.GetElementData(clay.ID("ImportPopup")).boundingBox
+	if !inside(popup, clay.GetElementData(clay.ID("Overlay")).boundingBox) || !inside(popup, {0, 0, 1280, 720}) { fmt.println("Import popup must fit at 1280x720", popup); return false }
+	for id in ([?]clay.ElementId{clay.ID("ImportText"), toggle(.SENSITIVITY), toggle(.KEYBINDS), toggle(.SOUND), clay.ID("ImportConfirm")}) {
+		if !inside(clay.GetElementData(id).boundingBox, popup) { fmt.println("Import popup control must fit inside it", id); return false }
+	}
+	// Mouse: click Exclude keybinds.
+	menu_test_click(state, view, toggle(.KEYBINDS))
+	if state.import_exclude != {.KEYBINDS} || !state.import_open { fmt.println("Clicking Exclude keybinds must toggle only it", state.import_exclude); return false }
+	// Keyboard: Tab from the focused keybinds toggle to Exclude sound, Enter flips it without importing.
+	menu_test_frame(state, view, {tab = true})
+	menu_test_frame(state, view, {})
+	if state.focus != toggle(.SOUND).id { fmt.println("Tab must reach Exclude sound"); return false }
+	if menu_test_frame(state, view, {enter = true}).kind != .NONE || state.import_exclude != {.KEYBINDS, .SOUND} || !state.import_open { fmt.println("Enter must flip the focused toggle, not import", state.import_exclude); return false }
+	menu_test_frame(state, view, {})
+	before := state.settings_draft
+	menu_test_frame(state, view, {text = `{"fov":105,"sound":0.2,"gunsVolume":0.9,"controls":{"jumpKey":71,"sprayKey":72}}`})
+	value := menu_test_click(state, view, clay.ID("ImportConfirm"))
+	draft := state.settings_draft
+	if value.kind != .SETTINGS_IMPORT || state.import_open || draft.fov != 105 || draft.bindings != before.bindings || draft.audio_volumes != before.audio_volumes || draft.sensitivity != 1 {
+		fmt.println("Excluded keybinds and sound must keep their values while the rest imports", draft.fov, draft.audio_volumes, draft.sensitivity); return false
+	}
+	if menuui.settings_message(state) != "Imported 1 settings, skipped 4 (keybinds, sound). Ignored 0 unsupported." { fmt.println("Import exclude message:", menuui.settings_message(state)); return false }
+	// The toggles are remembered for the session, across closing Settings.
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, clay.ID("SettingsCancel"))
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, clay.ID("Settings", u32(menuui.Page.SETTINGS)))
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, clay.ID("SettingsImport"))
+	if state.import_exclude != {.KEYBINDS, .SOUND} { fmt.println("Import toggles must be remembered for the session"); return false }
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, toggle(.KEYBINDS))
+	menu_test_frame(state, view, {})
+	menu_test_click(state, view, toggle(.SOUND))
+	if state.import_exclude != {} || !state.import_open { fmt.println("Toggles must switch back off"); return false }
+	menu_test_frame(state, view, {})
+	menu_test_frame(state, view, {escape = true})
+	return !state.import_open && state.page == .SETTINGS
 }

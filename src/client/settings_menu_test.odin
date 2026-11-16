@@ -99,7 +99,7 @@ when ODIN_TEST {
 		settings.bindings[.RELOAD] = {'T', 0}
 		settings.bindings[.INSPECT] = {'G', -5}
 		settings.bindings[.AIM] = {0, 0}
-		settings.hud = {hide_round_score = true}
+		settings.hud = {hide_round_score = true, healthbar_colors = {enemy = 0x3366ff, team = 0xffaa00}, nametag_scale = 1.5, nametag_colors = {enemy = 0x3366ff, team = 0xffcc00}}
 		settings.monitor_index, settings.display_mode, settings.resolution_index, settings.vsync = 1, 2, 2, true
 		settings.visuals.values[.GAMMA], settings.visuals.values[.AMBIENT] = 1.25, 0.75
 		settings.visuals.hide_cats, settings.visuals.hide_extra_props = true, true
@@ -151,7 +151,7 @@ when ODIN_TEST {
 		loaded = client_settings_validate(settings)
 		testing.expect(t, loaded.bindings[.FORWARD] == menuui.default_bindings()[.FORWARD], "invalid and reserved key codes must never reach GLFW")
 		testing.expect(t, os.write_entire_file(path, "invalid json") == nil)
-		testing.expect(t, client_settings_load(path) == client_settings_defaults(), "malformed preferences must fall back safely")
+		testing.expect(t, client_settings_load(path) == client_settings_validate(client_settings_defaults()), "malformed preferences must fall back safely (to the validated defaults)")
 	}
 
 	@(test)

@@ -69,8 +69,28 @@ KRUNKER_END_MAX_STATS :: 6
 // One row of the END packet's endData.ed table, in the server's endSort order.
 Krunker_End_Entry :: struct {
 	sid: i32,
+	// Resolved from the player list when END arrives (0 when unknown).
+	team: i32,
 	name: string,
 	cells: [KRUNKER_END_MAX_STATS]string,
+}
+
+// A copy of the last END, kept after INIT clears the live end state. The
+// server's endGame(endIndex, winner, skip) restarts at once when skip is set
+// (END's first value 2, endTimer 1 ms), so a match ended early can be followed
+// by the next INIT before the results were ever drawn.
+Krunker_End_Results :: struct {
+	// Increments with every END; 0 means none was received.
+	revision: u64,
+	received_at: f64,
+	// When the following INIT arrived (0 until then).
+	next_init_at: f64,
+	// END's first value: 2 when the server skips its end flow.
+	game_state: i32,
+	mode_index, local_sid, local_team: i32,
+	result, winner_team, end_index: i32,
+	team_scores: [3]u32,
+	entries: [dynamic]Krunker_End_Entry,
 }
 
 Krunker_Countdown :: enum { NONE, WAITING, WARMUP, STARTING, INTERMISSION }
@@ -147,11 +167,14 @@ Krunker_World_State :: struct {
 	winner_team, end_result: i32,
 	// END was applied for this match; gsc can end the match before it arrives.
 	end_received: bool,
-	// END endIndex (0 normal, 2 match over, 3 abandoned) and its final table.
+	// END endIndex (null/0 normal, 3 abandoned, 4 ended with a given winner)
+	// and its final table.
 	end_index: i32,
 	end_entries: [dynamic]Krunker_End_Entry,
 	// Server-formatted end-screen countdown from t with index 1.
 	end_timer_text: string,
+	// The last END, kept across INIT.
+	final_results: Krunker_End_Results,
 	rounds_total: u32,
 	objective_weapon: i32,
 	projectile_events: [dynamic]Krunker_Projectile_Event,
@@ -175,6 +198,8 @@ krunker_world_reset :: proc(state: ^Krunker_World_State) {
 	delete(state.timer_text)
 	krunker_world_clear_end(state)
 	delete(state.end_entries)
+	krunker_world_clear_end_entries(&state.final_results.entries)
+	delete(state.final_results.entries)
 	state^ = {map_index = -1, mode_index = -1, event_index = -1, local_sid = -1}
 }
 
@@ -250,6 +275,7 @@ krunker_world_apply_init :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.sync_received_at, state.previous_sync_received_at = 0, 0
 	state.has_previous_sync, state.send_rate = false, 0
 	krunker_world_apply_game_config(state, packet)
+	if state.final_results.revision > 0 && state.final_results.next_init_at == 0 { state.final_results.next_init_at = max(state.received_at, state.final_results.received_at) }
 	for player in state.players { delete(player.name); delete(player.socket_id) }
 	clear(&state.players)
 	clear(&state.shots)
