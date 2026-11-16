@@ -20,6 +20,9 @@ HUD_Settings :: struct {
 	hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool,
 	hide_kill_feed: bool,
 	kill_feed_limit: i32,
+	// Krodin's own: Krunker's nameplate bars have no border (a translucent
+	// black track, `rgba(0, 0, 0, 0.4)`, under the fill). Off by default.
+	healthbar_border: bool,
 }
 KILL_FEED_DEFAULT_LIMIT :: 8
 KILL_FEED_MAX_LIMIT :: 10
@@ -577,6 +580,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
+			case 7: state.settings_draft.hud.healthbar_border = !state.settings_draft.hud.healthbar_border
 			}
 			return {}
 		case .RESOLUTION:

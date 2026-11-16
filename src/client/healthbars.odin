@@ -254,11 +254,14 @@ player_healthbars_render :: proc(client: ^Client) {
 		friendly := client.me.team != 0 && player.team == client.me.team
 		alpha := player_nameplate_display_alpha(player.nameplate_alpha)
 		if show_bars {
-			border := max(1, 2*unit)
 			progress := clamp(player.health/f32(player.max_health), 0, 1)
 			color := shared.hex_to_vec(friendly ? 0x9eeb56 : 0xff4444)
 			color.a *= alpha
-			ui_fill_rect(ui, {0, 0, 0, 0.85*alpha}, layout.bar_left-border, layout.bar_top-border, layout.bar_width+2*border, layout.bar_height+2*border)
+			// Krunker draws no border; Krodin's optional one is 2 units of black.
+			if client.hud_settings.healthbar_border {
+				border := max(1, 2*unit)
+				ui_fill_rect(ui, {0, 0, 0, 0.85*alpha}, layout.bar_left-border, layout.bar_top-border, layout.bar_width+2*border, layout.bar_height+2*border)
+			}
 			ui_fill_rect(ui, {0.15, 0.15, 0.15, alpha}, layout.bar_left, layout.bar_top, layout.bar_width, layout.bar_height)
 			ui_fill_rect(ui, color, layout.bar_left, layout.bar_top, layout.bar_width*progress, layout.bar_height)
 		}
