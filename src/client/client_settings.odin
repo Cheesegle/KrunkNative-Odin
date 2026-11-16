@@ -83,13 +83,16 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 }
 
 client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Settings {
+	// Every path is validated: settings stored as 0 mean "Krunker's default"
+	// (healthbar and nametag colours, nametag size), and the settings menu
+	// shows the stored value, so an unvalidated 0 appeared as black (#000000).
 	settings := client_settings_defaults()
 	data, err := os.read_entire_file_from_path(path, context.allocator)
-	if err != nil { return settings }
+	if err != nil { return client_settings_validate(settings) }
 	defer delete(data)
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
-		return client_settings_defaults()
+		return client_settings_validate(client_settings_defaults())
 	}
 	return client_settings_validate(settings)
 }

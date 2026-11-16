@@ -151,7 +151,7 @@ when ODIN_TEST {
 		loaded = client_settings_validate(settings)
 		testing.expect(t, loaded.bindings[.FORWARD] == menuui.default_bindings()[.FORWARD], "invalid and reserved key codes must never reach GLFW")
 		testing.expect(t, os.write_entire_file(path, "invalid json") == nil)
-		testing.expect(t, client_settings_load(path) == client_settings_defaults(), "malformed preferences must fall back safely")
+		testing.expect(t, client_settings_load(path) == client_settings_validate(client_settings_defaults()), "malformed preferences must fall back safely (to the validated defaults)")
 	}
 
 	@(test)

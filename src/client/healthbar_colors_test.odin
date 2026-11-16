@@ -191,3 +191,19 @@ when ODIN_TEST {
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)
 	}
 }
+
+// A first run (no settings file) and a corrupt file must show Krunker's red
+// in the colour pickers, not the stored 0 as black.
+@(test)
+healthbar_colors_default_without_a_settings_file :: proc(t: ^testing.T) {
+	missing := client_settings_load("logs/__no_such_settings_file__.json")
+	testing.expect_value(t, missing.hud.healthbar_colors, menuui.DEFAULT_HEALTHBAR_COLORS)
+	testing.expect_value(t, missing.hud.nametag_colors, menuui.DEFAULT_NAMETAG_COLORS)
+	testing.expect_value(t, missing.hud.nametag_scale, f32(1))
+	path := "__corrupt_settings_test__.json"
+	testing.expect(t, os.write_entire_file(path, transmute([]byte)string("{not json")) == nil)
+	defer os.remove(path)
+	corrupt := client_settings_load(path)
+	testing.expect_value(t, corrupt.hud.healthbar_colors, menuui.DEFAULT_HEALTHBAR_COLORS)
+	testing.expect_value(t, corrupt.hud.nametag_colors, menuui.DEFAULT_NAMETAG_COLORS)
+}
