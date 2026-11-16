@@ -1,0 +1,14 @@
+kemar_diffuse.bin is a verbatim repacking of the MIT KEMAR diffuse-field
+equalized HRTF set (128-point responses, 44.1 kHz, elevations -40..90 degrees),
+produced with tools/hrtf_kemar_pack.py from
+https://sound.media.mit.edu/resources/KEMAR/diffuse.zip
+
+Authors: Bill Gardner and Keith Martin, MIT Media Lab Machine Listening Group.
+Reference: W. G. Gardner and K. D. Martin, "HRTF measurements of a KEMAR",
+J. Acoust. Soc. Am. 97(6), 1995, pp. 3907-3908.
+
+Licence, from the archive's README:
+
+  This data is Copyright 1994 by the MIT Media Laboratory. It is provided
+  free with no restrictions on use, provided the authors are cited when the
+  data is used in any research or commercial application.

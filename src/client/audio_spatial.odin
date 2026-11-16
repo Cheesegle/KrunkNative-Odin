@@ -14,6 +14,11 @@ KRUNKER_REF_DISTANCE :: 25        // play3D refDistance fallback (0x19); every w
 KRUNKER_ROLLOFF :: 1              // play3D rolloffFactor fallback; every weapon has rollOff 1.
 KRUNKER_MAX_DISTANCE :: 10000     // Howler's default maxDistance; the inverse model ignores it.
 KRUNKER_STEP_RANGE :: 170         // playerStep culls remote footsteps beyond 170 units (0xaa).
+// "Reduced" distance falloff: the same inverse curve with a third of the
+// rolloff. Unity inside 25 units as in Krunker; 100 units is -6 dB instead of
+// -12 dB and 400 units -15.6 dB instead of -24 dB, so far sounds stay audible
+// while distance is still easy to judge.
+REDUCED_ROLLOFF :: 1.0 / 3.0
 
 Audio_Listener :: struct {
 	position, forward: shared.Vec3,
@@ -22,6 +27,7 @@ Audio_Listener :: struct {
 // Parameters handed from the game thread to the mixer thread.
 Spatial_Params :: struct {
 	spatial, stereo_source: bool,
+	hrtf: bool,                // Binaural rendering instead of equal-power panning.
 	gain: f32,                 // Distance gain including Krunker's 3D volume.
 	azimuth, elevation: f32,   // Degrees; WebAudio convention, +azimuth = right.
 }
@@ -37,7 +43,13 @@ Spatial_Node :: struct {
 	params: Spatial_Params,
 	seen_reset: u32,
 	mix: [4]f32,                 // outL = m0*inL + m1*inR, outR = m2*inL + m3*inR.
-	primed: bool,
+	primed, rendering_hrtf: bool,
+	hrtf_set: ^Hrtf_Set,         // Shared, immutable after load; nil when unavailable.
+	hrtf: Hrtf_Voice,
+	// Multichannel output: nil for a stereo engine.
+	layout: ^Surround_Layout,
+	out_channels: int,
+	gains: [SURROUND_MAX_CHANNELS]f32,
 }
 
 @(private="file") spatial_node_channels := [1]u32{2}
@@ -47,13 +59,20 @@ Spatial_Node :: struct {
 	outputBusCount = 1,
 }
 
-spatial_node_init :: proc(engine: ^ma.engine, node: ^Spatial_Node) -> bool {
+// Voices always deliver stereo (the decoded file, mono duplicated); the node
+// outputs the engine's channel count. `output` is the node it feeds.
+spatial_node_init :: proc(engine: ^ma.engine, node: ^Spatial_Node, hrtf_set: ^Hrtf_Set = nil, layout: ^Surround_Layout = nil, output: ^ma.node = nil) -> bool {
+	node.hrtf_set, node.layout = hrtf_set, layout
+	out_channels := ma.engine_get_channels(engine)
+	node.out_channels = int(out_channels)
+	if layout == nil && out_channels != 2 { return false }
 	config := ma.node_config_init()
 	config.vtable = &spatial_node_vtable
 	config.pInputChannels = &spatial_node_channels[0]
-	config.pOutputChannels = &spatial_node_channels[0]
+	config.pOutputChannels = &out_channels
 	if ma.node_init(ma.engine_get_node_graph(engine), &config, nil, cast(^ma.node)node) != .SUCCESS { return false }
-	if ma.node_attach_output_bus(cast(^ma.node)node, 0, ma.engine_get_endpoint(engine), 0) != .SUCCESS {
+	target := output != nil ? output : ma.engine_get_endpoint(engine)
+	if ma.node_attach_output_bus(cast(^ma.node)node, 0, target, 0) != .SUCCESS {
 		ma.node_uninit(cast(^ma.node)node, nil)
 		return false
 	}
@@ -148,16 +167,31 @@ spatial_target_matrix :: proc "contextless" (params: Spatial_Params) -> [4]f32 {
 spatial_node_process :: proc "c" (base: ^ma.node, frames_in: ^[^]f32, frame_count_in: ^u32, frames_out: ^[^]f32, frame_count_out: ^u32) {
 	context = runtime.default_context()
 	node := cast(^Spatial_Node)base
-	input, output := frames_in^, frames_out^
-	count := int(frame_count_out^)
+	spatial_node_render(node, frames_in^, frames_out^, int(frame_count_out^))
+}
+
+spatial_node_render :: proc "contextless" (node: ^Spatial_Node, input, output: [^]f32, count: int) {
+	snap := false
 	if params, reset, ok := spatial_node_read(node); ok {
 		node.params = params
 		if reset != node.seen_reset {
 			node.seen_reset = reset
-			node.mix = spatial_target_matrix(params)
+			snap = true
 		}
 	}
+	if node.layout != nil {
+		surround_render(node, snap, input, output, count)
+		return
+	}
+	if node.params.spatial && node.params.hrtf && node.hrtf_set != nil {
+		// Entering binaural mode (new sound or a settings change) starts clean.
+		hrtf_voice_process(&node.hrtf, node.hrtf_set, node.params, snap || !node.rendering_hrtf, input, output, count)
+		node.rendering_hrtf = true
+		return
+	}
 	target := spatial_target_matrix(node.params)
+	if snap || node.rendering_hrtf { node.mix = target }
+	node.rendering_hrtf = false
 	if !node.params.spatial && node.mix == target {
 		copy(output[:count*2], input[:count*2])
 		return
@@ -172,4 +206,42 @@ spatial_node_process :: proc "c" (base: ^ma.node, frames_in: ^[^]f32, frame_coun
 		output[i*2+1] = m[2]*l + m[3]*r
 	}
 	node.mix = target
+}
+
+// Surround target gains per output channel. Non-spatial audio goes to the
+// front pair unchanged (left to FL, right to FR) and is handled separately.
+surround_target_gains :: proc "contextless" (layout: ^Surround_Layout, params: Spatial_Params) -> [SURROUND_MAX_CHANNELS]f32 {
+	gains := surround_gains(layout, params.azimuth)
+	for &g in gains { g *= params.gain }
+	return gains
+}
+
+@(private="file")
+surround_render :: proc "contextless" (node: ^Spatial_Node, snap: bool, input, output: [^]f32, count: int) {
+	layout := node.layout
+	channels := node.out_channels
+	for i in 0 ..< count*channels { output[i] = 0 }
+	if !node.params.spatial {
+		for i in 0 ..< count {
+			output[i*channels + layout.front_left] = input[i*2]
+			output[i*channels + layout.front_right] = input[i*2 + 1]
+		}
+		node.gains = {}
+		return
+	}
+	target := surround_target_gains(layout, node.params)
+	if snap { node.gains = target }
+	step: [SURROUND_MAX_CHANNELS]f32
+	if count > 0 { for c in 0 ..< channels { step[c] = (target[c] - node.gains[c]) / f32(count) } }
+	g := node.gains
+	// Stereo effects are summed to mono at constant power before panning.
+	stereo := node.params.stereo_source
+	for i in 0 ..< count {
+		mono := stereo ? (input[i*2] + input[i*2 + 1]) * (1 / math.SQRT_TWO) : input[i*2]
+		for c in 0 ..< channels {
+			g[c] += step[c]
+			output[i*channels + c] = mono * g[c]
+		}
+	}
+	node.gains = target
 }

@@ -135,6 +135,7 @@ Krunker_World_State :: struct {
 	// CHANGE_HEALTH drops of the local player with the attacker's x/z, for
 	// Krunker's hit indicators (browser JP).
 	damage_revision: u64,
+	health_drop_revision: u64, // Every non-silent local health drop (damage sound).
 	damage_source: [2]f32,
 	winner_team, end_result: i32,
 	// END was applied for this match; gsc can end the match before it arrives.

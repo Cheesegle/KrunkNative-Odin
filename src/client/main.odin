@@ -924,7 +924,14 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	}
 	player.shot_seq = state.shot_seq
 	for shot_index in 0 ..< int(new_shots) {
+		// Several rounds in one snapshot played their sounds as one loud stack;
+		// space them by the weapon's fire interval as they were actually fired.
+		count := len(client.game.presentation_events)
 		shared.player_emit_presentation(player, .FIRE)
+		if shot_index > 0 && len(client.game.presentation_events) > count {
+			interval := player.weapon.burst ? player.weapon.burst_rate : player.weapon.rate * client.game.config.fire_rate
+			client.game.presentation_events[count].delay = f32(shot_index) * interval
+		}
 		if player.weapon.melee {
 			is_throw := player.can_throw && player.aim_val >= 1 && player.game.config.throwable_melees
 			shared.player_start_melee_animation(player, is_throw ? 3 : player.can_throw ? 1 : 2)
@@ -1085,13 +1092,9 @@ client_update_objective_visuals :: proc(client: ^Client) {
 }
 
 client_tick_impacts :: proc(client: ^Client, delta: f32) {
-	impact_sounds := 0
+	// Krunker plays no sound for bullets hitting walls: impact_0 is only a map
+	// script sound (the editor's sound-action list), never a bullet effect.
 	for &impact in client.game.impacts {
-		// Limit pellet/packet bursts without affecting the visual impact pool.
-		if impact.kind == .World && impact_sounds < 6 {
-			audio_play_effect(client.audio, "impact_0", gain = 0.18, position = impact.position, spatial = true, range = 120, priority = 0)
-			impact_sounds += 1
-		}
 		client_add_tracer(client, &impact)
 		client_add_bullet_hole(client, &impact)
 	}

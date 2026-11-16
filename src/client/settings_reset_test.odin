@@ -13,7 +13,7 @@ when ODIN_TEST {
 			show_fps = true, vsync = true, menu_fps_limit = menuui.MENU_FPS_LIMITS[2], bindings = menuui.default_bindings(),
 			hud_settings = {hide_timer = true, hide_ping = true}, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS, quality_settings = {anisotropy = 4},
 			viewmodel_settings = menuui.DEFAULT_VIEWMODEL_SETTINGS, trail_settings = {hide_others = true}, crosshair_settings = menuui.DEFAULT_CROSSHAIR_SETTINGS,
-			audio_settings = {0.1, 0.2, 0.3, 0.4}, max_anisotropy = 16}
+			audio_settings = {master = 0.1, effects = 0.2, footsteps = 0.3, ui = 0.4, weapons = 0.5, spatial = .SURROUND, falloff = .OFF, levelling = true, levelling_strength = 0.9}, max_anisotropy = 16}
 		client.camera.fov = 110 * 3.14159265 / 180
 		client.bindings[.JUMP] = {'V', -4}
 		client.bindings[.FIRE] = {0, 0}
@@ -29,7 +29,7 @@ when ODIN_TEST {
 		defaults := client_settings_default_values()
 		loader := client_settings_validate(client_settings_defaults())
 		testing.expect(t, defaults.bindings == menuui.default_bindings() && defaults.fov == loader.fov && defaults.mouse_dpi == loader.mouse_dpi, "Reset uses the loader's defaults")
-		testing.expect(t, defaults.audio_volumes == {DEFAULT_AUDIO_SETTINGS.master, DEFAULT_AUDIO_SETTINGS.effects, DEFAULT_AUDIO_SETTINGS.footsteps, DEFAULT_AUDIO_SETTINGS.ui}, "Reset uses the audio defaults")
+		testing.expect(t, defaults.audio_volumes == {DEFAULT_AUDIO_SETTINGS.master, DEFAULT_AUDIO_SETTINGS.effects, DEFAULT_AUDIO_SETTINGS.footsteps, DEFAULT_AUDIO_SETTINGS.ui, DEFAULT_AUDIO_SETTINGS.weapons} && client_audio_settings_from_values(defaults) == DEFAULT_AUDIO_SETTINGS, "Reset uses the audio defaults")
 		testing.expect(t, defaults != {}, "the menu enables Reset only for non-zero defaults")
 
 		// Every saved preference returns to the loader's value: applying the

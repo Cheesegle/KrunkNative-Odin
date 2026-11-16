@@ -60,6 +60,11 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 }
 
 krunker_client_present_shots :: proc(client: ^Client) {
+	// Krunker plays every remote shot's sound (one 's' packet per trigger pull,
+	// each a new Howler instance). Shot packets arrive per bullet, so a shotgun's
+	// pellets (weapon.shots) from one pull count as a single sound.
+	pellets_seen: map[i32]u32
+	defer delete(pellets_seen)
 	for shot in client.krunker_world.shots {
 		// The server normally excludes the shooter. Never duplicate a locally
 		// predicted bullet if a server implementation also echoes it back.
@@ -91,10 +96,16 @@ krunker_client_present_shots :: proc(client: ^Client) {
 				}
 			}
 		}
-		if player.reloads[player.loadout_index] <= 0 {
+		pellets := max(player.weapon.shots, 1)
+		seen := pellets_seen[shot.sid]
+		pellets_seen[shot.sid] = seen + 1
+		if seen % pellets == 0 {
 			if !player.weapon.projectile || player.weapon.projectile_disable && !client.game.config.bullet_drop {
 				shared.player_emit_presentation(player, .FIRE)
 			}
+		}
+		// Recoil and view kick stay rate-limited: they are animation, not sound.
+		if player.reloads[player.loadout_index] <= 0 {
 			shared.player_apply_recoil(player)
 			shared.player_start_view_kick(player)
 			player.reloads[player.loadout_index] = player.weapon.rate * client.game.config.fire_rate

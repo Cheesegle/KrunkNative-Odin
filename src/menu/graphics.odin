@@ -34,6 +34,29 @@ Quality_Settings :: struct {
 }
 Shadow_Quality :: enum i32 { KRUNKER, SHARP }
 SHADOW_QUALITY_LABELS := [Shadow_Quality]string{.KRUNKER = "Krunker", .SHARP = "Sharp"}
+// Mirror the client's Spatial_Mode and Distance_Falloff; the zero values are Krunker's.
+Spatial_Audio_Mode :: enum i32 { HRTF, STEREO, SURROUND }
+SPATIAL_AUDIO_LABELS := [Spatial_Audio_Mode]string{.HRTF = "HRTF (headphones)", .STEREO = "Stereo", .SURROUND = "Surround"}
+Distance_Falloff_Mode :: enum i32 { KRUNKER, REDUCED, OFF }
+DISTANCE_FALLOFF_LABELS := [Distance_Falloff_Mode]string{.KRUNKER = "Krunker", .REDUCED = "Reduced", .OFF = "Off"}
+
+// The Surround entry says what it will do on this output device.
+spatial_audio_label :: proc(mode: i32, surround_channels: i32) -> string {
+	m := Spatial_Audio_Mode(clamp(mode, 0, 2))
+	if m != .SURROUND { return SPATIAL_AUDIO_LABELS[m] }
+	switch {
+	case surround_channels >= 8: return "Surround (7.1)"
+	case surround_channels >= 6: return "Surround (5.1)"
+	case surround_channels > 2: return fmt.tprintf("Surround (%d ch)", surround_channels)
+	case surround_channels == 0: return "Surround"
+	}
+	return "Surround (stereo device: using Stereo)"
+}
+
+// Sliders shown as percentages.
+settings_percent_action :: proc(kind: Action_Kind) -> bool {
+	return kind == .AUDIO_VOLUME || kind == .LEVELLING_STRENGTH
+}
 Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
 DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
 LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
@@ -159,8 +182,10 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 		values.hitmarker = hitmarker_settings_validate(view.hitmarker)
 		values.damage = damage_settings_validate(view.damage)
 	}
+	if !state.settings_active { values.levelling_strength = view.levelling_strength }
 	#partial switch action.kind {
 	case .AUDIO_VOLUME: return values.audio_volumes[action.index]
+	case .LEVELLING_STRENGTH: return values.levelling_strength
 	case .FOV: return values.fov
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]

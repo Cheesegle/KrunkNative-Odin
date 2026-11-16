@@ -10,6 +10,8 @@ assets/*/*
 assets/css/fonts/*
 !assets/css/fonts/Rajdhani-SemiBold.ttf
 !assets/css/fonts/Rajdhani-OFL.txt
+!assets/hrtf/kemar_diffuse.bin
+!assets/hrtf/LICENSE-MIT-KEMAR.txt
 !assets/models/custom/
 !assets/textures/custom/
 !assets/textures/objective_4.png

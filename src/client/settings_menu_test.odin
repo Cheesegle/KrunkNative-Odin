@@ -57,7 +57,7 @@ when ODIN_TEST {
 		client := Client{sensitivity = 1, audio_settings = DEFAULT_AUDIO_SETTINGS, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS}
 		bindings := menuui.default_bindings()
 		bindings[.JUMP][1] = -4
-		client.menu.settings_draft = {sensitivity = 1.235, mouse_dpi = 1600, show_fps = true, audio_volumes = {0.5, 0.7, 0.9, 0.2}, bindings = bindings, hud = {hide_timer = true, hide_game_score = true}}
+		client.menu.settings_draft = {sensitivity = 1.235, mouse_dpi = 1600, show_fps = true, audio_volumes = {0.5, 0.7, 0.9, 0.2, 0.6}, spatial_audio = 1, distance_falloff = 1, levelling = true, levelling_strength = 0.25, bindings = bindings, hud = {hide_timer = true, hide_game_score = true}}
 		client.menu.settings_draft.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 		client.menu.settings_draft.visuals.values[.GAMMA] = 1.2
 		client.menu.settings_draft.quality = {anisotropy = 4}
@@ -82,8 +82,8 @@ when ODIN_TEST {
 		testing.expect(t, client.viewmodel_settings == client.menu.settings_draft.viewmodel, "Save must apply global viewmodel preferences alongside world FOV")
 		testing.expect(t, client.trail_settings == client.menu.settings_draft.trails, "Save must apply both trail visibility switches")
 		testing.expect(t, client.crosshair_settings == client.menu.settings_draft.crosshair && client_settings_snapshot(&client).crosshair == client.crosshair_settings, "Save and persistence snapshot must include the configured crosshair")
-		testing.expect(t, client.audio_settings == Audio_Settings{0.5, 0.7, 0.9, 0.2} && client.audio_settings_dirty && client.audio_save_delay == 0.5,
-			"Save must apply all audio channels and schedule their persistence")
+		testing.expect(t, client.audio_settings == Audio_Settings{master = 0.5, effects = 0.7, footsteps = 0.9, ui = 0.2, weapons = 0.6, spatial = .STEREO, falloff = .REDUCED, levelling = true, levelling_strength = 0.25} && client.audio_settings_dirty && client.audio_save_delay == 0.5,
+			"Save must apply all audio channels and the spatial mode, and schedule their persistence")
 		testing.expect(t, client.bindings == bindings && client.hud_settings.hide_timer && !client.hud_settings.hide_round_score && client.hud_settings.hide_game_score && client.settings_dirty,
 			"Save must apply both bindings and each HUD preference, and persist the changes")
 		testing.expect(t, client.visual_settings.values[.GAMMA] == 1.2 && client.quality_settings == menuui.Quality_Settings{anisotropy = 4},

@@ -110,7 +110,7 @@ settings_number_begin :: proc(state: ^State, field: Settings_Number) {
 
 // Audio fields display percentages; all other sliders use their native units.
 settings_number_scale :: proc(state: ^State) -> f32 {
-	return state.number_control.action.kind == .AUDIO_VOLUME ? 100 : 1
+	return settings_percent_action(state.number_control.action.kind) ? 100 : 1
 }
 
 settings_number_hint :: proc(state: ^State) -> string {
@@ -127,7 +127,7 @@ settings_number_hint :: proc(state: ^State) -> string {
 settings_number_commit :: proc(state: ^State) -> bool {
 	if !state.number_changed { state.number_edit = .NONE; return true }
 	input := strings.trim_space(string(state.number_buffer[:state.number_length]))
-	if state.number_edit == .SLIDER && state.number_control.action.kind == .AUDIO_VOLUME { input = strings.trim_space(strings.trim_suffix(input, "%")) }
+	if state.number_edit == .SLIDER && settings_percent_action(state.number_control.action.kind) { input = strings.trim_space(strings.trim_suffix(input, "%")) }
 	value, ok := strconv.parse_f32(input)
 	ok = ok && !math.is_nan(value) && !math.is_inf(value)
 	if state.number_edit == .SLIDER {

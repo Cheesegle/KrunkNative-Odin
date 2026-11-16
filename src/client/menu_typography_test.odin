@@ -70,7 +70,7 @@ when ODIN_TEST {
 			teams={{id=1,name="Alpha",capacity=4,available=true,score=42},{id=2,name="Bravo",capacity=4,available=true,score=38}}}
 		view.presentation = .COMPETITIVE
 		view.bindings = menuui.default_bindings()
-		view.audio_volumes = {0.8, 1, 0.8, 0.6}
+		view.audio_volumes = {0.8, 1, 0.8, 0.6, 0.3}
 		view.resolution_options = []string{"1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440"}
 		view.monitor_names = []string{"Primary monitor", "Second monitor with a long name"}
 		view.visuals = menuui.DEFAULT_VISUAL_SETTINGS
@@ -243,7 +243,7 @@ when ODIN_TEST {
 								"each binding slot's unbind button must fit horizontally and remain large enough to click")
 							continue
 						}
-						if state.settings_dropdown == .NONE && (menuui.settings_searching(&state) || state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
+						if state.settings_dropdown == .NONE && (menuui.settings_searching(&state) || state.settings_tab == .VISUALS || state.settings_tab == .VIDEO || state.settings_tab == .MAIN || state.settings_tab == .GAMEPLAY || state.settings_tab == .HUD || state.settings_tab == .AUDIO) && control.action.kind != .SETTINGS_TAB && control.action.kind != .SETTINGS_SAVE && control.action.kind != .SETTINGS_CANCEL {
 							testing.expect(t, box.width > 0 && box.height > 0 && box.x >= overlay.x-1 && box.x+box.width <= overlay.x+overlay.width+1, "scrolling settings must fit horizontally")
 							continue
 						}

@@ -72,7 +72,7 @@ test_settings_search :: proc() -> bool {
 	state := menuui.State{}
 	if !menuui.init(&state, menu_test_measure, nil) { return false }
 	defer menuui.fini(&state)
-	view := menuui.View{online = true, ready = true, resolution = "1920 x 1080", sensitivity = 1, audio_volumes = {0.8, 1, 0.5, 0}}
+	view := menuui.View{online = true, ready = true, resolution = "1920 x 1080", sensitivity = 1, audio_volumes = {0.8, 1, 0.5, 0, 0.3}}
 	view.bindings = menuui.default_bindings()
 	view.resolution_options = []string{"1280 x 720", "1920 x 1080"}
 	view.monitor_names = []string{"Primary monitor", "Second monitor"}
@@ -94,6 +94,12 @@ test_settings_search :: proc() -> bool {
 		fmt.println("Search must hide rows that do not match"); return false
 	}
 	if state.errors != 0 { fmt.println("Search results reported a layout error"); return false }
+
+	// Audio rows are searchable: weapon volume, spatial audio, falloff and levelling.
+	for pair in ([][2]string{{"weapon volume", "WeaponVolume"}, {"spatial", "SpatialAudio"}, {"falloff", "DistanceFalloff"}, {"levelling", "LoudnessLevelling"}}) {
+		search_test_type(&state, view, pair[0])
+		if !search_test_shown(&state, clay.ID(pair[1])) { fmt.println("Search must find the audio row", pair[1]); return false }
+	}
 
 	// "Disable" finds the Hide cats / Hide extra props rows through synonyms.
 	search_test_type(&state, view, "Disable")

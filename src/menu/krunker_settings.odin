@@ -20,7 +20,7 @@ Krunker_Key :: enum {
 	CROSSHAIR_SHADOW_THICKNESS, CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, CROSSHAIR_GAP, CROSSHAIR_DOT,
 	HITMARKER_SHOW, HITMARKER_COLOR, HITMARKER_KILL_COLOR, HITMARKER_OPACITY, HITMARKER_LENGTH, HITMARKER_THICKNESS, HITMARKER_SPACING, HITMARKER_ANIM_SIZE, HITMARKER_FADE,
 	SENSITIVITY_X, SENSITIVITY_Y, AIM_SENSITIVITY_X, AIM_SENSITIVITY_Y, INVERT_Y,
-	SOUND, PLAYER_VOLUME, UI_VOLUME,
+	SOUND, GUNS_VOLUME, PLAYER_VOLUME, UI_VOLUME,
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
 	SATURATION, FEED_LIMIT,
@@ -63,6 +63,7 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.AIM_SENSITIVITY_Y = {"aimSensitivityY", .NUMBER, 1, 0.1, 15},
 	.INVERT_Y = {"invertY", .SWITCH, 0, 0, 0},
 	.SOUND = {"sound", .NUMBER, 0.8, 0, 1},
+	.GUNS_VOLUME = {"gunsVolume", .NUMBER, 0.3, 0, 1},
 	.PLAYER_VOLUME = {"playerVolume", .NUMBER, 1, 0, 1},
 	.UI_VOLUME = {"uiVolume", .NUMBER, 1, 0, 1},
 	.FOV = {"fov", .NUMBER, 100, 60, 150},
@@ -305,6 +306,7 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string) -> (resu
 	draft.audio_volumes[0] = f32(numbers[.SOUND])
 	draft.audio_volumes[2] = f32(numbers[.PLAYER_VOLUME])
 	draft.audio_volumes[3] = f32(numbers[.UI_VOLUME])
+	draft.audio_volumes[4] = f32(numbers[.GUNS_VOLUME])
 	draft.visuals.values[.SATURATION] = f32(numbers[.SATURATION])
 	draft.visuals = visual_settings_validate(draft.visuals)
 	for key, control in KRUNKER_VIEWMODEL { draft.viewmodel.values[control] = f32(numbers[key]) }
@@ -397,6 +399,7 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	for key in ([4]Krunker_Key{.SENSITIVITY_X, .SENSITIVITY_Y, .AIM_SENSITIVITY_X, .AIM_SENSITIVITY_Y}) { numbers[key] = sensitivity }
 	numbers[.CROSSHAIR_TYPE] = KRUNKER_CROSSHAIR_PRECISION
 	numbers[.SOUND], numbers[.PLAYER_VOLUME], numbers[.UI_VOLUME] = f64(values.audio_volumes[0]), f64(values.audio_volumes[2]), f64(values.audio_volumes[3])
+	numbers[.GUNS_VOLUME] = f64(values.audio_volumes[4])
 	numbers[.FOV] = f64(fov_validate(values.fov))
 	numbers[.SATURATION] = f64(visual_settings_validate(values.visuals).values[.SATURATION])
 	viewmodel := viewmodel_settings_validate(values.viewmodel)

@@ -104,6 +104,8 @@ def main() -> int:
             (os.path.join(ROOT, "assets/shaders/basic.frag"), "assets/shaders/basic.frag"),
             (os.path.join(ROOT, "assets/textures/objective_4.png"), "assets/textures/objective_4.png"),
             (os.path.join(ROOT, "assets/textures/objective_5.png"), "assets/textures/objective_5.png"),
+            (os.path.join(ROOT, "assets/hrtf/kemar_diffuse.bin"), "assets/hrtf/kemar_diffuse.bin"),
+            (os.path.join(ROOT, "assets/hrtf/LICENSE-MIT-KEMAR.txt"), "assets/hrtf/LICENSE-MIT-KEMAR.txt"),
         ]
         for name in sorted(os.listdir(os.path.join(ROOT, "assets/maps"))):
             if name.endswith(".json"):

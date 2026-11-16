@@ -11,7 +11,7 @@ when ODIN_TEST {
 	KRUNKER_SAMPLE_EXPORT :: `{"showTrails":false,"showFPS":true,"crosshairSho":5,"crosshairOpacity":0.6,"crosshairUseOpacity":true,"crosshairAlways":true,"crosshairColor":"#00ff00","crosshairShadow":"#202020","crosshairShadowThickess":1.5,"crosshairThick":3,"crosshairLen":10.5,"crosshairGap":4,"crosshairDot":false,"sensitivityX":1.6,"sensitivityY":1.6,"aimSensitivityX":1.6,"aimSensitivityY":1.6,"invertY":true,"sound":0.5,"playerVolume":0.7,"uiVolume":0.3,"fov":110,"fpsFOV":110,"weaponBob":0.2,"weaponLean":0,"weaponOffX":1.5,"adsFovMlt":0.5,"toggleADS":true,"showHands":false,"leftHand":true,"saturationn":1.4,"resolution":1,"scaleUI":0.8,"hitColor":"#ff0000","customize":{"favorites":[]},"controls":{"moveKeys":[90,null,81],"moveKeys_alt":[38,40,37,39],"crouchKey":67,"shoot1Key_alt":-1,"aim1Key":10002,"reloadKey":70,"inspKey":71,"swapKey":10004,"meleeKey":20000,"sprayKey":84,"toggleSets":["","","","","",""]}}`
 
 	krunker_test_values :: proc() -> menuui.Settings_Values {
-		return {fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 0.5, advanced_sensitivity = true, mouse_dpi = 1600, audio_volumes = {0.8, 1, 0.8, 0.6},
+		return {fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 0.5, advanced_sensitivity = true, mouse_dpi = 1600, audio_volumes = {0.8, 1, 0.8, 0.6, 0.3},
 			bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS}
 	}
 
@@ -24,7 +24,7 @@ when ODIN_TEST {
 		testing.expect(t, values.damage.colors[.INDICATOR] == 0xff0000 && values.damage.toggles[.INDICATORS] && values.damage.toggles[.OVERLAY], "hitColor imports; absent damage switches use Krunker defaults")
 		testing.expect(t, abs(values.sensitivity-1.6) < 0.0001 && !values.advanced_sensitivity && values.invert_mouse && values.mouse_dpi == 1600, "sensitivity, inversion and DPI")
 		testing.expect(t, values.fov == 110 && values.show_fps && values.trails == menuui.Trail_Settings{hide_others = true, hide_yours = false}, "fov, FPS and trails")
-		testing.expect(t, values.audio_volumes == [4]f32{0.5, 1, 0.7, 0.3}, "master, footsteps and UI volume; effects untouched")
+		testing.expect(t, values.audio_volumes == [5]f32{0.5, 1, 0.7, 0.3, 0.3}, "master, footsteps and UI volume; effects untouched")
 		testing.expect(t, abs(values.visuals.values[.SATURATION]-1.4) < 0.0001, "saturation")
 		vm := values.viewmodel
 		testing.expect(t, vm.values[.WEAPON_FOV] == 110 && abs(vm.values[.BOBBING]-0.2) < 0.0001 && vm.values[.LEANING] == 0 && vm.values[.OFFSET_X] == 1.5 && vm.values[.ADS_FOV_POWER] == 0.5, "viewmodel values")
@@ -124,7 +124,7 @@ when ODIN_TEST {
 		again := menuui.krunker_settings_export(target)
 		defer delete(again)
 		testing.expect_value(t, again, text)
-		defaults := menuui.krunker_settings_export({fov = 100, sensitivity = 1, mouse_dpi = 800, audio_volumes = {0.8, 1, 1, 1}, bindings = #partial {.FORWARD = {'W', 0}, .BACKWARD = {'S', 0}, .LEFT = {'A', 0}, .RIGHT = {'D', 0}, .FIRE = {-1, 220}, .AIM = {-2, 221}},
+		defaults := menuui.krunker_settings_export({fov = 100, sensitivity = 1, mouse_dpi = 800, audio_volumes = {0.8, 1, 1, 1, 0.3}, bindings = #partial {.FORWARD = {'W', 0}, .BACKWARD = {'S', 0}, .LEFT = {'A', 0}, .RIGHT = {'D', 0}, .FIRE = {-1, 220}, .AIM = {-2, 221}},
 			visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = {values = #partial {.WEAPON_FOV = 95, .BOBBING = 0.7, .LEANING = 0.6, .OFFSET_X = 1, .OFFSET_Y = 1.3, .OFFSET_Z = 1, .ADS_OFFSET_Y = 1, .SWAP_Y = 1, .RELOAD_Y = 1, .ADS_FOV_POWER = 1},
 			toggles = #partial {.AIM_ANIMATION = true, .SHOW_HANDS = true, .SHOW_PRIMARY = true, .SHOW_SECONDARY = true, .SHOW_MELEE = true}}, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS})
 		defer delete(defaults)
@@ -144,7 +144,7 @@ when ODIN_TEST {
 		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 45 Krunker settings. Ignored 5 unsupported.")
 		menu_apply_action(&client, action)
 		testing.expect(t, abs(client.camera.fov-110*math.PI/180) < 0.000001 && abs(client.sensitivity-1.6) < 0.0001 && client.invert_mouse && client.show_fps && client.settings_dirty, "import commits the draft like Save")
-		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && client.audio_settings == Audio_Settings{0.5, 1, 0.7, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
+		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && audio_test_volumes(client.audio_settings) == {0.5, 1, 0.7, 0.3, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
 		testing.expect(t, client_settings_snapshot(&client).viewmodel == client.viewmodel_settings, "imported viewmodel persists with the client settings")
 	}
 }
