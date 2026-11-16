@@ -4,11 +4,11 @@ import "core:fmt"
 import "base:runtime"
 import clay "../third_party/clay"
 
-Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
+Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, RANKED }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_ALL_REGIONS, RANKED_MAP, RANKED_POPUP_CLOSE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF }
@@ -169,6 +169,8 @@ View :: struct {
 	// (client_settings_defaults through client_settings_validate, plus the
 	// audio defaults). Reset stays disabled while this is the zero value.
 	settings_defaults: Settings_Values,
+	// The ranked matchmaking queue (Page.RANKED); see ranked.odin.
+	ranked_queue: Ranked_View,
 }
 Input :: struct {
 	pointer: clay.Vector2,
@@ -373,6 +375,11 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 		state.pressed = 0
 		if settings_search_focused(state) { state.focus = 0 }
 		return {}
+	}
+	// Krunker's ranked popup closes on Escape before the menu does.
+	if input.escape && !state.previous.escape && state.page == .RANKED && len(view.ranked_queue.popup_title) > 0 {
+		state.pressed = 0
+		return {kind = .RANKED_POPUP_CLOSE}
 	}
 	if input.escape && !state.previous.escape {
 		state.pressed = 0
@@ -716,6 +723,13 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		}
 	}
 	if control.action.kind == .INSPECT_CLASS || control.action.kind == .EDIT_INVITE { return {} }
+	// Opening Ranked is navigation the client also hears: it checks the login
+	// and, like Krunker's ranked menu, whether a ranked match is already running.
+	if control.action.kind == .RANKED_OPEN {
+		if state.page == .HOME { state.return_focus = control.id.id }
+		state.page, state.focus, state.pressed = .RANKED, 0, 0
+		return control.action
+	}
 	// Navigation changes the menu page without dispatching a gameplay action.
 	if control.action.kind == .NONE {
 		previous_page := state.page

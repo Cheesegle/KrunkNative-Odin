@@ -61,6 +61,8 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 			spacer()
 			text(fmt.tprintf("%s / %s", view.map_name, view.mode), 20, s, MUTED)
 			spacer()
+			// Krunker keeps the queue status visible outside the ranked menu.
+			if queue := ranked_global_status(view.ranked_queue); len(queue) > 0 { text(queue, 16, s, RANKED_TONE_COLORS[.INFO]) }
 			text(view.online && view.ready ? (view.ranked ? "Ranked" : view.presentation == .COMPETITIVE ? "Competitive" : "Connected") : view.local_practice ? "Local practice" : view.auth_pending && !view.connecting ? "Logging in" : view.online || view.connecting ? "Connecting" : "Join a lobby", 16, s)
 		}
 		if clay.UI(clay.ID("Page"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom, childGap = u16(gap*s), childAlignment = {x = .Center}}}) {
@@ -80,6 +82,7 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 		}
 		if clay.UI(clay.ID("Footer"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(200*s)}}}) { button(state, "Session / Invite", "Session", {index = i32(Page.SESSION)}) }
+			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Ranked", "Ranked", {kind = .RANKED_OPEN}) }
 			spacer()
 			text("Tab  Navigate     Enter  Select     Esc  Back", 16, s, MUTED)
 			spacer()
@@ -92,7 +95,7 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 			if clay.UI(clay.ID("ModalScrim"))({layout = {sizing = {width = clay.SizingFixed(width), height = clay.SizingFixed(height)}, childAlignment = {x = .Center, y = .Center}}, backgroundColor = {0,0,0,160}, floating = {attachTo = .Root, zIndex = 10}}) {
 				if state.page == .SETTINGS || state.page == .CONTROLS {
 					settings_window(state, view)
-				} else if clay.UI(clay.ID("Overlay"))({layout = {sizing = {width = clay.SizingFixed((state.page == .LOADOUT ? 1040 : 880)*s), height = clay.SizingFixed(752*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s)), childGap = u16(16*s)}, backgroundColor = {20,23,28,255}, cornerRadius = clay.CornerRadiusAll(4*s), border = {color = {75,80,88,255}, width = clay.BorderOutside(1)}}) {
+				} else if clay.UI(clay.ID("Overlay"))({layout = {sizing = {width = clay.SizingFixed((state.page == .LOADOUT || state.page == .RANKED ? 1040 : 880)*s), height = clay.SizingFixed(752*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s)), childGap = u16(16*s)}, backgroundColor = {20,23,28,255}, cornerRadius = clay.CornerRadiusAll(4*s), border = {color = {75,80,88,255}, width = clay.BorderOutside(1)}}) {
 					if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52*s)}}}) {
 						if clay.UI()({layout = {sizing = {width = clay.SizingFixed(136*s)}}}) { button(state, "Back", "Back", {index = i32(back_page(state))}) }
 						if state.page == .LOADOUT {
@@ -105,6 +108,7 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 					case .SETTINGS, .CONTROLS:
 					case .CLASSES: class_picker(state, view)
 					case .LOADOUT: class_loadout(state, view)
+					case .RANKED: ranked_page(state, view)
 					case .SESSION:
 						text("Session / Invite", 32, s)
 						text(view.lobby_name, 20, s, MUTED)

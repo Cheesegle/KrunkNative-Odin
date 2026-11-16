@@ -260,7 +260,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		map_name = map_name, mode = mode, lobby_name = online ? (len(client.join_link.game_id) > 0 ? client.join_link.game_id : client.join_link.host) : "Local practice",
 		browser_access_supported = ODIN_OS == .Windows, auth_pending = client.access.status == .PENDING,
 		guest_pending = client.guest.status == .PENDING,
-		connecting = client.join_queued > 0 || client.guest.status == .PENDING || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
+		connecting = client.join_queued > 0 || client.guest.status == .PENDING || client.access.status == .PENDING && client.access.join_after_access, current_invite = client_shareable_invite(client), join_status = client.join_status, selection_status = client.selection_status,
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
@@ -276,6 +276,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		resolution = fmt.tprintf("%d x %d", window_resolution.width, window_resolution.height),
 		match_status = client.game.move_lock ? "Waiting for match to start" : "Match in progress",
 		respawn_remaining = krunker_client_respawn_remaining(client, glfw.GetTime()),
+		ranked_queue = ranked_view(client, client.menu.page == .RANKED),
 	}
 	if !online && !client.local_practice { view.ready = false }
 	if team_selection && client.lobby_team == 0 && !(client.team_pending && client.requested_team > 0) { view.play_reason = "Choose a team to enter game" }
@@ -409,6 +410,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 	case .FORGET_BROWSER_SESSION:
 		client_access_forget(client)
 	case .COPY_INVITE:
+		if len(client_shareable_invite(client)) == 0 { return }
 		value := strings.clone_to_cstring(client.join_link.raw)
 		glfw.SetClipboardString(client.window, value)
 		delete(value)
@@ -515,5 +517,15 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_set_settings(client.audio, client.audio_settings)
 		client.audio_settings_dirty, client.audio_save_delay = true, 0.5
 	case .FPS: client.show_fps = !client.show_fps
+	case .RANKED_OPEN: ranked_open(client)
+	case .RANKED_QUEUE: ranked_queue_action(client)
+	case .RANKED_REGION, .RANKED_ALL_REGIONS, .RANKED_MAP: ranked_preferences_action(client, action)
+	case .RANKED_POPUP_CLOSE: client.ranked.popup = .NONE
 	}
+}
+
+// A ranked server link carries the account token (at=), so it is never shown
+// or copied as an invite.
+client_shareable_invite :: proc(client: ^Client) -> string {
+	return len(client.join_link.access_token) > 0 ? "" : client.join_link.raw
 }

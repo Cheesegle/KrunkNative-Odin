@@ -291,6 +291,9 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 		krunker_ws_pack_array(&message, 1); krunker_ws_pack_string(&message, "load")
 	case "po":
 		krunker_ws_pack_array(&message, 1); krunker_ws_pack_string(&message, "po")
+	case "joinedRank":
+		// Oa.JOINED_RANK, sent before leaving for a ranked match (acceptMatch).
+		krunker_ws_pack_array(&message, 1); krunker_ws_pack_string(&message, "joinedRank")
 	case "v":
 		krunker_ws_pack_array(&message, 1); krunker_ws_pack_string(&message, "v")
 	case "en":

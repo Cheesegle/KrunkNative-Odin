@@ -322,6 +322,9 @@ client_access_tick :: proc(client: ^Client, poll_browser: proc(^Client_Access) -
 
 client_access_forget :: proc(client: ^Client) {
 	client_access_log(&client.access, "Forget browser session requested; clearing access cache and Krodin browser profile.")
+	// Logging out leaves the ranked queue, which runs on the account token.
+	ranked_cancel(client, "Logged out; left the ranked queue.")
+	client.ranked.rejoin = false
 	client_access_cancel(client)
 	client_guest_cancel(client)
 	client.join_queued = 0
