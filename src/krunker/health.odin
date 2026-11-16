@@ -17,7 +17,10 @@ krunker_world_apply_health :: proc(state: ^Krunker_World_State, packet: []Krunke
 	player := krunker_world_upsert_player(state, sid)
 	// h is (health, sid, x, z, silent, reset max). A local drop that is not
 	// silent and names a position adds a hit indicator toward it.
-	if sid == state.local_sid && f32(health) < player.health && len(packet) > 4 && !(len(packet) > 5 && krunker_world_bool(packet[5])) {
+	silent := len(packet) > 5 && krunker_world_bool(packet[5])
+	// Krunker's CHANGE_HEALTH plays takedmg on every non-silent local drop.
+	if sid == state.local_sid && f32(health) < player.health && !silent { state.health_drop_revision += 1 }
+	if sid == state.local_sid && f32(health) < player.health && len(packet) > 4 && !silent {
 		x, x_ok := krunker_world_number(packet[3])
 		z, z_ok := krunker_world_number(packet[4])
 		if x_ok && z_ok && !math.is_nan(x) && !math.is_nan(z) && !math.is_inf(x) && !math.is_inf(z) {

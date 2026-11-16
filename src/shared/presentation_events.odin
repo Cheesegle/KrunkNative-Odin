@@ -9,6 +9,9 @@ Presentation_Event :: struct {
 	position: Vec3,
 	value: f32,
 	headshot: bool,
+	// Seconds to delay the effect: spreads shots that arrive batched in one
+	// snapshot back to their fire rate.
+	delay: f32,
 	lethal: bool, // HIT only: the damage killed the victim.
 	// DAMAGE only: where the attacker stood, for hit indicators.
 	source: Vec3,

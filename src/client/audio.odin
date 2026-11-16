@@ -26,6 +26,7 @@ Audio_Voice :: struct {
 	position: shared.Vec3,
 	ref_distance: f32,
 	on_bus: bool,                 // Routed through the levelling bus (everything but UI).
+	starts_at: u64,               // Engine frame a delayed sound begins; busy until then.
 }
 Audio_System :: struct {
 	engine: ma.engine,
@@ -42,7 +43,9 @@ Audio_System :: struct {
 	surround: bool,
 	requested_surround, no_device: bool,
 	device_channels: int,
-	serial, hit_revision: u64,
+	serial, hit_revision, health_drop_revision: u64,
+	steals: int,
+	clock, last_health_drop: f64, // Seconds; drives Krunker's damage-sound throttle.
 	variation: u32,
 }
 
@@ -91,6 +94,7 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 	}
 	if !audio.nodes_ready { fmt.eprintln("[Audio] Spatial mixer unavailable; positional effects are disabled.") }
 	audio.listener = {forward = {0, 0, -1}}
+	audio.last_health_drop = -1e9
 	// Short effects decode before gameplay, never on the first trigger pull.
 	manifest_path := shared.concat(shared.assets_path(), "config/sound-assets.txt")
 	defer delete(manifest_path)
@@ -112,11 +116,15 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 	return audio
 }
 
+// Tests may run a real-time engine on miniaudio's null backend (no output).
+audio_test_context: ^ma.context_type
+
 @(private="file")
 audio_engine_open :: proc(audio: ^Audio_System, sample_rate, channels: u32) -> bool {
 	config := ma.engine_config_init()
 	config.channels, config.sampleRate = channels, sample_rate
 	config.noDevice = b32(audio.no_device)
+	config.pContext = audio_test_context
 	if audio.no_device && config.channels == 0 { config.channels = 2 }
 	result := ma.engine_init(&config, &audio.engine)
 	if result != .SUCCESS {
@@ -262,7 +270,7 @@ audio_distance_gain :: proc "contextless" (distance, ref_distance: f32, falloff:
 // gameplay memory. Voices share decoded samples and have bounded cost.
 audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = .EFFECTS,
 	gain: f32 = 1, position: shared.Vec3 = {}, spatial: bool = false, range: f32 = KRUNKER_MAX_DISTANCE, priority: int = 2,
-	ref_distance: f32 = KRUNKER_REF_DISTANCE) -> bool {
+	ref_distance: f32 = KRUNKER_REF_DISTANCE, delay: f32 = 0) -> bool {
 	if audio == nil || audio.settings.master <= 0 || audio_channel_gain(audio.settings, channel) <= 0 { return false }
 	if spatial && !audio.nodes_ready { return false }
 	if spatial {
@@ -273,12 +281,15 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	if sample == nil || !sample.ready { return false }
 	chosen := -1
 	for &voice, i in audio.voices {
-		if voice.sample == nil || !bool(ma.sound_is_playing(&voice.sound)) { chosen = i; break }
+		if !audio_voice_busy(audio, &voice) { chosen = i; break }
 		if chosen < 0 || voice.priority < audio.voices[chosen].priority ||
 			voice.priority == audio.voices[chosen].priority && voice.serial < audio.voices[chosen].serial { chosen = i }
 	}
 	voice := &audio.voices[chosen]
-	if voice.sample != nil && bool(ma.sound_is_playing(&voice.sound)) && voice.priority > priority { return false }
+	if audio_voice_busy(audio, voice) {
+		if voice.priority > priority { return false }
+		audio.steals += 1 // A still-playing sound is cut short; tests assert this stays rare.
+	}
 	if voice.sample != sample {
 		if voice.sample != nil { ma.sound_uninit(&voice.sound); voice.sample = nil }
 		// miniaudio's own spatializer is bypassed: every voice feeds its Spatial_Node
@@ -314,7 +325,35 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	if audio.nodes_ready {
 		spatial_node_publish(&voice.node, audio_voice_params(audio, voice), true)
 	}
+	// Every play is a new instance from the start, like Howler. A delay schedules
+	// the start on the mixer clock; until then the voice still counts as busy.
+	voice.starts_at = 0
+	if delay > 0 {
+		voice.starts_at = ma.engine_get_time_in_pcm_frames(&audio.engine) + u64(delay * f32(ma.engine_get_sample_rate(&audio.engine)))
+		ma.sound_set_start_time_in_pcm_frames(&voice.sound, voice.starts_at)
+	} else {
+		ma.sound_set_start_time_in_pcm_frames(&voice.sound, 0)
+	}
 	return ma.sound_start(&voice.sound) == .SUCCESS
+}
+
+audio_voice_busy :: proc(audio: ^Audio_System, voice: ^Audio_Voice) -> bool {
+	if voice.sample == nil { return false }
+	return bool(ma.sound_is_playing(&voice.sound)) || voice.starts_at > ma.engine_get_time_in_pcm_frames(&audio.engine)
+}
+
+// Krunker's CHANGE_HEALTH: on a local health drop, play takedmg_0/1 at 0.45
+// unless the previous drop was under 500 ms ago (the timer restarts on every
+// drop, so sustained fire only sounds after a pause). Krunker also shakes the
+// camera by 0.02; Krodin has no camera shake yet.
+KRUNKER_DAMAGE_SOUND_GAP :: 0.5
+audio_health_drop :: proc(audio: ^Audio_System) {
+	if audio == nil { return }
+	if audio.clock - audio.last_health_drop > KRUNKER_DAMAGE_SOUND_GAP {
+		audio_play_effect(audio, fmt.tprintf("takedmg_%d", audio.variation % 2), .EFFECTS, 0.45, priority = 4)
+		audio.variation += 1
+	}
+	audio.last_health_drop = audio.clock
 }
 
 audio_sample_is_stereo :: proc(sample: ^Audio_Sample) -> bool {

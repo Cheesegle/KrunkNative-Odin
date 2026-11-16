@@ -114,6 +114,7 @@ levelling_render :: proc "contextless" (node: ^Levelling_Node, input, output: [^
 	if !enabled {
 		node.active = false
 		copy(output[:count*channels], input[:count*channels])
+		when ODIN_TEST { levelling_test_capture(output, count*channels) }
 		return
 	}
 	curve := levelling_curve(transmute(f32)sync.atomic_load_explicit(&node.strength_bits, .Relaxed))
@@ -173,5 +174,17 @@ levelling_render :: proc "contextless" (node: ^Levelling_Node, input, output: [^
 			node.write = (slot + 1) % lookahead
 		}
 		node.last_gain = gain
+	}
+}
+
+when ODIN_TEST {
+	// Real-time tests record the effects bus from the mixer thread.
+	levelling_capture: []f32
+	levelling_capture_length: int
+	levelling_test_capture :: proc "contextless" (samples: [^]f32, count: int) {
+		n := min(count, len(levelling_capture) - levelling_capture_length)
+		if n <= 0 { return }
+		copy(levelling_capture[levelling_capture_length:], samples[:n])
+		levelling_capture_length += n
 	}
 }

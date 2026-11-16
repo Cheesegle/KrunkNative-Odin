@@ -30,7 +30,7 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	client_access_cancel(client)
 	client.access.retried = false
 	audio_stop_all(client.audio)
-	if client.audio != nil { client.audio.hit_revision = 0 }
+	if client.audio != nil { client.audio.hit_revision, client.audio.health_drop_revision = 0, 0 }
 	client.hit_marker = {}
 	client.damage_feedback = {}
 	net_client_disconnect(&client.net)
@@ -351,10 +351,10 @@ client_apply_settings_draft :: proc(client: ^Client) {
 		if audio_needs_reopen(client.audio, settings) {
 			// Surround opens the device with its own channel layout; leaving it
 			// returns to the stereo mix. Sounds already playing stop.
-			hit_revision, no_device := client.audio.hit_revision, client.audio.no_device
+			hit_revision, drop_revision, no_device := client.audio.hit_revision, client.audio.health_drop_revision, client.audio.no_device
 			audio_destroy(client.audio)
 			client.audio = audio_create(client.game.weapons, settings, no_device)
-			if client.audio != nil { client.audio.hit_revision = hit_revision }
+			if client.audio != nil { client.audio.hit_revision, client.audio.health_drop_revision = hit_revision, drop_revision }
 		}
 		audio_set_settings(client.audio, settings)
 		client.audio_settings_dirty, client.audio_save_delay = true, 0.5
