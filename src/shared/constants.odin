@@ -89,7 +89,7 @@ GAME_CONSTANTS :: Game_Constants {
 	mouse_sensitivity                 = 0.0024,
 	world_uv_scale                    = 60.0,
 	player_height                     = PLAYER_HEIGHT,
-	border_height                     = 250.0,
+	border_height                     = 500.0, // Krunker Yb (`var Yb = 500`, `borderH: Yb`)
 	camera_height                     = 1.5,
 	climb_height                      = 3.0,
 	min_delta                         = 0.0001,
