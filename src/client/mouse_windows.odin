@@ -136,6 +136,7 @@ native_mouse_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT, wp
 		mouse.active = false
 	}
 	mouse_capture_drop(hwnd, message, wparam)
+	if message == win.WM_DISPLAYCHANGE { diagnostics_display_changed(lparam) }
 	return win.CallWindowProcW(mouse.previous_proc, hwnd, message, wparam, lparam)
 }
 
@@ -267,6 +268,7 @@ raw_input_game_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT, 
 	t := &g_raw_input_thread
 	if message == win.WM_MOUSEMOVE && raw_input_thread_wanted(t.window) { return 0 }
 	mouse_capture_drop(hwnd, message, wparam)
+	if message == win.WM_DISPLAYCHANGE { diagnostics_display_changed(lparam) }
 	return win.CallWindowProcW(t.game_previous_proc, hwnd, message, wparam, lparam)
 }
 
@@ -351,7 +353,7 @@ raw_input_thread_start :: proc(window: glfw.WindowHandle) -> (ok: bool, failed_s
 	if size_of(uintptr) != 8 { return false, "32-bit build" }
 	t^ = {}
 	t.window = window
-	t.handle = thread.create_and_start_with_data(t, raw_input_thread_main, priority = .High, name = "raw mouse input")
+	t.handle = thread.create_and_start_with_data(t, raw_input_thread_main, priority = .High, name = "Krodin raw mouse input")
 	if t.handle == nil { return false, "thread creation" }
 	sync.sema_wait(&t.started)
 	if !t.ok {

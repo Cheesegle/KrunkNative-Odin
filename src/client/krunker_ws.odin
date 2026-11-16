@@ -58,6 +58,10 @@ Krunker_WS_State :: struct {
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
+	// The newest correction (server position minus prediction) and the
+	// command it acknowledged. Recorded for the debug window in developer builds.
+	last_correction: shared.Vec3,
+	last_correction_ack: i32,
 	// Predicted ramp snap target after the newest acknowledged command.
 	acked_ramp_fix: f32,
 	acked_has_ramp_fix: bool,
@@ -646,6 +650,7 @@ krunker_ws_poll :: proc(client: ^Client) {
 }
 
 krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
+	if state.connected { diag_event(.LEFT_GAME) }
 	if state.handle != nil { kproto.network_log("disconnect", fmt.tprintf("connected=%v got_load=%v bootstrapped=%v spawned=%v pending=%d", state.connected, state.got_load, state.bootstrapped, state.spawned, len(state.pending))) }
 	if state.handle != nil { curl.easy_cleanup(state.handle) }
 	if state.global_ready { curl.global_cleanup() }
@@ -664,6 +669,7 @@ krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
 }
 
 krunker_ws_connect :: proc(client: ^Client, link: ^shared.Join_Link) -> bool {
+	diag_event(.JOIN_STARTED)
 	// Play as guest: anonymous FRVR access, never the browser helper.
 	if client.guest.active && client_access_browser_link(link) {
 		if client.access.status == .PENDING { return true }
