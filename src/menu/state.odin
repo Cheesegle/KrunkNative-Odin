@@ -23,6 +23,20 @@ HUD_Settings :: struct {
 	// Krodin's own: Krunker's nameplate bars have no border (a translucent
 	// black track, `rgba(0, 0, 0, 0.4)`, under the fill). Off by default.
 	healthbar_border: bool,
+	healthbar_colors: Healthbar_Colors,
+}
+// Nameplate healthbar fills, Krunker's healthColE ("Nametag Health Color E")
+// and healthColT ("Nametag Health Color Team"). A zero value predates these
+// settings and means Krunker's defaults (healthbar_colors_validate).
+Healthbar_Colors :: struct { enemy, team: u32 }
+DEFAULT_HEALTHBAR_COLORS :: Healthbar_Colors{enemy = 0xeb5656, team = 0x9eeb56}
+// Color edit fields (settings_color_value); 1-7 are the crosshair's, the
+// hitmarker's and the damage feedback's.
+HEALTHBAR_ENEMY_COLOR_FIELD :: 8
+HEALTHBAR_TEAM_COLOR_FIELD :: 9
+healthbar_colors_validate :: proc(colors: Healthbar_Colors) -> Healthbar_Colors {
+	if colors == (Healthbar_Colors{}) { return DEFAULT_HEALTHBAR_COLORS }
+	return {colors.enemy & 0xffffff, colors.team & 0xffffff}
 }
 KILL_FEED_DEFAULT_LIMIT :: 8
 KILL_FEED_MAX_LIMIT :: 10

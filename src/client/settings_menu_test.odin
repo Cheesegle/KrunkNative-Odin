@@ -99,7 +99,7 @@ when ODIN_TEST {
 		settings.bindings[.RELOAD] = {'T', 0}
 		settings.bindings[.INSPECT] = {'G', -5}
 		settings.bindings[.AIM] = {0, 0}
-		settings.hud = {hide_round_score = true}
+		settings.hud = {hide_round_score = true, healthbar_colors = {enemy = 0x3366ff, team = 0xffaa00}}
 		settings.monitor_index, settings.display_mode, settings.resolution_index, settings.vsync = 1, 2, 2, true
 		settings.visuals.values[.GAMMA], settings.visuals.values[.AMBIENT] = 1.25, 0.75
 		settings.visuals.hide_cats, settings.visuals.hide_extra_props = true, true
