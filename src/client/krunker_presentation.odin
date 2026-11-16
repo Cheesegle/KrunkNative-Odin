@@ -59,19 +59,6 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 	}
 }
 
-// No live packet reports another player's reload (k has no reload field and
-// uamo is local only). Counting their rounds catches the automatic reload when
-// a magazine runs dry; early manual reloads stay silent.
-krunker_client_count_remote_round :: proc(player: ^shared.Player) {
-	slot := player.loadout_index
-	if slot < 0 || slot >= player.loadout_size || player.weapon == nil || player.weapon.ammo == 0 || player.unlimited_ammo { return }
-	if player.ammo[slot] > 0 { player.ammo[slot] -= 1 }
-	if player.ammo[slot] == 0 {
-		shared.player_emit_presentation(player, .RELOAD)
-		player.ammo[slot] = player.weapon.ammo
-	}
-}
-
 krunker_client_present_shots :: proc(client: ^Client) {
 	// Krunker plays every remote shot's sound (one 's' packet per trigger pull,
 	// each a new Howler instance). Shot packets arrive per bullet, so a shotgun's
@@ -116,7 +103,6 @@ krunker_client_present_shots :: proc(client: ^Client) {
 			if !player.weapon.projectile || player.weapon.projectile_disable && !client.game.config.bullet_drop {
 				shared.player_emit_presentation(player, .FIRE)
 			}
-			krunker_client_count_remote_round(player)
 		}
 		// Recoil and view kick stay rate-limited: they are animation, not sound.
 		if player.reloads[player.loadout_index] <= 0 {

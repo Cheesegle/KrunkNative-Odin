@@ -256,7 +256,9 @@ when ODIN_TEST {
 		before := audio.serial
 		client_audio_present(&client, {kind = .RELOAD, uid = 9, position = {0, 0, -200}})
 		testing.expect(t, audio.serial == before, "remote reloads beyond 170 units are culled")
-		// Live: an emptied magazine (counted from shot packets) is the reload cue.
+		// Live lobbies stay silent, as in Krunker: no packet reports another
+		// player's reload (k has no reload state; the only reload-sound
+		// playSound is reload_3 for ammo pickups), so shot packets never start one.
 		fixture: Client
 		map_inst: shared.Map
 		krunker_presentation_fixture(&fixture, &map_inst)
@@ -266,16 +268,15 @@ when ODIN_TEST {
 		shared.game_players_add(&fixture.game, remote_player)
 		shared.player_spawn(remote_player, 0)
 		remote_player.uid, remote_player.active = 42, true
-		magazine := int(remote_player.weapon.ammo)
 		reloads := 0
-		for _ in 0 ..< magazine {
+		for _ in 0 ..< int(remote_player.weapon.ammo) + 2 {
 			append(&fixture.krunker_world.shots, kproto.Krunker_World_Shot{sid = 42, position = {0, 0, -50}})
 			krunker_client_present_shots(&fixture)
-			for e in fixture.game.presentation_events { if e.kind == .RELOAD && e.uid == 42 { reloads += 1 } }
+			for e in fixture.game.presentation_events { if e.kind == .RELOAD { reloads += 1 } }
 			clear(&fixture.game.presentation_events)
 			clear(&fixture.game.impacts)
 		}
-		testing.expectf(t, reloads == 1, "the shot that empties a %d-round magazine starts one remote reload (%d)", magazine, reloads)
+		testing.expect(t, reloads == 0, "live remote reloads are not invented")
 	}
 
 	// Before/after listening files: 1 s of a remote SMG and Revolver.

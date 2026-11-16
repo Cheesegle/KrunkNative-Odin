@@ -36,9 +36,10 @@ client_audio_present :: proc(client: ^Client, event: shared.Presentation_Event) 
 		if local {
 			audio_play_effect(audio, "reload_1", .WEAPONS, 0.7)
 		} else {
-			// Krodin addition: Krunker never plays other players' reloads. Quiet and
-			// footstep-ranged: 0.25 is Krunker's own reload volume (its local reload
-			// plays at 0.25 against 0.85 for a gunshot, about -10 dB).
+			// Krodin addition for native and offline games, where RELOAD events carry
+			// the remote reloader (#47 syncs them natively). Live Krunker sends no
+			// remote reload, so live lobbies stay silent. Quiet and footstep-ranged:
+			// 0.25 is Krunker's own reload volume (0.25 against a 0.85 gunshot).
 			audio_play_effect(audio, "reload_1", .WEAPONS, KRODIN_REMOTE_RELOAD_GAIN, event.position, true, KRUNKER_STEP_RANGE, 1)
 		}
 	case .SWAP:
