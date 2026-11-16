@@ -317,10 +317,13 @@ when ODIN_TEST {
 	debug_ui_dragging_moves_the_window :: proc(t: ^testing.T) {
 		client, dbg := perf_test_debug_ui()
 		defer { free(dbg); free(client) }
+		// 1080p leaves room below the window (developer builds add the Player
+		// section, which makes it nearly as tall as a 720p screen).
+		debug_ui_layout(dbg, 1920, 1080)
 		perf_test_frame(client, dbg, {})
 		perf_test_frame(client, dbg, {})
 		start := mu.get_container(&dbg.ctx, DEBUG_WINDOW_TITLE).rect
-		testing.expect(t, start.x + start.w <= 1280 && start.x > 640 && start.y < 100, "the window opens top-right")
+		testing.expect(t, start.x + start.w <= 1920 && start.x > 960 && start.y < 100, "the window opens top-right")
 		title := [2]f32{f32(start.x + 40), f32(start.y + 6)}
 		// microui needs the pointer resting over a control before a press.
 		perf_test_frame(client, dbg, {pointer = title})

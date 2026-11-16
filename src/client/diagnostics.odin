@@ -557,9 +557,9 @@ gl_check :: proc(site: string, per_phase := false) -> bool {
 // syscalls (free RAM, AC/battery). The finished text goes through the network
 // log redaction line by line, so no access or guest token can reach it.
 
-// Optional commit, set by build.bat and package-windows.ps1 so a report names
-// the symbols (dist/symbols/<commit>/) that match its dump.
-KRODIN_COMMIT :: #config(KRODIN_COMMIT, "")
+// The report names the commit (KRODIN_COMMIT, build_stamp.odin; set by
+// build.bat as 0x<7-char sha>, 0 without git) so it matches the symbols in
+// dist/symbols/<commit>/ that package-windows.ps1 archives for its dump.
 
 Crash_Info :: struct {
 	title:          string, // "crash report (unhandled exception)" or "hang report (...)".
@@ -600,7 +600,9 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 	if now._nsec == 0 { now = time.tick_now() }
 	b := strings.builder_from_bytes(buffer)
 	fmt.sbprintf(&b, "Krodin %s\n", info.title)
-	fmt.sbprintf(&b, "Build: %s%s%s%s\n", strings.trim_space(KRODIN_VERSION), len(KRODIN_COMMIT) > 0 ? ", commit " : "", KRODIN_COMMIT, KRODIN_DEV ? " (dev)" : "")
+	fmt.sbprintf(&b, "Build: %s", strings.trim_space(KRODIN_VERSION))
+	if KRODIN_COMMIT != 0 { fmt.sbprintf(&b, ", commit %07x", u64(KRODIN_COMMIT)) }
+	fmt.sbprintf(&b, "%s\n", KRODIN_DEV ? " (dev)" : "")
 	reset_buffer: [160]u8
 	if g_diag.gl_reset_status != 0 {
 		fmt.sbprintf(&b, "\n*** %s ***\n", gpu_reset_line(reset_buffer[:], g_diag.gl_reset_status))

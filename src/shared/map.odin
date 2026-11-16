@@ -432,7 +432,7 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 		case i32(Prefab.GATE), i32(Prefab.TRIGGER), i32(Prefab.TERMINAL), i32(Prefab.DEPOSIT_BOX), i32(Prefab.OBJECTIVE), i32(Prefab.BOMB_SITE), i32(Prefab.FLAG), i32(Prefab.WEAPON_PICKUP), i32(Prefab.PREMIUM_ZONE), i32(Prefab.VERIFIED_ZONE), i32(Prefab.SCORE_ZONE), i32(Prefab.DEATH_ZONE), i32(Prefab.CHECK_POINT), i32(Prefab.TELEPORTER), i32(Prefab.LADDER):
 			obj.collision_type = .BOX
 		case:
-			if prefab_id < 0 || prefab_id > i32(Prefab.KNIGHT) {
+			if prefab_id < 0 || (prefab_id > i32(Prefab.KNIGHT) && !map_prefab_is_krunker_mesh_prop(prefab_id)) {
 				obj.collision_type = .NONE
 			} else if no_collisions {
 				obj.collision_type = .NONE
@@ -539,6 +539,35 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 	map_index_collision_objects(map_inst)
 
 	return map_inst, true
+}
+
+// Krunker prefab ids past KNIGHT (59) that the browser loader sends down its
+// fall-through `this.manager.addMesh(G, J, ee, s.r, le / 2, xe / 2, M / 2, ...)`
+// path. addMesh builds an axis-aligned collider (`if (!k.noCol) { var F = new Sn(`),
+// so these props are solid boxes unless `l` / `col` set noCol. Ids with their
+// own add function (LIGHT_BAR, PATH_NODE, lights, PRIZE_WHEEL, the zones,
+// LEADERBOARD, SPRITE, ROPE_LADDER, SERVER_NODE, SPRAY, MYSTERY_BOX,
+// PERK_MACHINE, AI_REDIRECTION, KRUM_MACHINE, BOT_SPAWNER, MAP_ANCHOR, ENTITY)
+// and the editor-only COLLISION_MESH (`noExport`) stay non-solid here.
+map_prefab_is_krunker_mesh_prop :: proc(prefab_id: i32) -> bool {
+	switch prefab_id {
+	case 60, // GIFT
+	     61, // CHRISTMASTREE
+	     62, // CANE
+	     73, // TILES
+	     74, // CLOUDS
+	     81, // DUMPSTER
+	     83, // LAMP
+	     84, // WATER_TOWER
+	     85, // AC_UNIT
+	     86, // SHEET_METAL
+	     87, // ANTENNA
+	     88, // SATELLITE_DISH
+	     90, // WEAPONBOX
+	     97: // SCRAPCRATE
+		return true
+	}
+	return false
 }
 
 // Objects with no collision can never touch a player; skip them in movement.

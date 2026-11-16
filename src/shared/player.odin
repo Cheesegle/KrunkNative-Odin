@@ -55,6 +55,7 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 	player.wall_jump = class.wall_jump
 	player.wall_jump_max = i32(max(class.wall_jump_max, 0))
 	player.wall_jump_count = 0
+	player.wall_jump_decel = class.wall_jump_decel
 	player.health = f32(class.health)
 	player.max_health = class.health
 
@@ -883,6 +884,11 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			player.position.y -= GAME_CONSTANTS.crouch_speed * delta
 		}
 	}
+	// Krunker: `this.crouchVal &&= this.crouchVal.round(3)` after the crouch
+	// update, before updateHeight. Number.prototype.round is Math.round(x*10^n)/10^n.
+	if player.crouch_val != 0 {
+		player.crouch_val = math.floor(player.crouch_val * 1000 + 0.5) / 1000
+	}
 
 	player_update_height(player)
 
@@ -966,7 +972,10 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		}
 
 		if !contact {
-			wall_mlt: f32 = player.velocity.y < 0.0 && player.wall_jump && player.on_wall != 0 && player.game.config.wall_jump > 0.0 && player.crouch_val != 0 ? 0.3 : 1.0
+			// Krunker: `Ze = p.mode.wallJD ?? (this.config.wallJD || 0)`, applied while
+			// falling, crouched, on a wall, with wall jumping enabled.
+			wall_decel := player.game.mode.config.has_wall_jump_decel ? player.game.mode.config.wall_jump_decel : player.wall_jump_decel
+			wall_mlt: f32 = player.velocity.y < 0.0 && player.wall_jump && player.on_wall != 0 && player.game.config.wall_jump > 0.0 && player.crouch_val != 0 ? wall_decel : 1.0
 			player.velocity.y -= delta * GAME_CONSTANTS.gravity * player.game.config.gravity_mlt * wall_mlt
 		}
 

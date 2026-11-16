@@ -101,12 +101,18 @@ def main() -> int:
             (server_bin, "krodin_server"),
             (os.path.join(ROOT, "assets/config/game.toml"), "assets/config/game.toml"),
             (os.path.join(ROOT, "assets/config/sound-assets.txt"), "assets/config/sound-assets.txt"),
-            (os.path.join(ROOT, "assets/shaders/basic.frag"), "assets/shaders/basic.frag"),
             (os.path.join(ROOT, "assets/textures/objective_4.png"), "assets/textures/objective_4.png"),
             (os.path.join(ROOT, "assets/textures/objective_5.png"), "assets/textures/objective_5.png"),
             (os.path.join(ROOT, "assets/hrtf/kemar_diffuse.bin"), "assets/hrtf/kemar_diffuse.bin"),
             (os.path.join(ROOT, "assets/hrtf/LICENSE-MIT-KEMAR.txt"), "assets/hrtf/LICENSE-MIT-KEMAR.txt"),
         ]
+        # Every shader the client was built with (build_stamp.odin embeds the
+        # same files); an older copy from the archive seed would trigger the
+        # client's out-of-date warning.
+        for name in sorted(os.listdir(os.path.join(ROOT, "assets/shaders"))):
+            if name.endswith((".vert", ".frag", ".geom", ".comp", ".glsl", ".tesc", ".tese")):
+                rel = "assets/shaders/" + name
+                overlays.append((os.path.join(ROOT, rel), rel))
         for name in sorted(os.listdir(os.path.join(ROOT, "assets/maps"))):
             if name.endswith(".json"):
                 rel = "assets/maps/" + name

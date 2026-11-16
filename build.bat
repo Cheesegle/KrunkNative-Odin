@@ -64,10 +64,12 @@ if errorlevel 1 (
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
-set "COMMIT="
-for /f %%C in ('git rev-parse --short HEAD 2^>nul') do set "COMMIT=%%C"
-if not defined COMMIT set "COMMIT=unknown"
-set CLIENT_SYMBOLS=-debug -define:GL_DEBUG=false -extra-linker-flags:"/OPT:REF /OPT:ICF" -thread-count:8 -define:KRODIN_COMMIT=%COMMIT%
+rem The client names the commit it was built from in crash/hang reports (so a
+rem report matches dist/symbols/<commit>/) and when its shaders do not match
+rem assets/shaders (src/client/build_stamp.odin). Without git it is 0.
+set "COMMIT_DEFINE="
+for /f "delims=" %%C in ('git rev-parse --short^=7 HEAD 2^>nul') do set "COMMIT_DEFINE=-define:KRODIN_COMMIT=0x%%C"
+set CLIENT_SYMBOLS=-debug -define:GL_DEBUG=false -extra-linker-flags:"/OPT:REF /OPT:ICF" -thread-count:8 %COMMIT_DEFINE%
 
 goto:%TARGET%
 
@@ -120,7 +122,7 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check tools/symbolicate
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% check src/client
+%ODIN% check src/client %COMMIT_DEFINE%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client -define:KRODIN_DEV=true
 if errorlevel 1 exit /b %errorlevel%

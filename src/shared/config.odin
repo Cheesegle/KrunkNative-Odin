@@ -534,6 +534,7 @@ config_apply_class :: proc(
 	config_apply_bool(table, "secondary", "class", id, &class.secondary)
 	config_apply_bool(table, "wall_jump", "class", id, &class.wall_jump)
 	config_apply_f32(table, "wall_jump_max", "class", id, &class.wall_jump_max)
+	config_apply_f32(table, "wall_jump_decel", "class", id, &class.wall_jump_decel)
 	config_apply_colors(table, id, &class.colors, allocator)
 	config_apply_i32(table, "health", "class", id, &class.health)
 	config_apply_i32(table, "health_segments", "class", id, &class.health_segments)
@@ -588,6 +589,9 @@ config_json_colors :: proc(object: json.Object, destination: ^[]i32, allocator: 
 	destination^ = colors
 }
 
+// Krunker class editor default for wallJD ("Wall Jump Decel", `def: 0.3`).
+KRUNKER_WALL_JUMP_DECEL_DEFAULT :: f32(0.3)
+
 config_apply_class_json :: proc(object: json.Object, class: ^Class_Config, allocator: mem.Allocator) {
 	if class == nil do return
 	if value, ok := object["name"]; ok {
@@ -603,6 +607,10 @@ config_apply_class_json :: proc(object: json.Object, class: ^Class_Config, alloc
 	config_json_f32(object, "throwChrg", &class.throw_charge)
 	config_json_f32(object, "trnSpd", &class.turn_speed)
 	config_json_f32(object, "wallJM", &class.wall_jump_max)
+	// Krunker fills every class field missing from its export with the class
+	// editor default (`Mv[R2][xs[Jp].varN] = xs[Jp].def`); wallJD defaults to 0.3.
+	class.wall_jump_decel = KRUNKER_WALL_JUMP_DECEL_DEFAULT
+	config_json_f32(object, "wallJD", &class.wall_jump_decel)
 	config_json_bool(object, "leap", &class.leap)
 	config_json_bool(object, "bkSlid", &class.back_slide)
 	config_json_f32(object, "slT", &class.slide_time)
