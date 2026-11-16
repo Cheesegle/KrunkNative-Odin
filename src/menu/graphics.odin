@@ -66,8 +66,8 @@ DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .C
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}
-// Frame cap while the cursor is free (menus, loading, end screen); gameplay is
-// never capped. Stored as frames per second: 0 is the monitor's refresh rate,
+// Frame cap while the cursor is free (menus, loading, end screen); gameplay
+// uses the game FPS limit below instead. Stored as frames per second: 0 is the monitor's refresh rate,
 // so settings files without the key keep the default, and -1 is unlimited.
 MENU_FPS_LIMIT_MONITOR :: 0
 MENU_FPS_LIMIT_UNLIMITED :: -1
@@ -96,6 +96,32 @@ menu_fps_limit_index :: proc(limit: i32) -> i32 {
 
 // Unknown values fall back to the monitor's refresh rate.
 menu_fps_limit_validate :: proc(limit: i32) -> i32 { return MENU_FPS_LIMITS[menu_fps_limit_index(limit)] }
+
+// Frame cap while playing (cursor captured). Krunker's "Frame Cap" (settings
+// key updateRate, "Frame per second cap (0 = unlimited)", krunkbox
+// current.analysis.js near line 250731): a 0-1200 slider in steps of 10,
+// default 0 = unlimited, and its setter raises non-zero values below 10 to 10.
+// Typing a value accepts any whole number, e.g. 144 or 165.
+GAME_FPS_LIMIT_UNLIMITED :: 0
+GAME_FPS_LIMIT_MIN :: 10
+GAME_FPS_LIMIT_MAX :: 1200
+GAME_FPS_LIMIT_STEP :: 10
+
+game_fps_limit_validate :: proc(limit: i32) -> i32 {
+	if limit <= 0 { return GAME_FPS_LIMIT_UNLIMITED }
+	return clamp(limit, GAME_FPS_LIMIT_MIN, GAME_FPS_LIMIT_MAX)
+}
+
+// Slider and typed values: whole frames per second; NaN keeps unlimited.
+game_fps_limit_from_value :: proc(value: f32) -> i32 {
+	if !(value >= 0.5) { return GAME_FPS_LIMIT_UNLIMITED }
+	return game_fps_limit_validate(i32(min(math.round(value), GAME_FPS_LIMIT_MAX)))
+}
+
+settings_game_fps_limit_row :: proc(state: ^State) {
+	settings_slider(state, "Game FPS limit", "GameFpsLimit", f32(game_fps_limit_validate(state.settings_draft.game_fps_limit)), 0, GAME_FPS_LIMIT_MAX,
+		{kind = .GAME_FPS_LIMIT}, step = GAME_FPS_LIMIT_STEP, zero_label = "Unlimited", search_alias = "Frame cap")
+}
 
 settings_menu_fps_limit_row :: proc(state: ^State) {
 	if !settings_search_show(state, "Menu FPS limit") { return }
@@ -195,6 +221,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
 	case .KILL_FEED_SIZE: return kill_feed_size(state.settings_active ? values.hud : view.hud)
+	case .GAME_FPS_LIMIT: return f32(game_fps_limit_validate(state.settings_active ? values.game_fps_limit : view.game_fps_limit))
 	}
 	return values.sensitivity
 }

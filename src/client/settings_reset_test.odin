@@ -10,7 +10,7 @@ when ODIN_TEST {
 	// Save can change without a window (display settings need one).
 	settings_reset_test_client :: proc() -> Client {
 		client := Client{sensitivity = 2, mouse_dpi = 1600, ads_sensitivity = 0.5, advanced_sensitivity = true, invert_mouse = true,
-			show_fps = true, vsync = true, menu_fps_limit = menuui.MENU_FPS_LIMITS[2], bindings = menuui.default_bindings(),
+			show_fps = true, vsync = true, menu_fps_limit = menuui.MENU_FPS_LIMITS[2], game_fps_limit = 144, bindings = menuui.default_bindings(),
 			hud_settings = {hide_timer = true, hide_ping = true}, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS, quality_settings = {anisotropy = 4},
 			viewmodel_settings = menuui.DEFAULT_VIEWMODEL_SETTINGS, trail_settings = {hide_others = true}, crosshair_settings = menuui.DEFAULT_CROSSHAIR_SETTINGS,
 			audio_settings = {master = 0.1, effects = 0.2, footsteps = 0.3, ui = 0.4, weapons = 0.5, spatial = .SURROUND, falloff = .OFF, levelling = true, levelling_strength = 0.9}, max_anisotropy = 16}

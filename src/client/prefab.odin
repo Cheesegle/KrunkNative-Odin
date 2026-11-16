@@ -157,7 +157,10 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 	if prefab_id >= 0 && prefab_id < len(prefab_models) {
 		prefab_model = prefab_models[prefab_id]
 	}
-	alpha_test: f32
+	// Krunker's prefab `alphaTest`. GRASS is a transparent cutout (.02):
+	// without it the empty part of every tuft quad writes depth and hides the
+	// transparent surfaces drawn after it, so walls behind the grass vanish.
+	alpha_test: f32 = prefab_id == int(shared.Prefab.GRASS) ? 0.02 : 0
 	custom_asset_found := false
 	custom_unlit := false
 	preserve_origin := false
@@ -204,6 +207,10 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		if idx >= 0 && idx < len(colors) {
 			color = colors[idx]
 		}
+	} else if prefab_id == int(shared.Prefab.GRASS) {
+		// Krodin: an uncoloured tuft takes the map's grass colour instead of
+		// rendering the greyscale texture grey (see map_default_grass_tint).
+		color = shared.map_grass_default_tint
 	}
 
 	if has_emissive {
@@ -404,12 +411,12 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		material.color.w = opacity
 		material.emissive = emissive
 		material.unlit = custom_unlit
-		// Map cubes using the grass and chain-link textures carry alpha masks.
-		// Keep their zero-alpha texels out of the opaque pass so the fence shows
-		// the world behind it instead of rendering its transparent pixels black.
-		if tex_id == 8 || tex_id == 12 {
+		// Krunker makes only `link_` textures transparent here (Fn(src)): the
+		// chain-link fence keeps alphaTest .02 so its holes show the world behind.
+		// GRASS (grass_1) is an opaque texture and stays in the opaque pass.
+		if tex_id == 12 {
 			material.base.transparent = true
-			material.alpha_test = 0.01
+			material.alpha_test = 0.02
 		}
 		apply_object_material_properties(material, object, obj_obj)
 

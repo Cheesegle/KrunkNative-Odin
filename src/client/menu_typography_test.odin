@@ -86,7 +86,7 @@ when ODIN_TEST {
 			full_players: [32]menuui.Player
 			for &player, i in full_players { player = {name="Competitive player with a long name", class_name="Run N Gun", team=i32(i%2+1), is_you=i==0} }
 			play_y: f32
-			for scenario in 0..<49 {
+			for scenario in 0..<51 {
 				view.online=true; view.team_pending=false; view.class_pending=false; view.spawn_pending=false; view.join_status=""; view.active=false
 				view.presentation=.COMPETITIVE; view.ranked=false; view.team_selection=false; view.local_practice=false; view.ready=true; view.confirmed_team=1; view.play_reason=""
 				view.teams[0].name="Alpha"; view.teams[1].name="Bravo"
@@ -97,6 +97,7 @@ when ODIN_TEST {
 				state.color_edit=0; state.color_invalid=false
 				state.number_edit=.NONE; state.number_invalid=false
 				state.search_length=0
+				view.game_fps_limit=0
 				view.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 				view.advanced_sensitivity = false
 				view.players=players[:]; view.teams[0].capacity=4; view.teams[1].capacity=4; view.selection_status=""
@@ -153,6 +154,9 @@ when ODIN_TEST {
 				case 46: state.page=.SETTINGS; state.settings_tab=.MAIN; state.search_length=copy(state.search_buffer[:], "e")
 				case 47: state.page=.SETTINGS; state.settings_tab=.GAMEPLAY; state.search_length=copy(state.search_buffer[:], "hbar"); state.focus=clay.ID("SettingsSearch").id
 				case 48: state.page=.SETTINGS; state.settings_tab=.INPUT; state.search_length=copy(state.search_buffer[:], "zzqx")
+				// Krunker's name finds the game FPS limit; "fps" lists both limits.
+				case 49: state.page=.SETTINGS; state.settings_tab=.VIDEO; state.search_length=copy(state.search_buffer[:], "frame cap")
+				case 50: state.page=.SETTINGS; state.settings_tab=.VIDEO; state.settings_active=false; view.game_fps_limit=144; state.search_length=copy(state.search_buffer[:], "fps")
 				case 23: view.presentation=.STANDARD; state.page=.LOADOUT; classes[2].name="An exceptionally long selected class name"; classes[2].weapon="An exceptionally long primary weapon name"
 				}
 				page := state.page
@@ -223,6 +227,11 @@ when ODIN_TEST {
 					}
 					testing.expect(t, (scenario == 48) == clay.GetElementData(clay.ID("SettingsSearchEmpty")).found, "only an unmatched search shows No settings found")
 					if scenario == 47 { testing.expect(t, clay.GetElementData(clay.ID("HudHealthbarsRow")).found, "fuzzy search results must be laid out") }
+					if scenario == 49 { testing.expect(t, clay.GetElementData(clay.ID("GameFpsLimitRow")).found, "searching Krunker's Frame cap finds the game FPS limit") }
+					if scenario == 50 {
+						testing.expect(t, clay.GetElementData(clay.ID("GameFpsLimitRow")).found && clay.GetElementData(clay.ID("MenuFpsLimitRow")).found, "searching fps lists both FPS limits")
+						testing.expect(t, state.settings_draft.game_fps_limit == 144, "the draft shows the saved game FPS limit")
+					}
 				}
 				if page == .SETTINGS || page == .CONTROLS {
 					overlay := clay.GetElementData(clay.ID("Overlay")).boundingBox
