@@ -2,6 +2,7 @@
 
 package main
 
+import "core:fmt"
 import "core:os"
 
 // Crash and hang reports are Windows-only for now; elsewhere the OS's own
@@ -12,6 +13,27 @@ crash_file_write :: proc(path: string, data: []u8) -> bool {
 	return os.write_entire_file(path, data) == nil
 }
 
+crash_file_append :: proc(path: string, data: []u8) -> bool {
+	file, err := os.open(path, {.Write, .Append, .Create})
+	if err != nil { return false }
+	defer os.close(file)
+	_, write_err := os.write(file, data)
+	return write_err == nil
+}
+
 crash_handler_install :: proc() {}
 
 crash_handler_uninstall :: proc() {}
+
+crash_watchdog_pause :: proc(paused: bool) {}
+
+crash_hang_was_reported :: proc() -> bool { return false }
+
+crash_hang_log_path :: proc() -> string { return HANG_LOG_PATH }
+
+// The GPU reset notice; Windows shows a message box.
+gpu_reset_show_message :: proc(text: string) { fmt.eprintln(text) }
+
+// Dumps are Windows-only, and here the KRUNKER_ACCESS_TOKEN / .env fallback
+// still reads the environment, so nothing is removed.
+env_scrub_secrets :: proc(names: ^[dynamic]string) {}

@@ -136,6 +136,7 @@ software_cursor_set_os_cursor_hidden :: proc(cursor: ^Software_Cursor, window: g
 	// NORMAL mode shows the window's cursor; nil is GLFW's default arrow.
 	glfw.SetCursor(window, hidden ? cursor.blank : nil)
 	cursor.active = hidden
+	diag_event(hidden ? .SOFTWARE_CURSOR_ON : .SOFTWARE_CURSOR_OFF)
 	cursor.window = window
 }
 

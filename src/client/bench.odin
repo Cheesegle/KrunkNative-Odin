@@ -366,7 +366,9 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-	window := glfw.CreateWindow(64, 64, "Krodin bench", nil, nil)
+	// The same context flags as the game (GPU reset notification unless
+	// --no-gl-robustness), so the benchmark measures what players run.
+	window, _ := client_create_window(64, 64, "Krodin bench", g_gl_robustness_wanted)
 	if window == nil {
 		fmt.eprintln("[Bench] Could not create a hidden OpenGL 4.5 window")
 		return 1
@@ -390,7 +392,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 
 	renderer := string(cstring(gl.GetString(gl.RENDERER)))
 	version := string(cstring(gl.GetString(gl.VERSION)))
-	fmt.printf("[Bench] GL_RENDERER: %s\n[Bench] GL_VERSION: %s\n", renderer, version)
+	fmt.printf("[Bench] GL_RENDERER: %s\n[Bench] GL_VERSION: %s\n[Bench] GPU reset notification: %s\n", renderer, version, gl_context_loses_on_reset() ? "on" : "off")
 
 	client := new(Client)
 	defer free(client)

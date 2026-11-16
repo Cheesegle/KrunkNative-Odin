@@ -9,6 +9,8 @@ rem                               never packaged; package-windows.ps1 uses krodi
 rem   build.bat browser           build browser helper and restore WebView2 loader
 rem   build.bat inspect           build standalone WebView2 inspector
 rem   build.bat server            build the server      -> bin\krodin_server.exe
+rem   build.bat symbolicate       build the dump symbolication tool
+rem                                                     -> bin\krodin_symbolicate.exe
 rem   build.bat tests             build + run the sim tests
 rem   build.bat check             typecheck client + server without linking
 rem   build.bat all               build client + server
@@ -18,6 +20,13 @@ rem   build.bat client speed      build the client with -o:speed
 rem   build.bat tests none        build and run tests with -o:none
 rem   build.bat all speed minimal build client/server with separate levels
 rem Optimization levels: none, minimal, size, speed, aggressive (default).
+rem
+rem Client builds also write bin\krodin_client.pdb (symbols for crash and hang
+rem dumps; package-windows.ps1 archives it, it never ships). -debug only adds
+rem debug info at the chosen -o level; GL_DEBUG=false keeps vendor:OpenGL's
+rem per-call glGetError wrappers out, the linker flags restore the release
+rem defaults that /DEBUG turns off, and -thread-count keeps the compiler's
+rem peak memory near a plain build's.
 
 setlocal
 set "BIN_DIR=bin"
@@ -32,7 +41,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client dev browser inspect server tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client dev browser inspect server symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -55,10 +64,12 @@ if errorlevel 1 (
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
-rem The client names the commit it was built from when its shaders do not
-rem match assets/shaders (src/client/build_stamp.odin). Without git it is 0.
+rem The client names the commit it was built from in crash/hang reports (so a
+rem report matches dist/symbols/<commit>/) and when its shaders do not match
+rem assets/shaders (src/client/build_stamp.odin). Without git it is 0.
 set "COMMIT_DEFINE="
 for /f "delims=" %%C in ('git rev-parse --short^=7 HEAD 2^>nul') do set "COMMIT_DEFINE=-define:KRODIN_COMMIT=0x%%C"
+set CLIENT_SYMBOLS=-debug -define:GL_DEBUG=false -extra-linker-flags:"/OPT:REF /OPT:ICF" -thread-count:8 %COMMIT_DEFINE%
 
 goto:%TARGET%
 
@@ -71,7 +82,7 @@ exit /b %errorlevel%
 :client
 call :browser
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE% %COMMIT_DEFINE%
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE% %CLIENT_SYMBOLS%
 exit /b %errorlevel%
 
 :dev
@@ -79,7 +90,7 @@ rem Developer build: compiles in the debug tools (KRODIN_DEV). It uses its own
 rem file name so it can never be packaged or mistaken for a tester build.
 call :browser
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% build src/client -out:%BIN_DIR%\krodin_client_dev.exe -o:%PROFILE% -define:KRODIN_DEV=true %COMMIT_DEFINE%
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client_dev.exe -o:%PROFILE% -define:KRODIN_DEV=true %CLIENT_SYMBOLS%
 exit /b %errorlevel%
 
 :inspect
@@ -90,6 +101,10 @@ exit /b %errorlevel%
 
 :server
 %ODIN% build src/server -out:%BIN_DIR%\krodin_server.exe -o:%PROFILE%
+exit /b %errorlevel%
+
+:symbolicate
+%ODIN% build tools/symbolicate -out:%BIN_DIR%\krodin_symbolicate.exe -o:%PROFILE%
 exit /b %errorlevel%
 
 :tests
@@ -104,6 +119,8 @@ exit /b %errorlevel%
 %ODIN% check tools/browser_inspect
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/browser_helper
+if errorlevel 1 exit /b %errorlevel%
+%ODIN% check tools/symbolicate
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client %COMMIT_DEFINE%
 if errorlevel 1 exit /b %errorlevel%
@@ -126,6 +143,9 @@ if exist "%BIN_DIR%\WebView2Loader.dll" del "%BIN_DIR%\WebView2Loader.dll"
 if exist "%BIN_DIR%\WebView2-LICENSE.txt" del "%BIN_DIR%\WebView2-LICENSE.txt"
 if exist "%BIN_DIR%\WebView2-NOTICE.txt" del "%BIN_DIR%\WebView2-NOTICE.txt"
 if exist "%BIN_DIR%\krodin_client.exe" del "%BIN_DIR%\krodin_client.exe"
+if exist "%BIN_DIR%\krodin_client.pdb" del "%BIN_DIR%\krodin_client.pdb"
+if exist "%BIN_DIR%\krodin_client_dev.pdb" del "%BIN_DIR%\krodin_client_dev.pdb"
+if exist "%BIN_DIR%\krodin_symbolicate.exe" del "%BIN_DIR%\krodin_symbolicate.exe"
 if exist "%BIN_DIR%\krodin_client_dev.exe" del "%BIN_DIR%\krodin_client_dev.exe"
 if exist "%BIN_DIR%\krodin_server.exe" del "%BIN_DIR%\krodin_server.exe"
 if exist "%BIN_DIR%\krodin_tests.exe" del "%BIN_DIR%\krodin_tests.exe"
@@ -144,7 +164,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| dev ^| browser ^| inspect ^| server ^| tests] [level]
+echo Usage: build.bat [client ^| dev ^| browser ^| inspect ^| server ^| symbolicate ^| tests] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).
