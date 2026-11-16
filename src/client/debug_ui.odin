@@ -36,6 +36,10 @@ Debug_UI :: struct {
 	keys: mu.Key_Set,
 	pointer_captured: bool,
 	window_screen_w: i32, // Screen width the window position belongs to.
+	// Content taller than the screen last frame: the window is capped to the
+	// screen and scrolls (scroll with the cursor unlocked).
+	overflow: bool,
+	player_copied: string, // The Player section's last copied line (developer builds).
 }
 
 // One frame of input, in framebuffer pixels. A locked cursor means gameplay.
@@ -74,6 +78,7 @@ debug_ui_create :: proc(ui: ^UI) -> ^Debug_UI {
 
 debug_ui_fini :: proc(client: ^Client) {
 	perf_gpu_fini(&client.perf)
+	if client.debug_ui != nil { delete(client.debug_ui.player_copied) }
 	free(client.debug_ui)
 	client.debug_ui = nil
 }
@@ -243,13 +248,23 @@ debug_ui_window :: proc(client: ^Client, dbg: ^Debug_UI) {
 	}
 	cnt.rect.x = clamp(cnt.rect.x, 0, max(0, screen_w - cnt.rect.w))
 	cnt.rect.y = clamp(cnt.rect.y, 0, max(0, screen_h - cnt.rect.h))
-	if !mu.begin_window(ctx, DEBUG_WINDOW_TITLE, cnt.rect, {.NO_RESIZE, .NO_SCROLL}) { return }
+	options: mu.Options = {.NO_RESIZE}
+	if !dbg.overflow {
+		options += {.NO_SCROLL}
+		cnt.scroll = {}
+	}
+	if !mu.begin_window(ctx, DEBUG_WINDOW_TITLE, cnt.rect, options) { return }
 	debug_ui_performance(client, dbg)
+	when KRODIN_DEV { debug_ui_player(client, dbg) }
 	debug_ui_rendering(client, dbg)
 	mu.end_window(ctx)
 	// Fit the height to this frame's content (collapsing the section shrinks
 	// it); the width stays fixed. microui's AUTO_SIZE would also shrink width.
-	cnt.rect.h = cnt.content_size.y + (cnt.rect.h - cnt.body.h) + ctx.style.padding*2
+	// Past the screen's height the window stops growing and scrolls instead.
+	fit := cnt.content_size.y + (cnt.rect.h - cnt.body.h) + ctx.style.padding*2
+	limit := max(screen_h - margin*2, ctx.style.title_height*3)
+	dbg.overflow = fit > limit
+	cnt.rect.h = min(fit, limit)
 }
 
 debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {

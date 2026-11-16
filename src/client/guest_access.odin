@@ -212,7 +212,7 @@ guest_begin :: proc(client: ^Client, refresh: string) -> bool {
 	job.origin, job.refresh_token, job.timeout_ms = strings.clone(guest_auth_origin), strings.clone(refresh), guest_auth_timeout_ms
 	guest_register_secrets(guest)
 	guest_log(fmt.tprintf("%s; worker thread started with timeout=%dms origin=%s. Tokens omitted.", len(refresh) > 0 ? "Renewing guest access with the stored refresh token (POST /refresh), falling back to an anonymous login" : "Requesting anonymous FRVR access (POST /login platform=anonymous)", job.timeout_ms, job.origin))
-	job.thread = thread.create_and_start_with_data(job, guest_job_run, context)
+	job.thread = thread.create_and_start_with_data(job, guest_job_run, context, name = "Krodin guest auth")
 	if job.thread == nil {
 		curl.global_cleanup()
 		guest_job_free(job)

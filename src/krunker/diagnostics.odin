@@ -1,5 +1,6 @@
 package krunker
 
+import "base:intrinsics"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -90,12 +91,48 @@ network_log_safe :: proc(input: string, limit: int = 16384) -> string {
 	return strings.clone(string(out[:]))
 }
 
+// The newest network log lines, already redacted, for crash and hang reports.
+// Fixed storage: the crash handler reads it without the heap or the file.
+NETWORK_LOG_RECENT_LINES :: 40
+NETWORK_LOG_RECENT_WIDTH :: 320
+
+Network_Log_Recent :: struct {
+	head:    u32, // Lines written so far; the newest is at (head - 1) % NETWORK_LOG_RECENT_LINES.
+	lengths: [NETWORK_LOG_RECENT_LINES]u16,
+	lines:   [NETWORK_LOG_RECENT_LINES][NETWORK_LOG_RECENT_WIDTH]u8,
+}
+
+network_log_recent: Network_Log_Recent
+
+network_log_remember :: proc "contextless" (line: string) {
+	text := line
+	for len(text) > 0 && (text[len(text) - 1] == '\n' || text[len(text) - 1] == '\r') { text = text[:len(text) - 1] }
+	head := intrinsics.atomic_load_explicit(&network_log_recent.head, .Acquire)
+	slot := head % NETWORK_LOG_RECENT_LINES
+	n := copy(network_log_recent.lines[slot][:], text)
+	network_log_recent.lengths[slot] = u16(n)
+	intrinsics.atomic_store_explicit(&network_log_recent.head, head + 1, .Release)
+}
+
+// Copies up to len(out) of the newest lines into `out`, oldest first. The
+// strings point into the ring and stay valid until it wraps.
+network_log_recent_lines :: proc "contextless" (out: [][]u8) -> int {
+	head := intrinsics.atomic_load_explicit(&network_log_recent.head, .Acquire)
+	count := min(int(head), NETWORK_LOG_RECENT_LINES, len(out))
+	for i in 0 ..< count {
+		slot := (head - u32(count) + u32(i)) % NETWORK_LOG_RECENT_LINES
+		out[i] = network_log_recent.lines[slot][:network_log_recent.lengths[slot]]
+	}
+	return count
+}
+
 network_log :: proc(stage, message: string) {
 	safe := network_log_safe(message)
 	defer delete(safe)
 	stamp, _ := time.time_to_rfc3339(time.now(), include_nanos = false, allocator = context.temp_allocator)
 	elapsed := network_log_attempt == 0 ? 0.0 : time.duration_milliseconds(time.since(network_log_started))
 	line := fmt.tprintf("[Krunker][%s][attempt=%d +%.1fms][%s] %s\n", stamp, network_log_attempt, elapsed, stage, safe)
+	network_log_remember(line)
 	fmt.print(line)
 	if network_log_file == nil {
 		os.make_directory_all(os.dir(network_log_path))

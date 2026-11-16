@@ -209,6 +209,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 		state.render_previous.position += correction
 		state.render_current.position += correction
 		state.prediction_corrections += 1
+		when KRODIN_DEV { state.last_correction, state.last_correction_ack = correction, source.ack_seq }
 		error := math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z)
 		if error >= 2 || state.prediction_corrections <= 3 || state.prediction_corrections % 30 == 0 {
 			pending_ms: f32

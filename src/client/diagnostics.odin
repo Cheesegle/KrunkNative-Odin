@@ -3,10 +3,15 @@ package main
 import "base:runtime"
 import "core:fmt"
 import "core:hash"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sync"
+import "core:time"
 import gl "vendor:OpenGL"
+import glfw "vendor:glfw"
+import kproto "../krunker"
+import menuui "../menu"
 
 // Tester diagnostics: cheap, always-on breadcrumbs plus optional GL debug output.
 //
@@ -132,6 +137,90 @@ Diagnostics :: struct {
 	gl_error_site_count: int,
 	gl_check_errors: int,
 	gl_check_detailed: bool, // Per-phase checks, on after the first error.
+	// Recent history for reports, written by the main thread only. Fixed-size
+	// rings: one store per frame, nothing allocated.
+	frame_ms_head: u32,
+	frame_ms:      [FRAME_TIME_RING_SIZE]f32,
+	event_head:    u32,
+	events:        [EVENT_RING_SIZE]Diag_Event,
+	// Edge detection for events polled once per frame.
+	watch_settings_open, watch_cursor_disabled: bool,
+	// GPU reset detection (robust context, polled about once a second).
+	gl_robust_requested: bool, // The window was created asking for reset notification.
+	gl_reset_detection:  bool, // The context reports GL_LOSE_CONTEXT_ON_RESET.
+	gl_reset_status:     u32,  // First non-zero glGetGraphicsResetStatus, else 0.
+	gl_reset_checks:     u32,
+	gl_reset_last_check: time.Tick,
+	// Set by the hang watchdog when the main loop resumes: check for a reset now.
+	gl_reset_check_requested: bool,
+	// Captured at startup (and when monitors change) so reports never gather
+	// it on the crash path.
+	system_text:    [4096]u8,
+	system_len:     int,
+	monitor_text:   [1024]u8,
+	monitor_len:    int,
+	monitors_stale: bool,
+	power_plan:     [128]u8,
+	power_plan_len: int,
+}
+
+FRAME_TIME_RING_SIZE :: 128 // The report prints the newest REPORT_FRAME_TIMES.
+REPORT_FRAME_TIMES :: 120
+EVENT_RING_SIZE :: 64       // The report prints the newest REPORT_EVENTS.
+REPORT_EVENTS :: 50
+
+Diag_Event_Kind :: enum u8 {
+	NONE,
+	FOCUS_GAINED,
+	FOCUS_LOST,
+	MINIMISED,
+	RESTORED,
+	WM_DISPLAYCHANGE,     // a, b = new desktop width, height
+	DISPLAY_MODE_APPLIED, // a = Display_Mode, b = width << 16 | height
+	MONITOR_CONNECTED,
+	MONITOR_DISCONNECTED,
+	SETTINGS_OPENED,
+	SETTINGS_CLOSED,
+	CURSOR_CAPTURED,
+	CURSOR_RELEASED,
+	SOFTWARE_CURSOR_ON,
+	SOFTWARE_CURSOR_OFF,
+	MAP_LOAD_STARTED,
+	MAP_LOADED,           // a = milliseconds
+	MAP_UNLOADED,
+	JOIN_STARTED,
+	LEFT_GAME,
+	GPU_RESET,            // a = glGetGraphicsResetStatus
+}
+
+DIAG_EVENT_NAMES := [Diag_Event_Kind]string{
+	.NONE                 = "none",
+	.FOCUS_GAINED         = "focus gained",
+	.FOCUS_LOST           = "focus lost",
+	.MINIMISED            = "minimised",
+	.RESTORED             = "restored",
+	.WM_DISPLAYCHANGE     = "WM_DISPLAYCHANGE",
+	.DISPLAY_MODE_APPLIED = "display mode applied",
+	.MONITOR_CONNECTED    = "monitor connected",
+	.MONITOR_DISCONNECTED = "monitor disconnected",
+	.SETTINGS_OPENED      = "settings menu opened",
+	.SETTINGS_CLOSED      = "settings menu closed",
+	.CURSOR_CAPTURED      = "cursor captured (game)",
+	.CURSOR_RELEASED      = "cursor released (menu)",
+	.SOFTWARE_CURSOR_ON   = "software cursor on",
+	.SOFTWARE_CURSOR_OFF  = "software cursor off",
+	.MAP_LOAD_STARTED     = "map load started",
+	.MAP_LOADED           = "map loaded",
+	.MAP_UNLOADED         = "map unloaded",
+	.JOIN_STARTED         = "join started",
+	.LEFT_GAME            = "left the game",
+	.GPU_RESET            = "GPU reset detected",
+}
+
+Diag_Event :: struct {
+	tick: time.Tick,
+	kind: Diag_Event_Kind,
+	a, b: i32,
 }
 
 GL_Message_Seen :: struct {
@@ -153,6 +242,33 @@ phase_mark :: #force_inline proc "contextless" (phase: Phase) {
 
 phase_frame_begin :: #force_inline proc "contextless" () {
 	sync.atomic_store_explicit(&g_diag.frame, g_diag.frame + 1, .Release)
+}
+
+// The previous frame's duration (start to start). One store per frame.
+diag_frame_time :: #force_inline proc "contextless" (ms: f32) {
+	head := g_diag.frame_ms_head
+	g_diag.frame_ms[head % FRAME_TIME_RING_SIZE] = ms
+	sync.atomic_store_explicit(&g_diag.frame_ms_head, head + 1, .Release)
+}
+
+// A platform or game event for the report's history. Main thread only; the
+// events it records happen a few times a minute at most.
+diag_event :: proc "contextless" (kind: Diag_Event_Kind, a: i32 = 0, b: i32 = 0) {
+	head := g_diag.event_head
+	g_diag.events[head % EVENT_RING_SIZE] = {time.tick_now(), kind, a, b}
+	sync.atomic_store_explicit(&g_diag.event_head, head + 1, .Release)
+}
+
+// Once per frame: turns state changes that have no callback into events.
+diagnostics_watch :: #force_inline proc "contextless" (settings_open, cursor_disabled: bool) {
+	if settings_open != g_diag.watch_settings_open {
+		g_diag.watch_settings_open = settings_open
+		diag_event(settings_open ? .SETTINGS_OPENED : .SETTINGS_CLOSED)
+	}
+	if cursor_disabled != g_diag.watch_cursor_disabled {
+		g_diag.watch_cursor_disabled = cursor_disabled
+		diag_event(cursor_disabled ? .CURSOR_CAPTURED : .CURSOR_RELEASED)
+	}
 }
 
 phase_current :: proc "contextless" () -> Phase {
@@ -182,6 +298,55 @@ diagnostics_capture_gl_info :: proc() {
 	flags: i32
 	gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
 	g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
+	g_diag.gl_reset_detection = gl_context_loses_on_reset()
+	g_diag.gl_reset_status = 0
+	g_diag.gl_reset_last_check = time.tick_now()
+}
+
+GL_RESET_NOTIFICATION_STRATEGY :: 0x8256
+GL_LOSE_CONTEXT_ON_RESET :: 0x8252
+GL_GUILTY_CONTEXT_RESET :: 0x8253
+GL_INNOCENT_CONTEXT_RESET :: 0x8254
+GL_UNKNOWN_CONTEXT_RESET :: 0x8255
+
+// The current context reports resets (it was created with
+// GLFW_LOSE_CONTEXT_ON_RESET and the driver honoured it).
+gl_context_loses_on_reset :: proc() -> bool {
+	strategy: i32
+	gl.GetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &strategy)
+	return strategy == GL_LOSE_CONTEXT_ON_RESET
+}
+
+gpu_reset_status_name :: proc "contextless" (status: u32) -> string {
+	switch status {
+	case 0: return "none"
+	case GL_GUILTY_CONTEXT_RESET: return "guilty"
+	case GL_INNOCENT_CONTEXT_RESET: return "innocent"
+	case GL_UNKNOWN_CONTEXT_RESET: return "unknown"
+	}
+	return "unknown"
+}
+
+// "GPU reset detected: guilty" etc.: the line reports put first.
+gpu_reset_line :: proc(buffer: []u8, status: u32) -> string {
+	switch status {
+	case 0: return ""
+	case GL_GUILTY_CONTEXT_RESET: return fmt.bprintf(buffer, "GPU reset detected: guilty (Krodin's own GL commands caused the reset)")
+	case GL_INNOCENT_CONTEXT_RESET: return fmt.bprintf(buffer, "GPU reset detected: innocent (another program or the driver caused the reset)")
+	}
+	return fmt.bprintf(buffer, "GPU reset detected: unknown (the driver could not say what caused the reset; status 0x%X)", status)
+}
+
+// Polls glGetGraphicsResetStatus. Cheap, but not free on every driver, so the
+// main loop calls it about once a second and right after a hang. Returns the
+// status when a reset is first seen, else 0.
+gpu_reset_poll :: proc(status: u32) -> u32 {
+	g_diag.gl_reset_checks += 1
+	g_diag.gl_reset_last_check = time.tick_now()
+	if status == 0 || g_diag.gl_reset_status != 0 { return 0 }
+	g_diag.gl_reset_status = status
+	diag_event(.GPU_RESET, i32(status))
+	return status
 }
 
 diagnostics_gl_renderer :: proc() -> string {
@@ -385,9 +550,19 @@ gl_check :: proc(site: string, per_phase := false) -> bool {
 }
 
 // --- Crash and hang reports --------------------------------------------------
+//
+// Reports are plain text in sections (System, Settings, Recent history, ...).
+// Everything slow to gather (adapters, CPU, Windows version) is captured once
+// at startup; the report only formats what is already in memory, plus a few
+// syscalls (free RAM, AC/battery). The finished text goes through the network
+// log redaction line by line, so no access or guest token can reach it.
+
+// The report names the commit (KRODIN_COMMIT, build_stamp.odin; set by
+// build.bat as 0x<7-char sha>, 0 without git) so it matches the symbols in
+// dist/symbols/<commit>/ that package-windows.ps1 archives for its dump.
 
 Crash_Info :: struct {
-	title:          string, // "Unhandled exception" or "Main loop not responding".
+	title:          string, // "crash report (unhandled exception)" or "hang report (...)".
 	code:           u32,
 	code_name:      string,
 	address:        uintptr,
@@ -399,15 +574,48 @@ Crash_Info :: struct {
 	stack:          []uintptr, // Return addresses, innermost first (optional).
 	stack_modules:  []string,  // Module path per stack entry (optional).
 	stack_bases:    []uintptr,
+	// Event times are printed relative to this; zero means now.
+	report_tick:    time.Tick,
+	// Hangs: when the main loop last finished a frame.
+	stall_tick:     time.Tick,
+	// The reporting thread may refresh slow OS state (the power plan). The
+	// crash filter passes false and uses what startup captured.
+	live:           bool,
 }
 
-// The crash report, formatted into `buffer` without heap allocation.
+@(private = "file")
+tick_seconds_before :: proc(now, then: time.Tick) -> f64 {
+	if then._nsec == 0 { return 0 }
+	return time.duration_seconds(time.tick_diff(then, now))
+}
+
+@(private = "file")
+report_section :: proc(b: ^strings.Builder, title: string) {
+	fmt.sbprintf(b, "\n== %s ==\n", title)
+}
+
+// The report, formatted into `buffer` without heap allocation.
 crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
+	now := info.report_tick
+	if now._nsec == 0 { now = time.tick_now() }
 	b := strings.builder_from_bytes(buffer)
 	fmt.sbprintf(&b, "Krodin %s\n", info.title)
-	fmt.sbprintf(&b, "Build: %s%s\n", KRODIN_VERSION, KRODIN_DEV ? " (dev)" : "")
-	fmt.sbprintf(&b, "GL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\n", string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]))
-	fmt.sbprintf(&b, "GL debug output: %v\n\n", g_diag.gl_debug_output)
+	fmt.sbprintf(&b, "Build: %s", strings.trim_space(KRODIN_VERSION))
+	if KRODIN_COMMIT != 0 { fmt.sbprintf(&b, ", commit %07x", u64(KRODIN_COMMIT)) }
+	fmt.sbprintf(&b, "%s\n", KRODIN_DEV ? " (dev)" : "")
+	reset_buffer: [160]u8
+	if g_diag.gl_reset_status != 0 {
+		fmt.sbprintf(&b, "\n*** %s ***\n", gpu_reset_line(reset_buffer[:], g_diag.gl_reset_status))
+	} else if g_diag.gl_reset_detection {
+		fmt.sbprintf(&b, "GPU reset: none detected (%d checks, the last %.1f s before this report)\n", g_diag.gl_reset_checks, tick_seconds_before(now, g_diag.gl_reset_last_check))
+	} else if g_diag.gl_vendor_len > 0 {
+		fmt.sbprintf(&b, "GPU reset: cannot be detected (the GL context has no reset notification)\n")
+	}
+
+	report_section(&b, "What happened")
+	if info.stall_tick._nsec != 0 {
+		fmt.sbprintf(&b, "The main loop last finished a frame %.1f s before this report.\n", tick_seconds_before(now, info.stall_tick))
+	}
 	if info.code != 0 { fmt.sbprintf(&b, "Exception: 0x%08X %s\n", info.code, info.code_name) }
 	if info.address != 0 {
 		if len(info.module_path) > 0 {
@@ -419,7 +627,7 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 	if len(info.access) > 0 { fmt.sbprintf(&b, "Access violation: %s of address 0x%X\n", info.access, info.access_address) }
 	if len(info.detail) > 0 { fmt.sbprintf(&b, "%s\n", info.detail) }
 	if len(info.stack) > 0 {
-		fmt.sbprintf(&b, "\nStack (innermost first):\n")
+		fmt.sbprintf(&b, "\nStack (innermost first; tools/symbolicate turns the .dmp into names):\n")
 		for address, i in info.stack {
 			if i < len(info.stack_modules) && len(info.stack_modules[i]) > 0 {
 				fmt.sbprintf(&b, "  0x%X = %s+0x%X\n", address, info.stack_modules[i], address - info.stack_bases[i])
@@ -428,26 +636,232 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 			}
 		}
 	}
-	fmt.sbprintf(&b, "\nFrame: %d\nLast phases (oldest first):\n", g_diag.frame)
+
+	report_section(&b, "System")
+	if g_diag.system_len > 0 { strings.write_string(&b, string(g_diag.system_text[:g_diag.system_len])) }
+	diagnostics_write_live_system(&b, info.live)
+	fmt.sbprintf(&b, "OpenGL is on: %s (GL_VENDOR %s)\nGL_VERSION: %s\n", diagnostics_gl_renderer(), string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), string(g_diag.gl_version[:g_diag.gl_version_len]))
+	fmt.sbprintf(&b, "GL context: reset notification %s%s, debug context %s, GL debug output %s\n",
+		g_diag.gl_reset_detection ? "on" : "off", g_diag.gl_robust_requested && !g_diag.gl_reset_detection ? " (requested, not granted)" : "",
+		g_diag.gl_debug_context ? "yes" : "no", g_diag.gl_debug_output ? "on" : "off")
+	if g_diag.monitor_len > 0 {
+		strings.write_string(&b, "Monitors:\n")
+		strings.write_string(&b, string(g_diag.monitor_text[:g_diag.monitor_len]))
+	}
+
+	report_section(&b, "Settings")
+	diagnostics_write_settings(&b)
+
+	report_section(&b, "Recent frames")
+	diagnostics_write_frame_times(&b)
+
+	report_section(&b, "Recent events")
+	diagnostics_write_events(&b, now, info.stall_tick)
+
+	report_section(&b, "Frame phases")
+	fmt.sbprintf(&b, "Frame: %d\nLast phases (oldest first):\n", g_diag.frame)
 	head := sync.atomic_load_explicit(&g_diag.phase_head, .Acquire)
 	start := head > PHASE_RING_SIZE ? head - PHASE_RING_SIZE : 0
 	for i in start ..< head {
 		entry := g_diag.phases[i % PHASE_RING_SIZE]
 		fmt.sbprintf(&b, "  frame %d: %s\n", entry.frame, PHASE_NAMES[entry.phase])
 	}
+
+	report_section(&b, "GL messages")
 	if g_diag.gl_last_message_len > 0 {
-		fmt.sbprintf(&b, "\nLast new GL message: %s\n", strings.trim_space(string(g_diag.gl_last_message[:g_diag.gl_last_message_len])))
+		fmt.sbprintf(&b, "Last new GL message: %s\n", strings.trim_space(string(g_diag.gl_last_message[:g_diag.gl_last_message_len])))
 	}
 	fmt.sbprintf(&b, "GL messages so far: %d errors, %d warnings; glGetError reported %d\n", g_diag.gl_errors, g_diag.gl_warnings, g_diag.gl_check_errors)
+
+	lines: [kproto.NETWORK_LOG_RECENT_LINES][]u8
+	count := kproto.network_log_recent_lines(lines[:])
+	report_section(&b, "Network log (newest lines, redacted)")
+	if count == 0 { strings.write_string(&b, "(no network activity this session)\n") }
+	for line in lines[:count] {
+		strings.write_string(&b, "  ")
+		strings.write_string(&b, string(line))
+		strings.write_byte(&b, '\n')
+	}
 	return strings.to_string(b)
 }
 
-// Static so the crash path never needs the heap, which may be the thing that broke.
-@(private = "file")
-g_crash_buffer: [16384]u8
+diagnostics_write_settings :: proc(b: ^strings.Builder) {
+	client := g_client
+	if client == nil {
+		strings.write_string(b, "(not loaded yet)\n")
+		return
+	}
+	mode_names := [Display_Mode]string{.Windowed = "Windowed", .Borderless = "Borderless", .Fullscreen = "Fullscreen (exclusive)"}
+	mode := client.display_mode
+	if mode < min(Display_Mode) || mode > max(Display_Mode) { mode = .Windowed }
+	fmt.sbprintf(b, "Display mode: %s, monitor %d\n", mode_names[mode], client.monitor_index)
+	resolution := DISPLAY_RESOLUTIONS[clamp(client.resolution_index, 0, len(DISPLAY_RESOLUTIONS) - 1)]
+	fmt.sbprintf(b, "Windowed resolution: %dx%d\n", resolution.width, resolution.height)
+	if client.fullscreen_resolution.width > 0 {
+		fmt.sbprintf(b, "Fullscreen size: %dx%d\n", client.fullscreen_resolution.width, client.fullscreen_resolution.height)
+	} else {
+		strings.write_string(b, "Fullscreen size: the monitor's largest mode\n")
+	}
+	fmt.sbprintf(b, "Viewport: %dx%d\n", client.viewport_width, client.viewport_height)
+	fmt.sbprintf(b, "V-Sync: %s\n", client.vsync ? "on" : "off")
+	if client.game_fps_limit <= menuui.GAME_FPS_LIMIT_UNLIMITED {
+		strings.write_string(b, "Game FPS limit: unlimited\n")
+	} else {
+		fmt.sbprintf(b, "Game FPS limit: %d\n", client.game_fps_limit)
+	}
+	switch client.menu_fps_limit {
+	case menuui.MENU_FPS_LIMIT_MONITOR: strings.write_string(b, "Menu FPS limit: monitor refresh rate\n")
+	case menuui.MENU_FPS_LIMIT_UNLIMITED: strings.write_string(b, "Menu FPS limit: unlimited\n")
+	case: fmt.sbprintf(b, "Menu FPS limit: %d\n", client.menu_fps_limit)
+	}
+	q := client.quality_settings
+	on_off :: proc(value: bool) -> string { return value ? "on" : "off" }
+	fmt.sbprintf(b, "Shadows: %s (soft %s, high-res %s, dynamic %s, own body %s)\n", on_off(q.shadows), on_off(q.soft_shadows), on_off(q.high_res_shadows), on_off(q.dynamic_shadows), on_off(q.self_shadow))
+	fmt.sbprintf(b, "Shadow quality: %s\n", menuui.SHADOW_QUALITY_LABELS[menuui.Shadow_Quality(clamp(q.shadow_quality, 0, 1))])
+	fmt.sbprintf(b, "Lighting: %s\n", menuui.LIGHTING_LABELS[menuui.Lighting_Quality(clamp(q.lighting, 0, 3))])
+	fmt.sbprintf(b, "Anisotropy: %d\n", q.anisotropy)
+	v := client.visual_settings
+	fmt.sbprintf(b, "Night mode: %s (strength %.2f)\n", on_off(v.night_mode), v.night_strength)
+	spatial := menuui.Spatial_Audio_Mode(clamp(i32(client.audio_settings.spatial), 0, 2))
+	fmt.sbprintf(b, "Spatial audio: %s\n", menuui.SPATIAL_AUDIO_LABELS[spatial])
+	fmt.sbprintf(b, "Settings menu open: %s\n", g_diag.watch_settings_open ? "yes" : "no")
+	fmt.sbprintf(b, "Map batching: %s\n", client.render_batching ? "on" : "off")
+}
 
-// Writes a crash/hang report to `path` (truncating) and flushes it to disk.
-crash_log_write :: proc(path: string, info: Crash_Info) -> bool {
-	report := crash_report_format(g_crash_buffer[:], info)
-	return crash_file_write(path, transmute([]u8)report)
+diagnostics_write_frame_times :: proc(b: ^strings.Builder) {
+	head := sync.atomic_load_explicit(&g_diag.frame_ms_head, .Acquire)
+	count := min(int(head), REPORT_FRAME_TIMES)
+	if count == 0 {
+		strings.write_string(b, "(no frames yet)\n")
+		return
+	}
+	lowest, highest, total: f32 = max(f32), 0, 0
+	slow := 0
+	for i in 0 ..< count {
+		ms := g_diag.frame_ms[(head - u32(count) + u32(i)) % FRAME_TIME_RING_SIZE]
+		lowest, highest, total = min(lowest, ms), max(highest, ms), total + ms
+		if ms > 50 { slow += 1 }
+	}
+	fmt.sbprintf(b, "Last %d frame times in ms (oldest first): min %.2f, avg %.2f, max %.2f, %d over 50 ms\n", count, lowest, total / f32(count), highest, slow)
+	for i in 0 ..< count {
+		ms := g_diag.frame_ms[(head - u32(count) + u32(i)) % FRAME_TIME_RING_SIZE]
+		// Right-aligned by hand: fmt pads floats with zeros.
+		number: [16]u8
+		text := fmt.bprintf(number[:], "%.1f", ms)
+		strings.write_string(b, i % 12 == 0 ? "  " : " ")
+		for _ in len(text) ..< 6 { strings.write_byte(b, ' ') }
+		strings.write_string(b, text)
+		if i % 12 == 11 || i == count - 1 { strings.write_byte(b, '\n') }
+	}
+}
+
+diagnostics_write_events :: proc(b: ^strings.Builder, now, stall: time.Tick) {
+	head := sync.atomic_load_explicit(&g_diag.event_head, .Acquire)
+	count := min(int(head), REPORT_EVENTS)
+	strings.write_string(b, "Seconds before this report, oldest first:\n")
+	stall_printed := stall._nsec == 0
+	for i in 0 ..< count {
+		event := g_diag.events[(head - u32(count) + u32(i)) % EVENT_RING_SIZE]
+		if !stall_printed && time.tick_diff(stall, event.tick) > 0 {
+			fmt.sbprintf(b, "  -%.2f s  -- main loop stopped (last finished frame) --\n", tick_seconds_before(now, stall))
+			stall_printed = true
+		}
+		fmt.sbprintf(b, "  -%.2f s  %s", tick_seconds_before(now, event.tick), DIAG_EVENT_NAMES[event.kind] if event.kind <= max(Diag_Event_Kind) else "?")
+		#partial switch event.kind {
+		case .WM_DISPLAYCHANGE: fmt.sbprintf(b, " (%dx%d)", event.a, event.b)
+		case .DISPLAY_MODE_APPLIED:
+			names := [3]string{"windowed", "borderless", "fullscreen"}
+			fmt.sbprintf(b, " (%s %dx%d)", names[clamp(event.a, 0, 2)], event.b >> 16, event.b & 0xFFFF)
+		case .MAP_LOADED: fmt.sbprintf(b, " (%d ms)", event.a)
+		case .GPU_RESET: fmt.sbprintf(b, " (%s)", gpu_reset_status_name(u32(event.a)))
+		}
+		strings.write_byte(b, '\n')
+	}
+	if !stall_printed {
+		fmt.sbprintf(b, "  -%.2f s  -- main loop stopped (last finished frame) --\n", tick_seconds_before(now, stall))
+	}
+	if count == 0 && stall._nsec == 0 { strings.write_string(b, "  (none)\n") }
+}
+
+// Monitors as GLFW sees them. Main thread; at startup and after a display
+// change (the once-a-second check refreshes it when monitors_stale is set).
+diagnostics_capture_monitors :: proc(window: glfw.WindowHandle) {
+	b := strings.builder_from_bytes(g_diag.monitor_text[:])
+	primary := glfw.GetPrimaryMonitor()
+	fullscreen_on := window != nil ? glfw.GetWindowMonitor(window) : nil
+	for monitor, i in glfw.GetMonitors() {
+		mode := glfw.GetVideoMode(monitor)
+		scale_x, _ := glfw.GetMonitorContentScale(monitor)
+		x, y := glfw.GetMonitorPos(monitor)
+		width, height, refresh: i32
+		if mode != nil { width, height, refresh = mode.width, mode.height, mode.refresh_rate }
+		fmt.sbprintf(&b, "  %d: %s, %dx%d @ %d Hz, scale %.0f%%, at %d,%d%s%s\n", i, glfw.GetMonitorName(monitor), width, height, refresh,
+			scale_x * 100, x, y, monitor == primary ? ", primary" : "", monitor == fullscreen_on ? ", Krodin fullscreen here" : "")
+	}
+	g_diag.monitor_len = len(strings.to_string(b))
+	g_diag.monitors_stale = false
+}
+
+// --- Report writing and redaction ---------------------------------------------
+
+REPORT_BUFFER_SIZE :: 64 * 1024
+REPORT_ARENA_SIZE :: 64 * 1024
+REPORT_REDACT_CHUNK :: 4096
+
+// Each thread that writes reports has its own static buffers, so the crash
+// path never needs the heap (it may be what broke) and a crash during a hang
+// report does not overwrite the hang report's text.
+Report_Writer :: enum { MAIN, WATCHDOG, CRASH }
+
+Report_Buffers :: struct {
+	text:     [REPORT_BUFFER_SIZE]u8,
+	redacted: [REPORT_BUFFER_SIZE]u8,
+	arena:    [REPORT_ARENA_SIZE]u8,
+}
+
+@(private = "file")
+g_report_buffers: [Report_Writer]Report_Buffers
+
+// Runs every line through the network log redaction (registered secrets,
+// token-like fields, JWTs). Allocation comes from `arena_buffer`, reset per
+// line; a line that cannot be redacted is dropped, never written raw.
+report_redact :: proc(text: string, out: []u8, arena_buffer: []u8) -> string {
+	arena: mem.Arena
+	mem.arena_init(&arena, arena_buffer)
+	context.allocator = mem.arena_allocator(&arena)
+	b := strings.builder_from_bytes(out)
+	rest := text
+	for len(rest) > 0 {
+		newline := strings.index_byte(rest, '\n')
+		line := newline < 0 ? rest : rest[:newline]
+		rest = newline < 0 ? "" : rest[newline + 1:]
+		chunk_rest := line
+		for {
+			chunk := chunk_rest[:min(len(chunk_rest), REPORT_REDACT_CHUNK)]
+			chunk_rest = chunk_rest[len(chunk):]
+			safe := kproto.network_log_safe(chunk, REPORT_REDACT_CHUNK * 4)
+			strings.write_string(&b, safe)
+			free_all(context.allocator)
+			if len(chunk_rest) == 0 { break }
+		}
+		strings.write_byte(&b, '\n')
+	}
+	return strings.to_string(b)
+}
+
+// Formats, redacts and writes a crash/hang report to `path` (truncating) and
+// flushes it to disk.
+crash_log_write :: proc(path: string, info: Crash_Info, writer := Report_Writer.MAIN) -> bool {
+	buffers := &g_report_buffers[writer]
+	report := crash_report_format(buffers.text[:], info)
+	safe := report_redact(report, buffers.redacted[:], buffers.arena[:])
+	return crash_file_write(path, transmute([]u8)safe)
+}
+
+// Appends redacted lines to an existing report (hang recovery, second dump,
+// GPU reset found after a hang).
+crash_log_append :: proc(path: string, text: string, writer := Report_Writer.MAIN) -> bool {
+	buffers := &g_report_buffers[writer]
+	safe := report_redact(text, buffers.redacted[:], buffers.arena[:])
+	return crash_file_append(path, transmute([]u8)safe)
 }
