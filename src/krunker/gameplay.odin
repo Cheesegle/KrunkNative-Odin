@@ -211,12 +211,16 @@ krunker_mode_end_stats :: proc(mode_index: i32) -> ([]string, bool) {
 	return nil, false
 }
 
-krunker_world_clear_end :: proc(state: ^Krunker_World_State) {
-	for entry in state.end_entries {
+krunker_world_clear_end_entries :: proc(entries: ^[dynamic]Krunker_End_Entry) {
+	for entry in entries {
 		delete(entry.name)
 		for cell in entry.cells { delete(cell) }
 	}
-	clear(&state.end_entries)
+	clear(entries)
+}
+
+krunker_world_clear_end :: proc(state: ^Krunker_World_State) {
+	krunker_world_clear_end_entries(&state.end_entries)
 	delete(state.end_timer_text)
 	state.end_timer_text = ""
 }
@@ -252,6 +256,35 @@ krunker_world_apply_end_table :: proc(state: ^Krunker_World_State, value: Krunke
 		append(&state.end_entries, entry)
 	}
 	return true
+}
+
+KRUNKER_END_MAX_TEAM :: 64
+
+// Resolves each row's team and live alias while the players still exist (INIT
+// clears them) and copies the END into final_results.
+krunker_world_keep_end_results :: proc(state: ^Krunker_World_State, packet: []Krunker_Msgpack_Value) {
+	for &entry in state.end_entries {
+		for player in state.players {
+			if player.sid != entry.sid { continue }
+			entry.team = player.team
+			if len(player.name) > 0 { delete(entry.name); entry.name = strings.clone(player.name) } // the browser prefers the live alias
+		}
+	}
+	final := &state.final_results
+	krunker_world_clear_end_entries(&final.entries)
+	final.revision += 1
+	final.received_at, final.next_init_at = state.received_at, 0
+	final.game_state = krunker_world_i32(packet[1], 0)
+	final.mode_index, final.local_sid, final.local_team = state.mode_index, state.local_sid, 0
+	for player in state.players { if player.sid == state.local_sid { final.local_team = player.team } }
+	final.result, final.winner_team, final.end_index = state.end_result, state.winner_team, state.end_index
+	final.team_scores = state.match.team_scores
+	for entry in state.end_entries {
+		kept := entry
+		kept.name = strings.clone(entry.name)
+		for cell, i in entry.cells { kept.cells[i] = strings.clone(cell) }
+		append(&final.entries, kept)
+	}
 }
 
 krunker_world_apply_leaders :: proc(state: ^Krunker_World_State, value: Krunker_Msgpack_Value) -> bool {
@@ -318,8 +351,11 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 	case "t":
 		if len(packet) < 2 { return false }
 		kind: i32
-		if len(packet) > 2 { n, ok := krunker_world_bounded_number(packet[2], 0, 3); if !ok { return false }; kind = i32(n) }
-		if kind == 0 {
+		if len(packet) > 2 { n, ok := krunker_world_bounded_number(packet[2], 0, 255); if !ok { return false }; kind = i32(n) }
+		// endTimer "inf" broadcasts its kind as endIndex || 2, so an endIndex 4
+		// sends kind 4. The browser's timer handler only special-cases 1-3 and
+		// writes every other kind to the game clock.
+		if kind == 0 || kind >= 4 {
 			if !krunker_world_set_timer_text(state, packet[1]) { return false }
 			if len(packet) > 3 { if ms, ok := krunker_world_bounded_number(packet[3], 0, 604800000); ok { state.match.time_remaining = f32(ms)/1000 } }
 		} else if kind == 1 {
@@ -347,7 +383,9 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 	case "end":
 		if len(packet) < 5 { return false }
 		result, ok := krunker_world_end_number(packet[2], 1); if !ok { return false }
-		winner, valid := krunker_world_end_number(packet[4], 2); if !valid { return false }
+		// endIndex 4 sends the winner it was given; never drop the whole
+		// END (and its final table) over a team outside the two drawn ones.
+		winner, valid := krunker_world_end_number(packet[4], KRUNKER_END_MAX_TEAM); if !valid { return false }
 		state.end_result, state.winner_team = result, winner
 		state.end_received = true
 		// The final normal round sends END instead of RDS. Its winner is
@@ -371,6 +409,7 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 				if key == "ed" { krunker_world_apply_end_table(state, entry.value) }
 			}
 		}
+		krunker_world_keep_end_results(state, packet)
 		return true
 	case "obj": return krunker_world_set_objective(state, packet[1:])
 	case "wep":

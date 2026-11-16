@@ -65,6 +65,8 @@ Client :: struct {
 	scoreboard_open: bool,
 	end_screen_active, end_screen_dismissed: bool,
 	end_screen_started: f64,
+	// final_results revision the end screen was opened for.
+	end_screen_revision: u64,
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
