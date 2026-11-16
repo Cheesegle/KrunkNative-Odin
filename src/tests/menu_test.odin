@@ -272,6 +272,7 @@ test_menu :: proc() -> bool {
 	view.join_status="Connection failed. Please check the invite and try again."
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE { return false }
+	if menu_test_click(&state, view, clay.ID("JoinGuest")).kind != .NONE { fmt.println("Play as guest needs an invite"); return false }
 	if clay.GetElementData(clay.ID("Login")).found { return false }
 	view.browser_access_supported = true
 	menu_test_frame(&state, view, {})
@@ -281,9 +282,19 @@ test_menu :: proc() -> bool {
 	if menuui.invite(&state) != "krunk://localhost:21015" { return false }
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("JoinLink")).kind != .JOIN_LINK { return false }
+	// Play as guest sits beside Join and works without the browser helper.
+	view.browser_access_supported = false
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("JoinGuest")).kind != .JOIN_GUEST { fmt.println("Play as guest must start a guest join"); return false }
+	view.guest_pending = true; view.connecting = true
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("JoinGuest")).kind != .NONE || menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE { fmt.println("Guest sign-in must disable duplicate joins"); return false }
+	if menu_test_click(&state, view, clay.ID("CancelJoin")).kind != .CANCEL_JOIN { fmt.println("Guest sign-in must be cancellable"); return false }
+	view.guest_pending = false; view.connecting = false; view.browser_access_supported = true
+	menu_test_frame(&state, view, {})
 	view.auth_pending = true
 	menu_test_frame(&state, view, {})
-	if menu_test_click(&state, view, clay.ID("Login")).kind != .NONE || menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE { fmt.println("Pending Login must disable duplicate Login and Join"); return false }
+	if menu_test_click(&state, view, clay.ID("Login")).kind != .NONE || menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE || menu_test_click(&state, view, clay.ID("JoinGuest")).kind != .NONE { fmt.println("Pending Login must disable duplicate Login and Join"); return false }
 	if menu_test_click(&state, view, clay.ID("CancelJoin")).kind != .CANCEL_JOIN { return false }
 	view.auth_pending = false
 	// Opening session from the connection screen must not duplicate field IDs.
