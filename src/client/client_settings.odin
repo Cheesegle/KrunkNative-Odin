@@ -17,6 +17,7 @@ Client_Settings :: struct {
 	fov: f32,
 	show_fps, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS; 0 (the default) is the monitor's refresh rate.
+	game_fps_limit: i32, // Krunker's Frame Cap: 0 (the default) is unlimited, else 10-1200.
 	perf_overlay: bool, // The debug performance window (F3).
 	bindings: menuui.Bindings,
 	hud: menuui.HUD_Settings,
@@ -46,7 +47,7 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui, audio.weapons},
 		spatial_audio = i32(audio.spatial), distance_falloff = i32(audio.falloff),
 		levelling = audio.levelling, levelling_strength = audio.levelling_strength,
-		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
+		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, game_fps_limit = d.game_fps_limit, bindings = d.bindings, hud = d.hud,
 		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
 }
 
@@ -63,10 +64,14 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.visuals = menuui.visual_settings_validate(result.visuals)
 	result.quality = menuui.quality_settings_validate(result.quality)
 	result.menu_fps_limit = menuui.menu_fps_limit_validate(result.menu_fps_limit)
+	result.game_fps_limit = menuui.game_fps_limit_validate(result.game_fps_limit)
 	result.viewmodel = menuui.viewmodel_settings_validate(result.viewmodel)
 	result.crosshair = menuui.crosshair_settings_validate(result.crosshair)
 	result.hitmarker = menuui.hitmarker_settings_validate(result.hitmarker)
 	result.damage = menuui.damage_settings_validate(result.damage)
+	result.hud.healthbar_colors = menuui.healthbar_colors_validate(result.hud.healthbar_colors)
+	result.hud.nametag_scale = menuui.nametag_scale(result.hud)
+	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
 	defaults := menuui.default_bindings()
 	for action in menuui.Binding_Action {
 		for code, slot in result.bindings[action] {
@@ -78,13 +83,16 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 }
 
 client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Settings {
+	// Every path is validated: settings stored as 0 mean "Krunker's default"
+	// (healthbar and nametag colours, nametag size), and the settings menu
+	// shows the stored value, so an unvalidated 0 appeared as black (#000000).
 	settings := client_settings_defaults()
 	data, err := os.read_entire_file_from_path(path, context.allocator)
-	if err != nil { return settings }
+	if err != nil { return client_settings_validate(settings) }
 	defer delete(data)
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
-		return client_settings_defaults()
+		return client_settings_validate(client_settings_defaults())
 	}
 	return client_settings_validate(settings)
 }
@@ -92,7 +100,7 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 	return {version = 1, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
-		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
+		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings}
 }

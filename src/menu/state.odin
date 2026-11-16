@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF }
@@ -16,13 +16,65 @@ Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY,
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
 // (1..10, default 8), with 0 (a file without the key) meaning the default.
+// kill_feed_size is Krodin's own killfeed scale (1x..3x, default 2x), with 0
+// likewise meaning the default.
 HUD_Settings :: struct {
 	hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool,
 	hide_kill_feed: bool,
 	kill_feed_limit: i32,
+	// Krodin's own: Krunker's nameplate bars have no border (a translucent
+	// black track, `rgba(0, 0, 0, 0.4)`, under the fill). Off by default.
+	healthbar_border: bool,
+	healthbar_colors: Healthbar_Colors,
+	nametag_scale: f32, // See nametag_scale; 0 (a file without the key) is 100%.
+	nametag_colors: Nametag_Colors,
+	kill_feed_size: f32,
+}
+// Nameplate healthbar fills, Krunker's healthColE ("Nametag Health Color E")
+// and healthColT ("Nametag Health Color Team"). A zero value predates these
+// settings and means Krunker's defaults (healthbar_colors_validate).
+Healthbar_Colors :: struct { enemy, team: u32 }
+DEFAULT_HEALTHBAR_COLORS :: Healthbar_Colors{enemy = 0xeb5656, team = 0x9eeb56}
+// Color edit fields (settings_color_value); 1-7 are the crosshair's, the
+// hitmarker's and the damage feedback's.
+HEALTHBAR_ENEMY_COLOR_FIELD :: 8
+HEALTHBAR_TEAM_COLOR_FIELD :: 9
+healthbar_colors_validate :: proc(colors: Healthbar_Colors) -> Healthbar_Colors {
+	if colors == (Healthbar_Colors{}) { return DEFAULT_HEALTHBAR_COLORS }
+	return {colors.enemy & 0xffffff, colors.team & 0xffffff}
+}
+// Krodin's own nametag text size, a multiple of Krunker's 20px name. Only the
+// name scales; the healthbar keeps Krunker's 130x16 size.
+NAMETAG_SCALE_MIN :: 0.75 // 50% made names about 7 px tall at 1080p: unreadable.
+NAMETAG_SCALE_MAX :: 2
+nametag_scale :: proc(settings: HUD_Settings) -> f32 {
+	scale := settings.nametag_scale
+	if scale <= 0 || scale != scale { return 1 } // Unset or NaN.
+	return clamp(scale, NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX)
+}
+// Krodin's own name colours. Krunker draws names white, and enemies' names in
+// team modes in the enemy health colour (healthColE, #eb5656); it has no
+// separate name colour setting. A zero value predates these settings.
+Nametag_Colors :: struct { enemy, team: u32 }
+DEFAULT_NAMETAG_COLORS :: Nametag_Colors{enemy = 0xeb5656, team = 0xffffff}
+// Color edit fields (settings_color_value); 1-7 are the crosshair's, the
+// hitmarker's and the damage feedback's.
+NAMETAG_ENEMY_COLOR_FIELD :: 10
+NAMETAG_TEAM_COLOR_FIELD :: 11
+nametag_colors_validate :: proc(colors: Nametag_Colors) -> Nametag_Colors {
+	if colors == (Nametag_Colors{}) { return DEFAULT_NAMETAG_COLORS }
+	return {colors.enemy & 0xffffff, colors.team & 0xffffff}
 }
 KILL_FEED_DEFAULT_LIMIT :: 8
 KILL_FEED_MAX_LIMIT :: 10
+KILL_FEED_MIN_SIZE :: 1.0
+KILL_FEED_DEFAULT_SIZE :: 2.0
+KILL_FEED_MAX_SIZE :: 3.0
+kill_feed_size :: proc(settings: HUD_Settings) -> f32 {
+	size := settings.kill_feed_size
+	if !(size > 0) { return KILL_FEED_DEFAULT_SIZE } // 0 and NaN
+	return clamp(size, KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE)
+}
 kill_feed_limit :: proc(settings: HUD_Settings) -> int {
 	if settings.kill_feed_limit <= 0 { return KILL_FEED_DEFAULT_LIMIT }
 	return int(min(settings.kill_feed_limit, KILL_FEED_MAX_LIMIT))
@@ -42,6 +94,7 @@ Settings_Values :: struct {
 	show_fps: bool,
 	vsync: bool,
 	menu_fps_limit: i32, // See MENU_FPS_LIMITS.
+	game_fps_limit: i32, // Krunker's Frame Cap: 0 unlimited, else 10-1200; see game_fps_limit_validate.
 	bindings: Bindings,
 	hud: HUD_Settings,
 	visuals: Visual_Settings,
@@ -89,6 +142,7 @@ View :: struct {
 	monitor_names: []string,
 	vsync: bool,
 	menu_fps_limit: i32,
+	game_fps_limit: i32,
 	bindings: Bindings,
 	hud: HUD_Settings,
 	visuals: Visual_Settings,
@@ -170,6 +224,9 @@ State :: struct {
 	// Krunker's "Import Settings" popup. Krunker exports compact JSON; loadouts
 	// can make it several kilobytes, so the field holds up to 64 KiB.
 	import_open, import_overflow: bool,
+	// Krodin's import filter. All off by default; kept for the session (never
+	// saved), so a later import after a restart is a plain Krunker import again.
+	import_exclude: Krunker_Import_Groups,
 	// Krunker's resetSettings asks confirm("settings.reset.confirm") first.
 	reset_open: bool,
 	settings_defaults: Settings_Values, // Copied from View every frame.
@@ -206,7 +263,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, spatial_audio = view.spatial_audio, distance_falloff = view.distance_falloff, levelling = view.levelling, levelling_strength = view.levelling_strength, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
-			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
+			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), game_fps_limit = game_fps_limit_validate(view.game_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
 			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage)}
 		state.settings_active = true
 	}
@@ -476,12 +533,17 @@ activate :: proc(state: ^State, control: Control) -> Action {
 	if control.action.kind == .SETTINGS_IMPORT {
 		state.pressed = 0
 		if state.import_overflow { settings_set_message(state, "Settings text is too long.", true); return {} }
-		result, error := krunker_settings_import(&state.settings_draft, string(state.import_buffer[:state.import_length]))
+		result, error := krunker_settings_import(&state.settings_draft, string(state.import_buffer[:state.import_length]), state.import_exclude)
 		if len(error) > 0 { settings_set_message(state, error, true); return {} }
 		settings_import_close(state)
 		state.focus = clay.ID("SettingsImport").id
-		settings_set_message(state, fmt.tprintf("Imported %d Krunker settings. Ignored %d unsupported.", result.imported, result.ignored), false)
+		settings_set_message(state, krunker_import_message(result, state.import_exclude), false)
 		return {kind = .SETTINGS_IMPORT} // The client applies and saves the draft, as Save does.
+	}
+	if control.action.kind == .SETTINGS_IMPORT_EXCLUDE {
+		state.import_exclude ~= {Krunker_Import_Group(control.action.index)}
+		state.pressed = 0
+		return {} // Only the menu reads the filter, when Import runs.
 	}
 	if control.action.kind == .SETTINGS_SEARCH {
 		state.pressed = 0
@@ -529,8 +591,15 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 2: state.settings_draft.visuals.night_mode = !state.settings_draft.visuals.night_mode
 			}
 			return {}
+		case .NAMETAG_SIZE:
+			if value := control.action.value; value == value { state.settings_draft.hud.nametag_scale = clamp(value, NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX) } // Skips NaN.
+			return {}
 		case .KILL_FEED_LIMIT:
 			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_limit = i32(clamp(value + 0.5, 1, KILL_FEED_MAX_LIMIT)) } // Skips NaN.
+			return {}
+		case .KILL_FEED_SIZE:
+			// Tenths, so typed and dragged values land on the same steps.
+			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_size = f32(i32(clamp(value, KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE)*10 + 0.5))/10 } // Skips NaN.
 			return {}
 		case .NIGHT_STRENGTH:
 			if value := control.action.value; value == value { state.settings_draft.visuals.night_strength = clamp(value, 0, 1) } // Skips NaN.
@@ -568,6 +637,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
 		case .MENU_FPS_LIMIT: state.settings_draft.menu_fps_limit = MENU_FPS_LIMITS[clamp(control.action.index, 0, len(MENU_FPS_LIMITS)-1)]; return {}
+		case .GAME_FPS_LIMIT: state.settings_draft.game_fps_limit = game_fps_limit_from_value(control.action.value); return {}
 		case .HUD_TOGGLE:
 			switch control.action.index {
 			case 0: state.settings_draft.hud.hide_timer = !state.settings_draft.hud.hide_timer
@@ -577,6 +647,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
+			case 7: state.settings_draft.hud.healthbar_border = !state.settings_draft.hud.healthbar_border
 			}
 			return {}
 		case .RESOLUTION:
