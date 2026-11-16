@@ -147,4 +147,128 @@ when ODIN_TEST {
 		testing.expect(t, client.bindings[.FORWARD] == {'Z', 265} && client.crosshair_settings.color == 0x00ff00 && audio_test_volumes(client.audio_settings) == {0.5, 1, 0.7, 0.3, 0.3} && client.audio_settings_dirty, "binds, crosshair and audio are applied")
 		testing.expect(t, client_settings_snapshot(&client).viewmodel == client.viewmodel_settings, "imported viewmodel persists with the client settings")
 	}
+
+	// Krodin's import filter. Distinct sensitivity, binds and sound, so a group
+	// that wrongly imports or resets is visible.
+	krunker_exclude_test_values :: proc() -> menuui.Settings_Values {
+		values := krunker_test_values()
+		values.sensitivity, values.ads_sensitivity, values.advanced_sensitivity, values.mouse_dpi = 3.25, 0.75, true, 1200
+		values.bindings[.JUMP] = {'V', 'V'} // A duplicate a full import would clear; an excluded import keeps it.
+		values.bindings[.RELOAD] = {'T', -5}
+		values.audio_volumes = {0.11, 0.22, 0.33, 0.44, 0.55}
+		return values
+	}
+
+	// What an import excluding `groups` must produce: the plain import, with
+	// every setting of an excluded group restored to `original`.
+	krunker_exclude_expected :: proc(original, imported: menuui.Settings_Values, groups: menuui.Krunker_Import_Groups) -> menuui.Settings_Values {
+		expected := imported
+		if .SENSITIVITY in groups {
+			expected.sensitivity, expected.ads_sensitivity, expected.advanced_sensitivity, expected.mouse_dpi = original.sensitivity, original.ads_sensitivity, original.advanced_sensitivity, original.mouse_dpi
+		}
+		if .KEYBINDS in groups { expected.bindings = original.bindings }
+		if .SOUND in groups { expected.audio_volumes = original.audio_volumes }
+		return expected
+	}
+
+	@(test)
+	krunker_import_exclude_groups :: proc(t: ^testing.T) {
+		original := krunker_exclude_test_values()
+		plain := original
+		plain_result, plain_error := menuui.krunker_settings_import(&plain, KRUNKER_SAMPLE_EXPORT)
+		testing.expect_value(t, plain_error, "")
+		testing.expect(t, plain.sensitivity != original.sensitivity && plain.bindings != original.bindings && plain.audio_volumes != original.audio_volumes, "the sample changes every group")
+		// The sample's entries per group: 4 sensitivity keys; 15 binds (2 + 4 moveKeys,
+		// 7 named binds, sprayKey and toggleSets); sound, playerVolume and uiVolume.
+		skipped := [menuui.Krunker_Import_Group]int{.SENSITIVITY = 4, .KEYBINDS = 15, .SOUND = 3}
+		ignored := [menuui.Krunker_Import_Group]int{.SENSITIVITY = 0, .KEYBINDS = 2, .SOUND = 0} // sprayKey, toggleSets
+		for groups in ([?]menuui.Krunker_Import_Groups{{.SENSITIVITY}, {.KEYBINDS}, {.SOUND}, {.SENSITIVITY, .KEYBINDS}, {.KEYBINDS, .SOUND}, {.SENSITIVITY, .KEYBINDS, .SOUND}}) {
+			values := original
+			result, error := menuui.krunker_settings_import(&values, KRUNKER_SAMPLE_EXPORT, groups)
+			testing.expect_value(t, error, "")
+			testing.expectf(t, values == krunker_exclude_expected(original, plain, groups), "excluding %v keeps those groups and imports everything else exactly as a plain import", groups)
+			want: menuui.Krunker_Import_Result
+			want.ignored = plain_result.ignored
+			for group in groups { want.skipped += skipped[group]; want.ignored -= ignored[group] }
+			want.imported = plain_result.imported + plain_result.ignored - want.ignored - want.skipped
+			testing.expectf(t, result == want, "excluding %v: %v, want %v", groups, result, want)
+		}
+		all := original
+		menuui.krunker_settings_import(&all, KRUNKER_SAMPLE_EXPORT, {.SENSITIVITY, .KEYBINDS, .SOUND})
+		testing.expect(t, all.sensitivity == 3.25 && all.ads_sensitivity == 0.75 && all.advanced_sensitivity && all.mouse_dpi == 1200, "sensitivity, ADS, advanced mode and DPI stay")
+		testing.expect(t, all.bindings[.JUMP] == {'V', 'V'} && all.bindings[.RELOAD] == {'T', -5} && all.audio_volumes == [5]f32{0.11, 0.22, 0.33, 0.44, 0.55}, "binds (even a duplicate) and every volume stay")
+		testing.expect(t, all.fov == 110 && all.crosshair.color == 0x00ff00 && all.invert_mouse, "the other settings still import; invertY is not sensitivity")
+	}
+
+	@(test)
+	krunker_import_exclude_none_is_unchanged :: proc(t: ^testing.T) {
+		for text in ([?]string{KRUNKER_SAMPLE_EXPORT, `{}`, `{"fov":120,"someFutureKey":1,"sensitivityX_3":2,"crosshairColor":"red","weaponBob":null,"aimSensitivityX":3}`}) {
+			a, b := krunker_exclude_test_values(), krunker_exclude_test_values()
+			result_a, error_a := menuui.krunker_settings_import(&a, text)
+			result_b, error_b := menuui.krunker_settings_import(&b, text, {})
+			testing.expectf(t, a == b && result_a == result_b && error_a == error_b && result_b.skipped == 0, "no exclusions is the plain import for %q", text)
+		}
+		values := krunker_test_values()
+		result, _ := menuui.krunker_settings_import(&values, KRUNKER_SAMPLE_EXPORT, {})
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 45, ignored = 5})
+		testing.expect_value(t, menuui.krunker_import_message(result, {}), "Imported 45 Krunker settings. Ignored 5 unsupported.")
+	}
+
+	@(test)
+	krunker_import_exclude_edges :: proc(t: ^testing.T) {
+		// Excluded groups are not reset to Krunker's defaults when their keys are missing.
+		values := krunker_exclude_test_values()
+		before := values
+		result, error := menuui.krunker_settings_import(&values, `{}`, {.SENSITIVITY, .KEYBINDS, .SOUND})
+		testing.expect(t, len(error) == 0 && result == {} && values.audio_volumes == before.audio_volumes && values.sensitivity == before.sensitivity && values.bindings == before.bindings, "missing keys of excluded groups keep their values")
+		// Unsupported or invalid keys of an excluded group count as skipped, not ignored.
+		text := `{"sensitivityX_3":2,"aimSensitivityYCntrl":1,"voiceVolume":0.5,"sound":"loud","controls":5,"resolution":1}`
+		values = krunker_exclude_test_values()
+		result, _ = menuui.krunker_settings_import(&values, text)
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 0, ignored = 6})
+		values = krunker_exclude_test_values()
+		result, _ = menuui.krunker_settings_import(&values, text, {.SENSITIVITY, .KEYBINDS, .SOUND})
+		testing.expect_value(t, result, menuui.Krunker_Import_Result{imported = 0, ignored = 1, skipped = 5})
+		// Bad text is still rejected without changes, whatever is excluded.
+		values = krunker_exclude_test_values()
+		before = values
+		result, error = menuui.krunker_settings_import(&values, "not json", {.SOUND})
+		testing.expect(t, len(error) > 0 && result == {} && values == before, "bad text is rejected")
+	}
+
+	@(test)
+	krunker_import_exclude_message_and_groups :: proc(t: ^testing.T) {
+		testing.expect_value(t, menuui.krunker_import_message({imported = 32, ignored = 2, skipped = 13}, {.KEYBINDS, .SOUND}), "Imported 32 settings, skipped 13 (keybinds, sound). Ignored 2 unsupported.")
+		testing.expect_value(t, menuui.krunker_import_message({imported = 26, ignored = 5, skipped = 19}, {.SOUND, .SENSITIVITY}), "Imported 26 settings, skipped 19 (sensitivity, sound). Ignored 5 unsupported.")
+		testing.expect_value(t, menuui.krunker_import_message({imported = 28, ignored = 3, skipped = 22}, {.SENSITIVITY, .KEYBINDS, .SOUND}), "Imported 28 settings, skipped 22 (sensitivity, keybinds, sound). Ignored 3 unsupported.")
+		testing.expect_value(t, menuui.krunker_import_message({imported = 3, ignored = 2}, {}), "Imported 3 Krunker settings. Ignored 2 unsupported.")
+		Group_Case :: struct { name: string, group: menuui.Krunker_Import_Group, ok: bool }
+		for entry in ([?]Group_Case{
+			{"sensitivityX", .SENSITIVITY, true}, {"aimSensitivityY", .SENSITIVITY, true}, {"sensitivityX_3", .SENSITIVITY, true},
+			{"controls", .KEYBINDS, true}, {"sound", .SOUND, true}, {"gunsVolume", .SOUND, true}, {"voiceVolume", .SOUND, true},
+			{"invertY", {}, false}, {"fov", {}, false}, {"jumpKey", {}, false},
+		}) {
+			group, ok := menuui.krunker_import_group(entry.name)
+			testing.expectf(t, ok == entry.ok && (!ok || group == entry.group), "%s belongs to %v (%v)", entry.name, entry.group, entry.ok)
+		}
+	}
+
+	// Import applies and saves at once; excluded groups keep the live client values.
+	@(test)
+	krunker_import_exclude_applies_like_save :: proc(t: ^testing.T) {
+		client := Client{sensitivity = 1, audio_settings = DEFAULT_AUDIO_SETTINGS, visual_settings = menuui.DEFAULT_VISUAL_SETTINGS}
+		client.menu.page = .SETTINGS
+		client.menu.settings_draft = krunker_exclude_test_values()
+		client.menu.settings_active = true
+		client.menu.import_open = true
+		client.menu.import_exclude = {.KEYBINDS, .SOUND}
+		client.menu.import_length = copy(client.menu.import_buffer[:], KRUNKER_SAMPLE_EXPORT)
+		action := menuui.activate(&client.menu, {action = {kind = .SETTINGS_IMPORT}})
+		testing.expect(t, action.kind == .SETTINGS_IMPORT && !client.menu.import_open, "the import closes the popup")
+		testing.expect_value(t, menuui.settings_message(&client.menu), "Imported 29 settings, skipped 18 (keybinds, sound). Ignored 3 unsupported.")
+		menu_apply_action(&client, action)
+		testing.expect(t, abs(client.sensitivity-1.6) < 0.0001 && client.settings_dirty, "sensitivity still imports and saves")
+		testing.expect(t, client.bindings[.JUMP] == {'V', 'V'} && client.bindings[.RELOAD] == {'T', -5} && audio_test_volumes(client.audio_settings) == {0.11, 0.22, 0.33, 0.44, 0.55}, "excluded binds and volumes are applied unchanged")
+		testing.expect(t, client.menu.import_exclude == {.KEYBINDS, .SOUND}, "the toggles stay set for the session")
+	}
 }
