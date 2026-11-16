@@ -722,7 +722,9 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	}
 }
 
-client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool) {
+// replay is false for a snapshot that a newer local snapshot in the same
+// receive batch replaces: only the newest one needs the unacknowledged inputs.
+client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool, replay := true) {
 	client_discard_acked_inputs(client, state.ack_seq)
 	player.interpolate = false
 	player.position = state.position
@@ -736,6 +738,7 @@ client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, s
 	// Reapply inputs the server had not processed when it produced this
 	// snapshot. `recon=true` runs deterministic movement/collision code while
 	// suppressing duplicate shots, reloads, and recoil effects.
+	if !replay { return }
 	for &input in client.predicted_inputs {
 		shared.player_proc_input(player, &input, true, client.game.move_lock)
 	}
@@ -788,7 +791,7 @@ client_reconcile_players :: proc(client: ^Client, state: ^shared.Packet_Match_St
 	client.game.player_count = i32(len(client.game.players))
 }
 
-client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_State) {
+client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_State, replay := true) {
 	if state.class_id < 0 || state.class_id >= i32(len(client.game.classes)) || state.player_id == 0 || state.team < 0 || state.team > 2 {
 		fmt.eprintf("[Net Client] Rejected invalid player state id=%d class=%d team=%d\n", state.player_id, state.class_id, state.team)
 		return
@@ -847,7 +850,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	player.active = state.active
 	if state.is_you {
 		if state.active {
-			client_reconcile_local_player(client, player, state, was_active)
+			client_reconcile_local_player(client, player, state, was_active, replay)
 		} else {
 			clear(&client.predicted_inputs)
 			player.interpolate = false

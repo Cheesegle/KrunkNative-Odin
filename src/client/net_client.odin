@@ -123,6 +123,11 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 
 	if bytes_read > 0 {
 		nc.recv_len += bytes_read
+		// After a stall the buffer can hold several local snapshots. Each
+		// replaces the last, so only the newest replays the unacknowledged
+		// inputs: one replay per receive instead of one per snapshot.
+		newest_local := net_client_newest_local_state(nc.recv_buffer[:nc.recv_len])
+		consumed := 0
 		for nc.recv_len >= shared.PACKET_HEADER_SIZE {
 			header, h_ok := shared.packet_deserialize_header(nc.recv_buffer[:nc.recv_len])
 			if !h_ok {
@@ -154,7 +159,7 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				}
 			case .GAME_STATE:
 				if state, state_ok := shared.packet_deserialize_state(packet); state_ok {
-					client_apply_player_state(client, &state)
+					client_apply_player_state(client, &state, !state.is_you || consumed >= newest_local)
 				}
 			case .MATCH_STATE:
 				if state, state_ok := shared.packet_deserialize_match_state(packet); state_ok {
@@ -179,6 +184,7 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				}
 			}
 			nc.recv_len -= packet_size
+			consumed += packet_size
 			if nc.recv_len > 0 {
 				copy(nc.recv_buffer[:nc.recv_len], nc.recv_buffer[packet_size:packet_size + nc.recv_len])
 			}
@@ -191,6 +197,22 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 		fmt.printf("[Net Client] Connection error: %v\n", err)
 		nc.connected = false
 	}
+}
+
+// Offset of the last complete, active local GAME_STATE in data, or -1.
+net_client_newest_local_state :: proc(data: []byte) -> int {
+	newest, offset := -1, 0
+	for len(data) - offset >= shared.PACKET_HEADER_SIZE {
+		header, ok := shared.packet_deserialize_header(data[offset:])
+		if !ok { break }
+		size := shared.PACKET_HEADER_SIZE + int(header.payload_len)
+		if size > len(data) - offset { break }
+		if header.packet_type == .GAME_STATE {
+			if state, state_ok := shared.packet_deserialize_state(data[offset:offset + size]); state_ok && state.is_you && state.active { newest = offset }
+		}
+		offset += size
+	}
+	return newest
 }
 
 net_client_send_team :: proc(nc: ^Net_Client_State, team: i32) -> bool {

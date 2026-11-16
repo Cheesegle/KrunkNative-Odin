@@ -6,6 +6,7 @@ import "core:sync"
 import win "core:sys/windows"
 import "core:thread"
 import "core:time"
+import kproto "../krunker"
 
 // Top-level crash handler and hang watchdog (Windows).
 //
@@ -138,6 +139,8 @@ crash_filter :: proc "system" (pointers: ^win.EXCEPTION_POINTERS) -> win.LONG {
 	info.stack_modules = g_crash.stack_modules[:min(frames, module_slots)]
 	info.stack_bases = g_crash.stack_bases[:min(frames, module_slots)]
 	info.detail = "Please send logs/crash.log (and logs/crash.dmp, plus logs/gl-debug.log if you ran with --gl-debug)."
+	// The network log writes in the background; keep its last lines.
+	kproto.network_log_crash_flush()
 	written := crash_log_write(CRASH_LOG_PATH, info)
 	crash_write_dump(win.L(CRASH_DUMP_PATH), pointers, win.GetCurrentThreadId())
 	if written { fmt.eprintln("\n[Crash] Report written to", CRASH_LOG_PATH) }

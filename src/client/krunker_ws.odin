@@ -27,17 +27,17 @@ Krunker_WS_State :: struct {
 	secondary_request_revision: u64,
 	q_index:      int,
 	ah_num:       u8,
-	recv_buffer:  [4096]byte,
 	ws_url:       string,
-	pending:      [dynamic]string,
+	// Owns the curl handle once connected; nil in tests and while joining.
+	transport:    ^Krunker_WS_Transport,
+	// Received events not applied yet, oldest first.
+	inbox:        [dynamic]Krunker_WS_Event,
 	rx_logged:    int,
 	decode_errors: int,
-	send_blocked: bool,
 	input_blocked: bool,
 	recv_budget_hits: int,
 	error_buffer: [curl.ERROR_SIZE]byte,
 	upgrade_capture: kproto.Network_HTTP_Capture,
-	message: kproto.Krunker_WS_Message,
 	rendered_map_revision: u64,
 	render_map_ready: bool,
 	player_revisions: map[i32]u64,
@@ -58,6 +58,14 @@ Krunker_WS_State :: struct {
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
+	// Set while krunker_ws_process_inbox applies one frame's messages: a
+	// fresh l then defers its replay, so several in one frame replay once.
+	batching: bool,
+	replay: Krunker_Deferred_Replay,
+	// The prediction cap dropped commands up to truncated_through before the
+	// server acknowledged them; replays before that ACK cannot be exact.
+	history_truncated: bool,
+	truncated_through: i32,
 	// Predicted ramp snap target after the newest acknowledged command.
 	acked_ramp_fix: f32,
 	acked_has_ramp_fix: bool,
@@ -325,44 +333,28 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 	return krunker_ws_finish_packet(message, opcode, ah_num)
 }
 
-krunker_ws_send_internal :: proc(state: ^Krunker_WS_State, opcode: string, queue_on_again: bool) -> bool {
-	state.send_blocked = false
-	// Advance the shared counter only after a complete successful send.
-	// Retrying an unsent packet must reuse its counter, including across wrap.
+// Queues a control packet on the WebSocket thread, which sends packets in
+// queue order and retries E_AGAIN with the same bytes. The counter therefore
+// advances here, exactly once per packet, as it did after a complete send.
+krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
+	if state.transport == nil {
+		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s: no WebSocket connection", opcode))
+		return false
+	}
 	next_counter := state.ah_num
 	packet := krunker_ws_message(opcode, &next_counter, state.q_index, state.team, state.class_index, state.secondary_index)
-	defer delete(packet)
-	sent: c.size_t
-	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
-	if code == .E_AGAIN && sent == 0 {
-		state.send_blocked = true
-		if queue_on_again { append(&state.pending, strings.clone(opcode)); kproto.network_log("ws-send", fmt.tprintf("would block; queued opcode=%s pending=%d", opcode, len(state.pending))) }
-		return queue_on_again
-	}
-	if code != .E_OK || int(sent) != len(packet) {
-		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s curl=%v (%s) sent=%d expected=%d detail=%s", opcode, code, string(curl.easy_strerror(code)), sent, len(packet), string(cast(cstring)&state.error_buffer[0])))
+	bytes := len(packet)
+	trailer := [2]byte{packet[bytes-2], packet[bytes-1]}
+	if !krunker_ws_transport_send(state.transport, packet[:], opcode) {
+		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s: the WebSocket connection has ended", opcode))
 		return false
 	}
 	state.ah_num = next_counter
 	if opcode == "v" && state.spawned { state.heartbeat_logged += 1 }
 	if opcode != "v" || !state.spawned || state.heartbeat_logged <= 3 || state.heartbeat_logged % 120 == 0 {
-		kproto.network_log("ws-send", fmt.tprintf("opcode=%s bytes=%d counter=%d trailer=[%02x %02x] q_index=%d pending=%d", opcode, sent, state.ah_num, packet[len(packet)-2], packet[len(packet)-1], state.q_index, len(state.pending)))
+		kproto.network_log("ws-send", fmt.tprintf("opcode=%s bytes=%d counter=%d trailer=[%02x %02x] q_index=%d", opcode, bytes, state.ah_num, trailer[0], trailer[1], state.q_index))
 	}
 	if opcode == "q" { state.q_index += 1 }
-	return true
-}
-
-krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
-	return krunker_ws_send_internal(state, opcode, true)
-}
-
-krunker_ws_flush_pending :: proc(state: ^Krunker_WS_State) -> bool {
-	for len(state.pending) > 0 {
-		opcode := state.pending[0]
-		if !krunker_ws_send_internal(state, opcode, false) { return state.send_blocked }
-		delete(opcode)
-		ordered_remove(&state.pending, 0)
-	}
 	return true
 }
 
@@ -416,6 +408,9 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 		if state.rx_logged <= 40 || !krunker_ws_routine_packet(packet[0]) {
 			kproto.network_log("msgpack", fmt.tprintf("RECV opcode=%v args=%d trailer=%d complete_message_bytes=%d", packet[0], len(packet)-1, counter, len(payload)))
 		}
+		// A deferred replay may wait across l and remote-only k updates. Run
+		// it before anything else can read or reset the local player.
+		if !is_text || opcode != "l" && opcode != "k" { krunker_client_finish_replay(client) }
 		client.krunker_world.received_at = glfw.GetTime()
 		applied := kproto.krunker_world_apply_packet(&client.krunker_world, packet)
 		if is_text {
@@ -555,98 +550,112 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8)
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.input_commands) == 0 do return
+	if state.transport == nil {
+		kproto.network_log("input", "ERROR q: no WebSocket connection")
+		krunker_ws_set_status(client, "Live input send failed; see logs/krunker-network.log")
+		state.connected = false
+		return
+	}
+	// While an earlier q still waits for the socket, keep commands here: they
+	// join the next batch, as they did when a send returned E_AGAIN.
+	if krunker_ws_transport_input_backlog(state.transport) > 0 {
+		if !state.input_blocked { kproto.network_log("input", fmt.tprintf("q send would block: next_seq=%d unsent=%d", state.input_sequence, len(state.input_commands))) }
+		state.input_blocked = true
+		return
+	}
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
 	reset := state.input_reset
 	packet, ok := krunker_ws_encode_input(state)
 	if !ok { krunker_ws_set_status(client, "Could not encode live movement input."); state.connected = false; return }
-	defer delete(packet)
-	sent: c.size_t
-	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
-	if code == .E_AGAIN && sent == 0 {
-		if !state.input_blocked { kproto.network_log("input", fmt.tprintf("q send would block: next_seq=%d unsent=%d", state.input_sequence, len(state.input_commands))) }
-		state.input_blocked = true
-		return
-	}
-	if code != .E_OK || int(sent) != len(packet) {
-		kproto.network_log("input", fmt.tprintf("ERROR q curl=%v sent=%d expected=%d", code, sent, len(packet)))
+	bytes := len(packet)
+	if !krunker_ws_transport_send(state.transport, packet, "q", true) {
+		kproto.network_log("input", "ERROR q: the WebSocket connection has ended")
 		krunker_ws_set_status(client, "Live input send failed; see logs/krunker-network.log")
 		state.connected = false
 		return
 	}
-	// Keep commands intact on E_AGAIN; only successful sends consume the queue.
+	// Queued packets are sent in order or the connection ends, so the
+	// commands, reset flag and counter are consumed now.
 	krunker_ws_input_sent(state, count, counter)
 	if state.input_blocked || len(state.input_commands) > kproto.KRUNKER_MAX_INPUT_BATCH {
 		kproto.network_log("input", fmt.tprintf("q send resumed/backlog: seq=%d remaining=%d", first_sequence, len(state.input_commands)))
 	}
 	state.input_blocked = false
-	if reset || state.input_logged <= 3 || state.input_logged % 120 == 0 { kproto.network_log("input", fmt.tprintf("SENT live q seq=%d samples=%d last_seq=%d bytes=%d counter=%d reset=%v", first_sequence, count, first_sequence+i32(count)-1, sent, counter, reset)) }
+	if reset || state.input_logged <= 3 || state.input_logged % 120 == 0 { kproto.network_log("input", fmt.tprintf("SENT live q seq=%d samples=%d last_seq=%d bytes=%d counter=%d reset=%v", first_sequence, count, first_sequence+i32(count)-1, bytes, counter, reset)) }
 }
+
+// Network work the frame thread may do per frame. Messages beyond it wait
+// for the next frame. The one coalesced replay at the end is bounded by the
+// prediction history (KRUNKER_MAX_PREDICTED_INPUTS).
+KRUNKER_WS_APPLY_BUDGET :: 2 * time.Millisecond
 
 krunker_ws_poll :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected do return
-	if !krunker_ws_flush_pending(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
-	buffer: [4096]byte
-	// Drain bursts promptly instead of imposing an eight-chunk-per-frame lag.
-	// A time budget and chunk ceiling still leave time for prediction/rendering.
-	deadline := glfw.GetTime() + 0.004
-	for iterations := 0; iterations < 128; iterations += 1 {
-		if iterations > 0 && glfw.GetTime() >= deadline {
-			state.recv_budget_hits += 1
-			if state.recv_budget_hits <= 3 || state.recv_budget_hits % 120 == 0 { kproto.network_log("ws-recv", fmt.tprintf("receive budget reached: chunks=%d count=%d unsent=%d", iterations, state.recv_budget_hits, len(state.input_commands))) }
-			break
-		}
-		received: c.size_t
-		meta: ^curl.ws_frame
-		code := curl.ws_recv(state.handle, rawptr(&buffer[0]), c.size_t(len(buffer)), &received, &meta)
-		if code == .E_AGAIN do break
-		if code != .E_OK {
-			kproto.network_log("ws-recv", fmt.tprintf("ERROR curl=%v (%s) detail=%s got_load=%v bootstrapped=%v spawned=%v", code, string(curl.easy_strerror(code)), string(cast(cstring)&state.error_buffer[0]), state.got_load, state.bootstrapped, state.spawned))
-			krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket receive failed: %v; see logs/krunker-network.log", code))
-			state.connected = false
-			break
-		}
-		state.rx_logged += 1
-		if meta != nil && state.rx_logged <= 40 { kproto.network_log("ws-recv", fmt.tprintf("frame=%d bytes=%d flags=%d offset=%d bytesleft=%d (frame logging limited to first 40)", state.rx_logged, received, meta.flags, meta.offset, meta.bytesleft)) }
-		if meta != nil && (meta.flags & curl.WS_CLOSE) == curl.WS_CLOSE {
-			close_code := -1
-			reason := ""
-			if received >= 2 { close_code = int(buffer[0])*256 + int(buffer[1]); reason = string(buffer[2:int(received)]) }
-			code_text := received >= 2 ? fmt.tprintf("%d", close_code) : "absent"
-			kproto.network_log("ws-close", fmt.tprintf("code=%s reason=%s close_payload_bytes=%d got_load=%v bootstrapped=%v spawned=%v live_inputs_sent=%d local_snapshots=%d", code_text, reason, received, state.got_load, state.bootstrapped, state.spawned, state.input_logged, state.snapshots_received))
-			if len(state.server_error) > 0 { krunker_ws_set_status(client, fmt.tprintf("Krunker disconnected: %s; see logs/krunker-network.log", state.server_error)) }
-			else if received < 2 { krunker_ws_set_status(client, "Krunker lobby closed the WebSocket without a status or reason; see logs/krunker-network.log") }
-			else { krunker_ws_set_status(client, fmt.tprintf("Krunker lobby closed the WebSocket: %d %s; see logs/krunker-network.log", close_code, reason)) }
-			state.connected = false
-			break
-		}
-		if received == 0 do break
-		if meta == nil { krunker_ws_set_status(client, "WebSocket receive omitted frame metadata."); state.connected = false; break }
-		if (meta.flags & (curl.WS_PING | curl.WS_PONG)) != {} { continue }
-		if (meta.flags & curl.WS_TEXT) != {} { kproto.network_log("ws-recv", "ignoring unexpected text frame"); continue }
-		payload, complete, assembly_error := kproto.krunker_ws_message_feed(&state.message, buffer[:int(received)], i64(meta.offset), i64(meta.bytesleft), (meta.flags & curl.WS_CONT) != {})
-		if len(assembly_error) > 0 { krunker_ws_set_status(client, assembly_error); state.connected = false; break }
-		if !complete do continue
-		if len(payload) > len(buffer) { kproto.network_log("ws-message", fmt.tprintf("reassembled complete message bytes=%d", len(payload))) }
-		krunker_ws_apply_world(client, payload)
-		if !state.connected do break
-	}
+	if state.transport != nil { krunker_ws_transport_receive(state.transport, &state.inbox) }
+	krunker_ws_process_inbox(client)
 	krunker_ws_bootstrap_tick(client)
 }
 
+// Applies received messages in arrival order until the budget is spent, then
+// runs at most one prediction replay, from the newest acknowledged l.
+krunker_ws_process_inbox :: proc(client: ^Client, send_control: proc(^Krunker_WS_State, string) -> bool = krunker_ws_send, budget := KRUNKER_WS_APPLY_BUDGET) {
+	state := &client.krunker
+	start := time.tick_now()
+	processed := 0
+	state.batching = true
+	for processed < len(state.inbox) && state.connected {
+		if processed > 0 && time.tick_since(start) >= budget {
+			state.recv_budget_hits += 1
+			if state.recv_budget_hits <= 3 || state.recv_budget_hits % 120 == 0 { kproto.network_log("ws-recv", fmt.tprintf("apply budget reached: messages=%d waiting=%d count=%d unsent=%d", processed, len(state.inbox)-processed, state.recv_budget_hits, len(state.input_commands))) }
+			break
+		}
+		event := &state.inbox[processed]
+		processed += 1
+		switch event.kind {
+		case .MESSAGE:
+			state.rx_logged += 1
+			if len(event.payload) > 4096 { kproto.network_log("ws-message", fmt.tprintf("reassembled complete message bytes=%d", len(event.payload))) }
+			krunker_ws_apply_world(client, event.payload, send_control)
+		case .CLOSED:
+			reason := string(event.payload)
+			code_text := event.close_code >= 0 ? fmt.tprintf("%d", event.close_code) : "absent"
+			kproto.network_log("ws-close", fmt.tprintf("code=%s reason=%s close_payload_bytes=%d got_load=%v bootstrapped=%v spawned=%v live_inputs_sent=%d local_snapshots=%d", code_text, reason, event.close_code >= 0 ? len(event.payload) + 2 : 0, state.got_load, state.bootstrapped, state.spawned, state.input_logged, state.snapshots_received))
+			if len(state.server_error) > 0 { krunker_ws_set_status(client, fmt.tprintf("Krunker disconnected: %s; see logs/krunker-network.log", state.server_error)) }
+			else if event.close_code < 0 { krunker_ws_set_status(client, "Krunker lobby closed the WebSocket without a status or reason; see logs/krunker-network.log") }
+			else { krunker_ws_set_status(client, fmt.tprintf("Krunker lobby closed the WebSocket: %d %s; see logs/krunker-network.log", event.close_code, reason)) }
+			state.connected = false
+		case .FAILED:
+			kproto.network_log("ws-recv", fmt.tprintf("ERROR %s got_load=%v bootstrapped=%v spawned=%v", event.text, state.got_load, state.bootstrapped, state.spawned))
+			krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket failed: %s; see logs/krunker-network.log", event.text))
+			state.connected = false
+		}
+	}
+	allocator := state.transport != nil ? state.transport.allocator : context.allocator
+	krunker_ws_events_free(state.inbox[:processed], allocator)
+	remove_range(&state.inbox, 0, processed)
+	state.batching = false
+	krunker_client_finish_replay(client)
+}
+
 krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
-	if state.handle != nil { kproto.network_log("disconnect", fmt.tprintf("connected=%v got_load=%v bootstrapped=%v spawned=%v pending=%d", state.connected, state.got_load, state.bootstrapped, state.spawned, len(state.pending))) }
+	if state.handle != nil || state.transport != nil { kproto.network_log("disconnect", fmt.tprintf("connected=%v got_load=%v bootstrapped=%v spawned=%v unapplied=%d", state.connected, state.got_load, state.bootstrapped, state.spawned, len(state.inbox))) }
+	allocator := context.allocator
+	if state.transport != nil {
+		// Joins the WebSocket thread before curl and its handle go away.
+		allocator = state.transport.allocator
+		krunker_ws_transport_destroy(state.transport)
+	}
 	if state.handle != nil { curl.easy_cleanup(state.handle) }
 	if state.global_ready { curl.global_cleanup() }
-	for opcode in state.pending { delete(opcode) }
-	delete(state.pending)
+	krunker_ws_events_free(state.inbox[:], allocator)
+	delete(state.inbox)
 	delete(state.ws_url)
 	delete(state.upgrade_capture.body)
 	delete(state.upgrade_capture.headers)
-	delete(state.message.buffer)
 	delete(state.player_revisions)
 	delete(state.player_loadout_revisions)
 	delete(state.input_commands)
@@ -763,6 +772,12 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 			}
 		}
 		krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket upgrade failed: HTTP %d curl=%v; see logs/krunker-network.log", status, code)); krunker_ws_disconnect(state); return false
+	}
+	// From here on only the WebSocket thread touches the handle.
+	state.transport = krunker_ws_transport_create(handle, &state.error_buffer)
+	state.handle = nil
+	if !krunker_ws_transport_start(state.transport) {
+		krunker_ws_set_status(client, "Could not start the Krunker WebSocket thread."); krunker_ws_disconnect(state); return false
 	}
 	state.connected = true
 	client_clear_players(client)

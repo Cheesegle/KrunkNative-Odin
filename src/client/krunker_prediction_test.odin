@@ -191,7 +191,9 @@ when ODIN_TEST {
 			state.input_sequence += 1
 		}
 		state.send_elapsed = KRUNKER_SEND_SECONDS
-		append(&state.pending, strings.clone("v"))
+		// An earlier q still waits for the socket on the WebSocket thread.
+		state.transport = krunker_ws_transport_create(nil, nil)
+		state.transport.queued_inputs = 1
 		krunker_ws_send_input(&client)
 		testing.expect(t, state.input_reset && len(state.input_commands) == 5 && state.ah_num == 239,
 			"a blocked transport must retain the reset request until it actually sends")
@@ -260,11 +262,12 @@ when ODIN_TEST {
 		low, high := client.krunker.render_previous.position, client.krunker.render_current.position
 		testing.expect(t, sample.position.z <= max(low.z, high.z) && sample.position.z >= min(low.z, high.z),
 			"rendering must interpolate inside the current movement step")
-		// A pending WebSocket control packet blocks q without dropping predicted
+		// A q still waiting for the socket holds back the next one without dropping predicted
 		// commands or consuming their sequence numbers/counter.
 		client.krunker.connected = true
 		client.krunker.send_elapsed = 0.1
-		append(&client.krunker.pending, strings.clone("v"))
+		client.krunker.transport = krunker_ws_transport_create(nil, nil)
+		client.krunker.transport.queued_inputs = 1
 		count, sequence := len(client.krunker.input_commands), client.krunker.input_sequence
 		krunker_ws_send_input(&client)
 		testing.expect(t, len(client.krunker.input_commands) == count && client.krunker.input_sequence == sequence && client.krunker.ah_num == 0,
