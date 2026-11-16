@@ -70,6 +70,8 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.hitmarker = menuui.hitmarker_settings_validate(result.hitmarker)
 	result.damage = menuui.damage_settings_validate(result.damage)
 	result.hud.healthbar_colors = menuui.healthbar_colors_validate(result.hud.healthbar_colors)
+	result.hud.nametag_scale = menuui.nametag_scale(result.hud)
+	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
 	defaults := menuui.default_bindings()
 	for action in menuui.Binding_Action {
 		for code, slot in result.bindings[action] {

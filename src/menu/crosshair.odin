@@ -138,14 +138,16 @@ crosshair_parse_color :: proc(text: string) -> (value: u32, ok: bool) {
 }
 
 // The draft color an edit field names: 1 crosshair, 2 crosshair shadow, then
-// HITMARKER_COLOR_FIELDS, DAMAGE_COLOR_FIELDS and the healthbar colors.
-// Unknown fields are nil.
+// HITMARKER_COLOR_FIELDS, DAMAGE_COLOR_FIELDS, the healthbar and the nametag
+// colors. Unknown fields are nil.
 settings_color_value :: proc(values: ^Settings_Values, field: i32) -> ^u32 {
 	switch field {
 	case 1: return &values.crosshair.color
 	case 2: return &values.crosshair.shadow_color
 	case HEALTHBAR_ENEMY_COLOR_FIELD: return &values.hud.healthbar_colors.enemy
 	case HEALTHBAR_TEAM_COLOR_FIELD: return &values.hud.healthbar_colors.team
+	case NAMETAG_ENEMY_COLOR_FIELD: return &values.hud.nametag_colors.enemy
+	case NAMETAG_TEAM_COLOR_FIELD: return &values.hud.nametag_colors.team
 	}
 	for color in Hitmarker_Color { if HITMARKER_COLOR_FIELDS[color] == field { return &values.hitmarker.colors[color] } }
 	for color in Damage_Color { if DAMAGE_COLOR_FIELDS[color] == field { return &values.damage.colors[color] } }
