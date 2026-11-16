@@ -7,6 +7,11 @@
 # loads every map, class, weapon, icon and sound through the normal loaders and
 # records each file it opened; only those files are packaged. The zip is then
 # unpacked into a temp folder and swept again to prove nothing went missing.
+#
+# Symbols never ship. The client's PDB (build.bat client builds always write
+# one) is archived with the exact exe as dist\symbols\<sha>\, so crash and
+# hang dumps testers send from this zip can be symbolicated later:
+#   bin\krodin_symbolicate.exe <dump.dmp> dist\symbols\<sha>
 param([switch]$SkipBuild)
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +24,7 @@ if (-not $version -or -not $sha) { throw "Could not read VERSION or the git comm
 $name = "Krodin-Testing-$version-$sha"
 $dist = Join-Path $root "dist"
 $zip = Join-Path $dist "$name.zip"
+$symbols = Join-Path $dist "symbols\$sha"
 $work = Join-Path ([IO.Path]::GetTempPath()) ("krodin-package-" + [guid]::NewGuid().ToString("N"))
 $stage = Join-Path $work $name
 
@@ -38,8 +44,10 @@ Krodin $version ($sha) - tester build
 3. To join live lobbies, press Login first and sign in. If Join asks for
    Microsoft Edge WebView2, install the Evergreen Runtime from
    https://developer.microsoft.com/microsoft-edge/webview2/ and try again.
-4. If something goes wrong, send us logs\krunker-network.log from this
-   folder. It is created next to krodin_client.exe when you join a lobby.
+4. If something goes wrong, send us the logs folder next to
+   krodin_client.exe: krunker-network.log, and after a crash or a freeze
+   crash.log / hang.log with the .dmp files. They hold no passwords or
+   login tokens (stacks and system details only).
 
 krodin_server.exe is an optional local server; you do not need it to play.
 "@
@@ -84,6 +92,17 @@ try {
     foreach ($file in $binaries) {
         if (-not (Test-Path -LiteralPath (Join-Path $root "bin\$file"))) { throw "Missing bin\$file; build first." }
     }
+    # Archive the symbols for this exact exe (never packaged).
+    $exe = Join-Path $root "bin\krodin_client.exe"
+    $pdb = Join-Path $root "bin\krodin_client.pdb"
+    if (-not (Test-Path -LiteralPath $pdb)) { throw "Missing bin\krodin_client.pdb; build with build.bat client (it always writes symbols)." }
+    if ((Get-Item -LiteralPath $pdb).LastWriteTimeUtc -lt (Get-Item -LiteralPath $exe).LastWriteTimeUtc.AddMinutes(-5)) {
+        throw "bin\krodin_client.pdb is older than the exe; rebuild so the symbols match."
+    }
+    if (& git -C $root status --porcelain --untracked-files=no) { Write-Warning "The working tree has uncommitted changes; dist\symbols\$sha may not match the commit." }
+    New-Item -ItemType Directory -Path $symbols -Force | Out-Null
+    Copy-Item -LiteralPath $exe, $pdb -Destination $symbols -Force
+    Write-Host "Archived symbols in $symbols"
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
     Write-Host "Sweeping assets in the repository..."
@@ -132,7 +151,11 @@ try {
 
     $archive = Get-Item -LiteralPath $zip
     $reader = [IO.Compression.ZipFile]::OpenRead($zip)
-    try { $count = @($reader.Entries | Where-Object { $_.Name }).Count } finally { $reader.Dispose() }
+    try {
+        $count = @($reader.Entries | Where-Object { $_.Name }).Count
+        $leaked = @($reader.Entries | Where-Object { $_.Name -like "*.pdb" })
+        if ($leaked.Count -gt 0) { throw "The zip must not contain symbols: $($leaked.FullName -join ', ')" }
+    } finally { $reader.Dispose() }
     Write-Host ("Created {0} ({1:N1} MB, {2} files, {3} assets)" -f $archive.FullName, ($archive.Length / 1MB), $count, $repo.Used.Count)
 }
 finally {

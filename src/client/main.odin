@@ -7,6 +7,8 @@ import "core:slice"
 import "core:encoding/json"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
+import "core:time"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import stbi "vendor:stb/image"
@@ -221,6 +223,16 @@ client_monitor_cache :: proc(client: ^Client) -> ^Monitor_Cache {
 
 client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 	if g_client != nil { g_client.monitor_cache.valid = false }
+	g_diag.monitors_stale = true
+	diag_event(event == glfw.CONNECTED ? .MONITOR_CONNECTED : .MONITOR_DISCONNECTED)
+}
+
+client_window_focus_changed :: proc "c" (window: glfw.WindowHandle, focused: i32) {
+	diag_event(focused != 0 ? .FOCUS_GAINED : .FOCUS_LOST)
+}
+
+client_window_iconify_changed :: proc "c" (window: glfw.WindowHandle, iconified: i32) {
+	diag_event(iconified != 0 ? .MINIMISED : .RESTORED)
 }
 
 // Menus and loading screens wait between frames instead of spinning a core:
@@ -390,6 +402,9 @@ client_apply_display_settings :: proc(client: ^Client) {
 		full_width, full_height, full_refresh_rate := monitor_fullscreen_mode(monitor, client.fullscreen_resolution)
 		glfw.SetWindowMonitor(client.window, monitor, 0, 0, full_width, full_height, full_refresh_rate)
 	}
+	width, height := glfw.GetWindowSize(client.window)
+	diag_event(.DISPLAY_MODE_APPLIED, i32(client.display_mode), width << 16 | (height & 0xFFFF))
+	g_diag.monitors_stale = true
 }
 
 client_set_display_mode :: proc(client: ^Client, display_mode: Display_Mode) {
@@ -415,6 +430,7 @@ Client_Options :: struct {
 	bench_sizes: string, // Comma-separated WxH or "native".
 	no_batching: bool,
 	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
+	no_gl_robustness: bool, // Create the context without GPU reset notification.
 }
 
 print_client_help :: proc() {
@@ -443,6 +459,8 @@ print_client_help :: proc() {
 	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
 	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
+	fmt.println("      --no-gl-robustness")
+	fmt.println("                        Create the OpenGL context without GPU reset detection")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -504,6 +522,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.no_batching = true
 		case "--gl-debug":
 			options.gl_debug = true
+		case "--no-gl-robustness":
+			options.no_gl_robustness = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -1037,6 +1057,7 @@ client_unload_map :: proc(client: ^Client) {
 	resource_trim_geometry_cache()
 	shadow_release_map()
 	client.map_loaded = false
+	diag_event(.MAP_UNLOADED)
 }
 
 client_load_current_map :: proc(client: ^Client) {
@@ -1044,6 +1065,8 @@ client_load_current_map :: proc(client: ^Client) {
 		return
 	}
 	phase_mark(.MAP_LOAD)
+	diag_event(.MAP_LOAD_STARTED)
+	load_start := time.tick_now()
 
 	// Activate the map's current environment before creating its materials.
 	// The browser clears to `sky` and applies the same fog/lighting settings to
@@ -1073,6 +1096,7 @@ client_load_current_map :: proc(client: ^Client) {
 		renderable,
 	)
 	resource_print_stats("map loaded")
+	diag_event(.MAP_LOADED, i32(time.duration_milliseconds(time.tick_since(load_start))))
 }
 
 client_tick_textures :: proc(client: ^Client, now: f32) {
@@ -1546,9 +1570,11 @@ main :: proc() {
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))
 	}
+	g_gl_robustness_wanted = !options.no_gl_robustness
 	if len(options.bench_maps) > 0 {
 		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
 	}
+	diagnostics_name_thread("Krodin main")
 
 	if !bool(glfw.Init()) {
 		fmt.eprintln("Failed to init GLFW")
@@ -1608,7 +1634,7 @@ main :: proc() {
 		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
 	}
 
-	client.window = glfw.CreateWindow(1280, 720, "Krodin", nil, nil)
+	client.window, g_diag.gl_robust_requested = client_create_window(1280, 720, "Krodin", g_gl_robustness_wanted)
 	if client.window == nil {
 		fmt.eprintln("Failed to create window")
 		return
@@ -1627,6 +1653,8 @@ main :: proc() {
 	glfw.SetKeyCallback(client.window, client_binding_key)
 	glfw.SetMouseButtonCallback(client.window, client_binding_mouse)
 	glfw.SetMonitorCallback(client_monitor_changed)
+	glfw.SetWindowFocusCallback(client.window, client_window_focus_changed)
+	glfw.SetWindowIconifyCallback(client.window, client_window_iconify_changed)
 	glfw.MakeContextCurrent(client.window)
 
 	// The native Windows path owns raw mouse input (and decides whether GLFW's
@@ -1640,6 +1668,11 @@ main :: proc() {
 
 	gl.load_up_to(4, 5, glfw.gl_set_proc_address)
 	diagnostics_capture_gl_info()
+	// System facts for crash and hang reports, gathered once, off the frame path.
+	diagnostics_capture_system_info()
+	if g_diag.gl_robust_requested && !g_diag.gl_reset_detection {
+		fmt.println("[GL] The driver did not grant GPU reset notification; resets cannot be detected")
+	}
 	if options.gl_debug {
 		if gl_debug_install() {
 			fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
@@ -1653,6 +1686,7 @@ main :: proc() {
 
 	glfw.SwapInterval(client.vsync ? 1 : 0)
 	client_apply_display_settings(client)
+	diagnostics_capture_monitors(client.window)
 	defer software_cursor_fini()
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
@@ -1721,6 +1755,7 @@ main :: proc() {
 	last_tick := f32(glfw.GetTime())
 	last_frame_start := glfw.GetTime()
 	prev_cpu_ms, prev_swap_ms, prev_events_ms: f32
+	next_diagnostics_check := last_frame_start + DIAGNOSTICS_CHECK_INTERVAL
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
 		frame_start := glfw.GetTime()
@@ -1744,7 +1779,15 @@ main :: proc() {
 			perf_overlay_record(client, f32((frame_start-last_frame_start)*1000), prev_cpu_ms, prev_swap_ms, prev_events_ms)
 			prev_cpu_ms = cpu_ms
 		}
+		diag_frame_time(f32((frame_start - last_frame_start) * 1000))
+		diagnostics_watch(client.menu.settings_active, glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED)
 		last_frame_start = frame_start
+		// About once a second (and right after a hang): GPU reset status and
+		// a monitor list refresh after display changes.
+		if frame_start >= next_diagnostics_check || sync.atomic_load(&g_diag.gl_reset_check_requested) {
+			next_diagnostics_check = frame_start + DIAGNOSTICS_CHECK_INTERVAL
+			client_diagnostics_check(client)
+		}
 		if client.settings_dirty {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))

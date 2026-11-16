@@ -102,9 +102,18 @@ levelling_node_configure :: proc(node: ^Levelling_Node, enabled: bool, strength:
 	sync.atomic_store_explicit(&node.enabled, enabled ? 1 : 0, .Release)
 }
 
+// The mixer thread belongs to miniaudio; name it the first time it runs our
+// node, so dumps and debuggers show it as Krodin's.
+@(private="file")
+g_audio_thread_named: bool
+
 @(private="file")
 levelling_node_process :: proc "c" (base: ^ma.node, frames_in: ^[^]f32, frame_count_in: ^u32, frames_out: ^[^]f32, frame_count_out: ^u32) {
 	context = runtime.default_context()
+	if !sync.atomic_load_explicit(&g_audio_thread_named, .Relaxed) {
+		sync.atomic_store_explicit(&g_audio_thread_named, true, .Relaxed)
+		diagnostics_name_thread("Krodin audio mixer")
+	}
 	levelling_render(cast(^Levelling_Node)base, frames_in^, frames_out^, int(frame_count_out^))
 }
 

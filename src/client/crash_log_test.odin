@@ -44,8 +44,8 @@ when ODIN_TEST {
 		if !testing.expect(t, err == nil, "the report must be readable") do return
 		defer delete(data)
 		report := string(data)
-		for expected in ([]string{"Krodin crash report", "GL_RENDERER: Test Renderer", "Exception: 0xC0000005 EXCEPTION_ACCESS_VIOLATION",
-			"Access violation: read of address 0x10", "Stack (innermost first):", "0x1234", "settings: build Main tab",
+		for expected in ([]string{"Krodin crash report", "OpenGL is on: Test Renderer", "Exception: 0xC0000005 EXCEPTION_ACCESS_VIOLATION",
+			"Access violation: read of address 0x10", "Stack (innermost first", "0x1234", "settings: build Main tab",
 			"settings: build Visuals tab", "render scene", "GL_INVALID_OPERATION in glDrawElements(test)", "1 errors"}) {
 			testing.expectf(t, strings.contains(report, expected), "report is missing %q:\n%s", expected, report)
 		}

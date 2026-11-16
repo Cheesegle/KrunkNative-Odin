@@ -6,16 +6,19 @@ import "core:sync"
 import win "core:sys/windows"
 import "core:thread"
 import "core:time"
+import md "../minidump"
 
 // Top-level crash handler and hang watchdog (Windows).
 //
 // An unhandled exception on any thread writes logs/crash.log (exception,
-// faulting module+offset, stack return addresses, recent phases, GL info) and
-// a small minidump, logs/crash.dmp, then lets Windows terminate the process as
-// before. A watchdog thread writes logs/hang.log and logs/hang.dmp, once per
-// stall, when the main loop has not finished a frame for HANG_SECONDS; the
-// report names the phase and the main thread's instruction pointer (for
-// example inside the GPU driver).
+// faulting module+offset, stack return addresses, system, settings and recent
+// history) and a small minidump, logs/crash.dmp, then lets Windows terminate
+// the process as before. A watchdog thread writes logs/hang.log and
+// logs/hang.dmp when the main loop has not finished a frame for
+// HANG_SECONDS, a second dump (logs/hang-20s.dmp) if it is still stuck after
+// HANG_SECOND_DUMP_SECONDS, and appends "recovered after N s" to hang.log
+// when the loop resumes. tools/symbolicate turns a dump plus the build's
+// archived PDB (dist/symbols/<commit>/) into named call stacks per thread.
 
 foreign import kernel32 "system:Kernel32.lib"
 
@@ -29,6 +32,44 @@ GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS :: 0x4
 CONTEXT_AMD64_CONTROL :: 0x00100001
 
 HANG_SECONDS :: 6
+HANG_SECOND_DUMP_SECONDS :: 20
+
+// What a dump contains: every thread's stack and registers, thread names and
+// times, loaded and unloaded modules, handle metadata and the address-space
+// layout (region types and protections, not their contents).
+//
+// PRIVACY: never add MiniDumpWithFullMemory, WithIndirectlyReferencedMemory,
+// WithDataSegs, WithPrivateReadWriteMemory or WithCodeSegs. Heap and global
+// memory can hold Krunker access tokens and guest tokens, and testers share
+// these files. crash_dump_excludes_heap_memory checks a real dump.
+CRASH_DUMP_TYPE :: win.MINIDUMP_TYPE(
+	u32(win.MINIDUMP_TYPE.WithThreadInfo) |
+	u32(win.MINIDUMP_TYPE.WithUnloadedModules) |
+	u32(win.MINIDUMP_TYPE.WithHandleData) |
+	u32(win.MINIDUMP_TYPE.WithFullMemoryInfo) |
+	u32(win.MINIDUMP_TYPE.WithProcessThreadData))
+
+CRASH_DUMP_FORBIDDEN_FLAGS :: u32(win.MINIDUMP_TYPE.WithFullMemory) | u32(win.MINIDUMP_TYPE.WithIndirectlyReferencedMemory) |
+	u32(win.MINIDUMP_TYPE.WithDataSegs) | u32(win.MINIDUMP_TYPE.WithPrivateReadWriteMemory) | u32(win.MINIDUMP_TYPE.WithCodeSegs) |
+	u32(win.MINIDUMP_TYPE.WithPrivateWriteCopyMemory) | u32(win.MINIDUMP_TYPE.ScanMemory)
+#assert(u32(CRASH_DUMP_TYPE) & CRASH_DUMP_FORBIDDEN_FLAGS == 0)
+
+// Tests shorten the timings and write somewhere else; the game uses the defaults.
+Crash_Config :: struct {
+	log_dir:             string,
+	hang_seconds:        f64,
+	second_dump_seconds: f64,
+	poll_ms:             int,
+}
+
+DEFAULT_CRASH_CONFIG :: Crash_Config{log_dir = DIAGNOSTICS_LOG_DIR, hang_seconds = HANG_SECONDS, second_dump_seconds = HANG_SECOND_DUMP_SECONDS, poll_ms = 500}
+
+g_crash_config := DEFAULT_CRASH_CONFIG
+
+Crash_Paths :: struct {
+	crash_log, crash_dump, hang_log, hang_dump, hang_dump_late: string,
+	storage: [5][260]u8,
+}
 
 @(private = "file")
 Aligned_Context :: struct #align (16) {
@@ -39,18 +80,38 @@ Aligned_Context :: struct #align (16) {
 Crash_State :: struct {
 	installed:      bool,
 	handling:       i32,
+	previous_filter: win.LPTOP_LEVEL_EXCEPTION_FILTER,
 	main_thread:    win.HANDLE,
 	watchdog:       ^thread.Thread,
 	watchdog_stop:  bool,
+	watchdog_pause: bool,
+	// The session had a hang report; a later GPU reset is appended to hang.log.
+	hang_reported:  bool,
+	paths:          Crash_Paths,
 	module_paths:   [32][260]u8,
 	stack:          [48]uintptr,
 	stack_modules:  [48]string,
 	stack_bases:    [48]uintptr,
 	context_buffer: Aligned_Context,
+	hang_module:    [260]u8,
 }
 
 @(private = "file")
 g_crash: Crash_State
+
+crash_paths :: proc() -> ^Crash_Paths {
+	return &g_crash.paths
+}
+
+@(private = "file")
+crash_paths_init :: proc(dir: string) {
+	p := &g_crash.paths
+	names := [5]string{"crash.log", "crash.dmp", "hang.log", "hang.dmp", "hang-20s.dmp"}
+	out := [5]^string{&p.crash_log, &p.crash_dump, &p.hang_log, &p.hang_dump, &p.hang_dump_late}
+	for name, i in names {
+		out[i]^ = fmt.bprintf(p.storage[i][:], "%s/%s", dir, name)
+	}
+}
 
 crash_exception_name :: proc(code: u32) -> string {
 	switch code {
@@ -82,12 +143,28 @@ crash_module_of :: proc(address: uintptr, path_buffer: ^[260]u8) -> (path: strin
 	return string(path_buffer[:max(bytes, 0)]), uintptr(module)
 }
 
-crash_file_write :: proc(path: string, data: []u8) -> bool {
-	win.CreateDirectoryW(win.L(DIAGNOSTICS_LOG_DIR), nil)
-	wide: [520]u16
+@(private = "file")
+crash_wide_path :: proc(path: string, wide: ^[520]u16) -> bool {
 	length := win.MultiByteToWideChar(win.CP_UTF8, 0, raw_data(path), i32(len(path)), &wide[0], len(wide) - 1)
 	if length <= 0 { return false }
 	wide[length] = 0
+	// The report's folder ("logs" next to the game, or a test folder).
+	slash := -1
+	for i in 0 ..< int(length) {
+		if wide[i] == '/' || wide[i] == '\\' { slash = i }
+	}
+	if slash > 0 {
+		saved := wide[slash]
+		wide[slash] = 0
+		win.CreateDirectoryW(cstring16(&wide[0]), nil)
+		wide[slash] = saved
+	}
+	return true
+}
+
+crash_file_write :: proc(path: string, data: []u8) -> bool {
+	wide: [520]u16
+	if !crash_wide_path(path, &wide) { return false }
 	file := win.CreateFileW(cstring16(&wide[0]), win.GENERIC_WRITE, win.FILE_SHARE_READ, nil, win.CREATE_ALWAYS, win.FILE_ATTRIBUTE_NORMAL, nil)
 	if file == win.INVALID_HANDLE_VALUE { return false }
 	defer win.CloseHandle(file)
@@ -97,14 +174,56 @@ crash_file_write :: proc(path: string, data: []u8) -> bool {
 	return ok && int(written) == len(data)
 }
 
-@(private = "file")
-crash_write_dump :: proc(path: win.wstring, exception: ^win.EXCEPTION_POINTERS, thread_id: win.DWORD) {
-	file := win.CreateFileW(path, win.GENERIC_WRITE, 0, nil, win.CREATE_ALWAYS, win.FILE_ATTRIBUTE_NORMAL, nil)
-	if file == win.INVALID_HANDLE_VALUE { return }
+crash_file_append :: proc(path: string, data: []u8) -> bool {
+	wide: [520]u16
+	if !crash_wide_path(path, &wide) { return false }
+	FILE_APPEND_DATA :: 0x0004
+	file := win.CreateFileW(cstring16(&wide[0]), FILE_APPEND_DATA, win.FILE_SHARE_READ, nil, win.OPEN_ALWAYS, win.FILE_ATTRIBUTE_NORMAL, nil)
+	if file == win.INVALID_HANDLE_VALUE { return false }
+	defer win.CloseHandle(file)
+	written: win.DWORD
+	ok := bool(win.WriteFile(file, raw_data(data), win.DWORD(len(data)), &written, nil))
+	win.FlushFileBuffers(file)
+	return ok && int(written) == len(data)
+}
+
+// Writes a minidump of this process with CRASH_DUMP_TYPE (stacks and
+// metadata, no heap), then scrubs it in place: ProcessThreadData also saves
+// the process parameters and environment block, which minidump.scrub zeroes
+// (only stacks, code bytes, TEB headers, the PEB and KUSER_SHARED_DATA keep
+// their contents). The file is mapped, so no heap or buffer is needed. If it
+// cannot be scrubbed it is rewritten without ProcessThreadData. `exception`
+// is nil for hang dumps.
+crash_write_dump :: proc(path: string, exception: ^win.EXCEPTION_POINTERS, thread_id: win.DWORD) -> bool {
+	wide: [520]u16
+	if !crash_wide_path(path, &wide) { return false }
+	file := win.CreateFileW(cstring16(&wide[0]), win.GENERIC_READ | win.GENERIC_WRITE, 0, nil, win.CREATE_ALWAYS, win.FILE_ATTRIBUTE_NORMAL, nil)
+	if file == win.INVALID_HANDLE_VALUE { return false }
 	defer win.CloseHandle(file)
 	info := win.MINIDUMP_EXCEPTION_INFORMATION{ThreadId = thread_id, ExceptionPointers = exception, ClientPointers = false}
-	dump_type := win.MINIDUMP_TYPE(u32(win.MINIDUMP_TYPE.WithThreadInfo) | u32(win.MINIDUMP_TYPE.WithIndirectlyReferencedMemory) | u32(win.MINIDUMP_TYPE.WithUnloadedModules))
-	win.MiniDumpWriteDump(win.GetCurrentProcess(), win.GetCurrentProcessId(), file, dump_type, exception != nil ? &info : nil, nil, nil)
+	if !win.MiniDumpWriteDump(win.GetCurrentProcess(), win.GetCurrentProcessId(), file, CRASH_DUMP_TYPE, exception != nil ? &info : nil, nil, nil) { return false }
+	if crash_scrub_dump_file(file) { return true }
+	// Fallback: no process parameters at all.
+	distance: win.LARGE_INTEGER
+	win.SetFilePointerEx(file, distance, nil, win.FILE_BEGIN)
+	win.SetEndOfFile(file)
+	without := win.MINIDUMP_TYPE(u32(CRASH_DUMP_TYPE) &~ u32(win.MINIDUMP_TYPE.WithProcessThreadData))
+	return bool(win.MiniDumpWriteDump(win.GetCurrentProcess(), win.GetCurrentProcessId(), file, without, exception != nil ? &info : nil, nil, nil))
+}
+
+@(private = "file")
+crash_scrub_dump_file :: proc(file: win.HANDLE) -> bool {
+	size: win.LARGE_INTEGER
+	if !win.GetFileSizeEx(file, &size) || size <= 0 || size > 1 << 30 { return false }
+	mapping := win.CreateFileMappingW(file, nil, win.PAGE_READWRITE, 0, 0, nil)
+	if mapping == nil { return false }
+	defer win.CloseHandle(mapping)
+	view := win.MapViewOfFile(mapping, win.FILE_MAP_WRITE, 0, 0, 0)
+	if view == nil { return false }
+	defer win.UnmapViewOfFile(view)
+	_, ok := md.scrub(([^]u8)(view)[:int(size)])
+	win.FlushViewOfFile(view, 0)
+	return ok
 }
 
 @(private = "file")
@@ -137,48 +256,117 @@ crash_filter :: proc "system" (pointers: ^win.EXCEPTION_POINTERS) -> win.LONG {
 	info.stack = g_crash.stack[:frames]
 	info.stack_modules = g_crash.stack_modules[:min(frames, module_slots)]
 	info.stack_bases = g_crash.stack_bases[:min(frames, module_slots)]
-	info.detail = "Please send logs/crash.log (and logs/crash.dmp, plus logs/gl-debug.log if you ran with --gl-debug)."
-	written := crash_log_write(CRASH_LOG_PATH, info)
-	crash_write_dump(win.L(CRASH_DUMP_PATH), pointers, win.GetCurrentThreadId())
-	if written { fmt.eprintln("\n[Crash] Report written to", CRASH_LOG_PATH) }
+	info.detail = "Please send the logs folder: crash.log and crash.dmp (plus gl-debug.log if you ran with --gl-debug)."
+	paths := &g_crash.paths
+	written := crash_log_write(paths.crash_log, info, .CRASH)
+	crash_write_dump(paths.crash_dump, pointers, win.GetCurrentThreadId())
+	if written { fmt.eprintln("\n[Crash] Report written to", paths.crash_log) }
 	return win.EXCEPTION_CONTINUE_SEARCH
+}
+
+// The main thread's instruction pointer (briefly suspending it), and its module.
+@(private = "file")
+crash_main_thread_address :: proc(path_buffer: ^[260]u8) -> (address: uintptr, module_path: string, module_base: uintptr) {
+	if g_crash.main_thread == nil || win.SuspendThread(g_crash.main_thread) == ~win.DWORD(0) { return }
+	g_crash.context_buffer.ctx = {}
+	g_crash.context_buffer.ctx.ContextFlags = CONTEXT_AMD64_CONTROL
+	if win.GetThreadContext(g_crash.main_thread, &g_crash.context_buffer.ctx) {
+		address = uintptr(g_crash.context_buffer.ctx.Rip)
+	}
+	win.ResumeThread(g_crash.main_thread)
+	module_path, module_base = crash_module_of(address, path_buffer)
+	return
 }
 
 @(private = "file")
 crash_watchdog :: proc(t: ^thread.Thread) {
 	last_frame := sync.atomic_load_explicit(&g_diag.frame, .Acquire)
 	last_change := time.tick_now()
-	reported := false
+	stage := 0 // 0 running, 1 hang reported, 2 second dump written
 	for !sync.atomic_load(&g_crash.watchdog_stop) {
-		time.sleep(500 * time.Millisecond)
+		time.sleep(time.Duration(g_crash_config.poll_ms) * time.Millisecond)
 		frame := sync.atomic_load_explicit(&g_diag.frame, .Acquire)
-		if frame != last_frame {
-			if reported { fmt.eprintln("[Hang] Main loop resumed") }
-			last_frame, last_change, reported = frame, time.tick_now(), false
+		if sync.atomic_load(&g_crash.watchdog_pause) {
+			// A modal message box (the GPU reset notice) is not a hang.
+			last_frame, last_change = frame, time.tick_now()
 			continue
 		}
-		if reported || frame == 0 || time.duration_seconds(time.tick_since(last_change)) < HANG_SECONDS { continue }
-		reported = true
-		crash_write_hang_report()
+		if frame != last_frame {
+			if stage > 0 { crash_hang_recovered(time.duration_seconds(time.tick_since(last_change)), frame) }
+			last_frame, last_change, stage = frame, time.tick_now(), 0
+			continue
+		}
+		if frame == 0 { continue }
+		stalled := time.duration_seconds(time.tick_since(last_change))
+		if stage == 0 && stalled >= g_crash_config.hang_seconds {
+			stage = 1
+			crash_write_hang_report(last_change)
+		} else if stage == 1 && stalled >= g_crash_config.second_dump_seconds {
+			stage = 2
+			crash_write_late_hang_dump(stalled)
+		}
 	}
 }
 
 @(private = "file")
-crash_write_hang_report :: proc() {
-	info := Crash_Info{title = "hang report (main loop stopped for 6 seconds)"}
-	if g_crash.main_thread != nil && win.SuspendThread(g_crash.main_thread) != ~win.DWORD(0) {
-		g_crash.context_buffer.ctx = {}
-		g_crash.context_buffer.ctx.ContextFlags = CONTEXT_AMD64_CONTROL
-		if win.GetThreadContext(g_crash.main_thread, &g_crash.context_buffer.ctx) {
-			info.address = uintptr(g_crash.context_buffer.ctx.Rip)
-		}
-		win.ResumeThread(g_crash.main_thread)
-		info.module_path, info.module_base = crash_module_of(info.address, &g_crash.module_paths[0])
+crash_write_hang_report :: proc(stall_tick: time.Tick) {
+	title_buffer: [96]u8
+	info := Crash_Info{title = fmt.bprintf(title_buffer[:], "hang report (main loop stopped for %.0f seconds)", g_crash_config.hang_seconds), stall_tick = stall_tick, live = true}
+	info.address, info.module_path, info.module_base = crash_main_thread_address(&g_crash.hang_module)
+	if info.address != 0 {
+		info.detail = "Address is the main thread's instruction pointer. Dragging or resizing the window also pauses the loop (phase: poll events). The watchdog keeps watching: a recovery time or a second dump is appended below."
 	}
-	if info.address != 0 { info.detail = "Address is the main thread's instruction pointer. Dragging or resizing the window also pauses the loop (phase: poll events)." }
-	crash_log_write(HANG_LOG_PATH, info)
-	crash_write_dump(win.L(HANG_DUMP_PATH), nil, 0)
-	fmt.eprintln("[Hang] Main loop has not finished a frame for", HANG_SECONDS, "seconds; wrote", HANG_LOG_PATH)
+	sync.atomic_store(&g_crash.hang_reported, true)
+	paths := &g_crash.paths
+	crash_log_write(paths.hang_log, info, .WATCHDOG)
+	crash_write_dump(paths.hang_dump, nil, 0)
+	fmt.eprintln("[Hang] Main loop has not finished a frame for", g_crash_config.hang_seconds, "seconds; wrote", paths.hang_log)
+}
+
+@(private = "file")
+crash_write_late_hang_dump :: proc(stalled: f64) {
+	paths := &g_crash.paths
+	address, module_path, module_base := crash_main_thread_address(&g_crash.hang_module)
+	dumped := crash_write_dump(paths.hang_dump_late, nil, 0)
+	buffer: [1024]u8
+	text := fmt.bprintf(buffer[:], "\n== Still not responding ==\nAfter %.1f s the main thread is at 0x%X = %s+0x%X. %s %s.\n", stalled, address,
+		len(module_path) > 0 ? module_path : "(no module)", address - module_base, dumped ? "Wrote" : "Could not write", paths.hang_dump_late)
+	crash_log_append(paths.hang_log, text, .WATCHDOG)
+	fmt.eprintln("[Hang] Still not responding after", stalled, "seconds; wrote", paths.hang_dump_late)
+}
+
+// Main loop resumed after a hang report: append how long it was stuck and
+// ask the main loop to check for a GPU reset straight away.
+crash_hang_recovered :: proc(stalled: f64, frame: u32) {
+	buffer: [512]u8
+	text := fmt.bprintf(buffer[:], "\n== Recovery ==\nMain loop recovered after %.1f s (frame %d finished). The GPU reset check that follows is appended below.\n", stalled, frame)
+	crash_log_append(g_crash.paths.hang_log, text, .WATCHDOG)
+	sync.atomic_store(&g_diag.gl_reset_check_requested, true)
+	fmt.eprintf("[Hang] Main loop recovered after %.1f s\n", stalled)
+}
+
+crash_hang_was_reported :: proc() -> bool {
+	return sync.atomic_load(&g_crash.hang_reported)
+}
+
+crash_hang_log_path :: proc() -> string {
+	return len(g_crash.paths.hang_log) > 0 ? g_crash.paths.hang_log : HANG_LOG_PATH
+}
+
+// Message boxes are modal; the watchdog must not call them a hang.
+crash_watchdog_pause :: proc(paused: bool) {
+	sync.atomic_store(&g_crash.watchdog_pause, paused)
+}
+
+// The GPU reset notice: a plain message box instead of a frozen window.
+gpu_reset_show_message :: proc(text: string) {
+	wide: [1024]u16
+	length := win.MultiByteToWideChar(win.CP_UTF8, 0, raw_data(text), i32(len(text)), &wide[0], len(wide) - 1)
+	if length <= 0 { return }
+	wide[length] = 0
+	crash_watchdog_pause(true)
+	defer crash_watchdog_pause(false)
+	win.MessageBoxW(nil, cstring16(&wide[0]), win.L("Krodin: graphics driver reset"), win.MB_OK | win.MB_ICONERROR | win.MB_TOPMOST)
 }
 
 // Installs the unhandled-exception filter and the hang watchdog. Call from the
@@ -187,10 +375,11 @@ crash_write_hang_report :: proc() {
 crash_handler_install :: proc() {
 	if g_crash.installed { return }
 	g_crash.installed = true
-	win.SetUnhandledExceptionFilter(crash_filter)
+	crash_paths_init(g_crash_config.log_dir)
+	g_crash.previous_filter = win.SetUnhandledExceptionFilter(crash_filter)
 	process := win.GetCurrentProcess()
 	win.DuplicateHandle(process, win.GetCurrentThread(), process, &g_crash.main_thread, 0, false, win.DUPLICATE_SAME_ACCESS)
-	g_crash.watchdog = thread.create(crash_watchdog)
+	g_crash.watchdog = thread.create(crash_watchdog, name = "Krodin hang watchdog")
 	if g_crash.watchdog != nil { thread.start(g_crash.watchdog) }
 }
 
@@ -202,8 +391,12 @@ crash_handler_uninstall :: proc() {
 		thread.destroy(g_crash.watchdog)
 		g_crash.watchdog = nil
 	}
-	win.SetUnhandledExceptionFilter(nil)
+	win.SetUnhandledExceptionFilter(g_crash.previous_filter)
+	g_crash.previous_filter = nil
 	if g_crash.main_thread != nil { win.CloseHandle(g_crash.main_thread); g_crash.main_thread = nil }
 	g_crash.installed = false
 	g_crash.watchdog_stop = false
+	g_crash.watchdog_pause = false
+	g_crash.hang_reported = false
 }
+
