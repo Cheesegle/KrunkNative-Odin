@@ -83,6 +83,10 @@ player_healthbars_update_visibility :: proc(client: ^Client, now: f32) {
 	players := client.game.players[:]
 	if me == nil || !me.active {
 		for player in players { if player != nil && player != me { player_nameplate_reset(player) } }
+		// Kill cam: the browser forces the killer's nametag on (Jf1b8al = true).
+		if killer := client_kill_cam_killer(client); killer != nil && killer.active && killer.health > 0 {
+			killer.can_be_seen, killer.nameplate_alpha, killer.nameplate_seen_at = true, 1, now
+		}
 		return
 	}
 
@@ -223,9 +227,11 @@ player_nameplate_name :: proc(client: ^Client, player: ^shared.Player) -> string
 player_healthbars_render :: proc(client: ^Client) {
 	show_bars, show_names := !client.hud_settings.hide_healthbars, !client.hud_settings.hide_nametags
 	if !show_bars && !show_names { return }
-	if !client.in_game || !client.mouse_state.locked || client.me == nil || !client.me.active ||
-		client.ui == nil || len(client.game.players) < 2 ||
-		client.viewport_width <= 0 || client.viewport_height <= 0 { return }
+	// While a kill cam shows, only the killer's plate is drawn (you are dead
+	// and the cursor is free, so the usual gate would hide it).
+	kill_cam_killer := client_kill_cam_killer(client)
+	if kill_cam_killer == nil && (!client.in_game || !client.mouse_state.locked || client.me == nil || !client.me.active) { return }
+	if client.ui == nil || len(client.game.players) < 2 || client.viewport_width <= 0 || client.viewport_height <= 0 { return }
 
 	ui := client.ui
 	ui_update(ui, f32(client.viewport_width), f32(client.viewport_height))
@@ -236,6 +242,7 @@ player_healthbars_render :: proc(client: ^Client) {
 	gl.Disable(gl.DEPTH_TEST)
 	view_projection := client.camera.projection_matrix * client.camera.world_inverse_matrix
 	for player in client.game.players {
+		if kill_cam_killer != nil && player != kill_cam_killer { continue }
 		if player == nil || player == client.me || player.is_you || !player.active || player.health <= 0 || player.max_health <= 0 || player.nameplate_alpha <= 0 { continue }
 		anchor := player_nameplate_anchor(player)
 		screen, visible := player_healthbar_project(view_projection, anchor, ui.width, ui.height)

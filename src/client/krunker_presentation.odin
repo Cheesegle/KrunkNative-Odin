@@ -27,6 +27,8 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 		if source.sid == client.krunker_world.local_sid || source.pose_count == 0 { continue }
 		player := client_find_player(client, source.sid)
 		if player == nil || !player.active { continue }
+		// Kill cam: the browser sets the killer's interpolate = false.
+		if client_kill_cam_freezes(client, source.sid) { continue }
 		rate := source.send_rate > 0 ? source.send_rate : 10
 		display_time := kproto.krunker_display_time(now, rate)
 		for source.pose_count >= 2 && source.poses[1].time <= display_time {

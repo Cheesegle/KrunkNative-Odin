@@ -535,6 +535,9 @@ Game_Config :: struct {
 	// Lobby rule `config.nameTags`, "Hide Nametags (Enemies)": hides enemy
 	// nameplates (bar and name) for everyone in the match.
 	hide_enemy_nametags: bool,
+	// Lobby rule `config.kCams`, "Kill Cams" (Other, default on): when you are
+	// killed by another player the camera pans toward them (client kill_cam.odin).
+	kill_cams:          bool,
 	team1_name:         string,
 	team2_name:         string,
 	team1_damage:       f32,
@@ -724,6 +727,7 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	allow_spectate  = true,
 	third_person    = false,
 	hide_enemy_nametags = false,
+	kill_cams       = true,
 	team1_name      = "Team 1",
 	team2_name      = "Team 2",
 	team1_damage    = 1.0,

@@ -50,6 +50,7 @@ Client :: struct {
 	scroll_press_time: f64, // GetTime of the last latched press (50 ms throttle).
 	hud_settings: menuui.HUD_Settings,
 	kill_feed: Kill_Feed,
+	kill_cam: Kill_Cam,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -682,6 +683,7 @@ client_clear_players :: proc(client: ^Client) {
 	clear(&client.game.players)
 	client.game.player_count = 0
 	client.me = nil
+	client_kill_cam_stop(client)
 	client.in_game = false
 	client.spawn_pending = false
 	clear(&client.predicted_inputs)
@@ -855,6 +857,11 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 			player.velocity = state.velocity
 			client_apply_movement_state(player, state)
 		}
+	} else if was_active && client_kill_cam_viewing(client) {
+		// Kill cam: Krunker's server sends no UPDATE_PLAYERS to a dead player,
+		// so remote poses stop (an in-flight interpolation still finishes) and
+		// the killer is frozen outright (Dr.interpolate = false).
+		if player.uid == client.kill_cam.killer_uid { player.interpolate = false }
 	} else if was_active {
 		// Interpolate from the previously displayed position toward the fresh
 		// authoritative one. Between snapshots the client lerps, so a moving
@@ -1429,6 +1436,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			player_update_meshes(client.me, false)
 		}
 	}
+	client_kill_cam_update(client, delta)
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)

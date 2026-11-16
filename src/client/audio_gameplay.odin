@@ -56,16 +56,26 @@ client_audio_present :: proc(client: ^Client, event: shared.Presentation_Event) 
 // Krunker places Howler's listener at the player's eye (x, y + height - camera
 // offset, z) even in third person, and orients it by the look yaw and pitch
 // without recoil animation. Spectator and free cameras use the camera itself.
-client_audio_update_listener :: proc(client: ^Client) {
-	if client.audio == nil { return }
-	position := client.camera.position
-	yaw, pitch := client.camera.rotation.y, client.camera.rotation.x
+// Krunker moves Howler's listener only while you are alive (your eye) or
+// spectating (the camera). During a kill cam it stays where you died.
+client_audio_listener_pose :: proc(client: ^Client) -> (position: shared.Vec3, yaw, pitch: f32) {
+	position = client.camera.position
+	yaw, pitch = client.camera.rotation.y, client.camera.rotation.x
+	if client_kill_cam_viewing(client) {
+		return client.kill_cam.listener_position, client.kill_cam.listener_yaw, client.kill_cam.listener_pitch
+	}
 	if client.me != nil && client.me.active && !client.freecam_enabled {
 		if client.me.game != nil && client.me.game.map_inst != nil && player_uses_third_person_camera(client.me) {
 			position -= client.me.game.map_inst.config.cam_offset
 		}
 		yaw, pitch = client.me.direction.y, client.me.direction.x
 	}
+	return
+}
+
+client_audio_update_listener :: proc(client: ^Client) {
+	if client.audio == nil { return }
+	position, yaw, pitch := client_audio_listener_pose(client)
 	audio_set_listener(client.audio, position, yaw, pitch)
 }
 
