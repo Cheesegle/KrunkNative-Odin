@@ -108,6 +108,12 @@ test_settings_search :: proc() -> bool {
 	}
 	if search_test_shown(&state, clay.ID("VSync")) { fmt.println("Searching Disable must hide unrelated rows"); return false }
 
+	// "killfeed size" finds the size slider, and "feed" finds both killfeed sliders.
+	search_test_type(&state, view, "killfeed size")
+	if !search_test_shown(&state, clay.ID("HudKillFeedSize")) || search_test_shown(&state, clay.ID("VSync")) { fmt.println("Searching killfeed size must list Killfeed size only"); return false }
+	search_test_type(&state, view, "feed")
+	if !search_test_shown(&state, clay.ID("HudKillFeedSize")) || !search_test_shown(&state, clay.ID("HudKillFeedLimit")) { fmt.println("Searching feed must list the killfeed sliders"); return false }
+
 	// "night" finds Night mode and its strength slider.
 	search_test_type(&state, view, "night")
 	if !search_test_shown(&state, clay.ID("NightMode", 2)) || !search_test_shown(&state, clay.ID("NightStrength")) { fmt.println("Searching night must list Night mode and Night strength"); return false }
