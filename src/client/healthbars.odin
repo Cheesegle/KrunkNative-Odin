@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import gl "vendor:OpenGL"
 import stbtt "vendor:stb/truetype"
+import menuui "../menu"
 import shared "../shared"
 
 // Screen position and OpenGL clip depth from the world camera. The weapon
@@ -188,14 +189,17 @@ Nameplate_Layout :: struct {
 // `unit` is screen pixels per canvas unit. With a bar, the bar's bottom edge
 // sits on the anchor and the name is left-aligned with the bar, its baseline
 // 10 units above the bar. Without a bar Krunker shrinks G to 6 and centres the
-// name (Y becomes the name width).
-player_nameplate_layout :: proc(screen: shared.Vec2, unit, name_width: f32, show_bar: bool) -> Nameplate_Layout {
+// name (Y becomes the name width). `name_scale` (the Nametag size setting)
+// scales only the name, which grows up and to the right from the same left
+// edge and baseline, so it stays aligned with the bar; the 425-unit width cap
+// does not scale, so long names never grow past it.
+player_nameplate_layout :: proc(screen: shared.Vec2, unit, name_width: f32, show_bar: bool, name_scale: f32 = 1) -> Nameplate_Layout {
 	layout: Nameplate_Layout
 	g := show_bar ? NAMEPLATE_BAR_HEIGHT : NAMEPLATE_NO_BAR_HEIGHT
 	layout.bar_width, layout.bar_height = NAMEPLATE_BAR_WIDTH*unit, NAMEPLATE_BAR_HEIGHT*unit
 	layout.bar_left, layout.bar_top = screen.x - layout.bar_width*0.5, screen.y - layout.bar_height
-	layout.name_size = NAMEPLATE_NAME_SIZE*unit
-	width := name_width*unit
+	layout.name_size = NAMEPLATE_NAME_SIZE*unit*name_scale
+	width := name_width*unit*name_scale
 	if width > NAMEPLATE_NAME_MAX_WIDTH*unit {
 		layout.name_size *= NAMEPLATE_NAME_MAX_WIDTH*unit/width
 		width = NAMEPLATE_NAME_MAX_WIDTH*unit
@@ -235,6 +239,8 @@ player_healthbars_render :: proc(client: ^Client) {
 
 	ui := client.ui
 	ui_update(ui, f32(client.viewport_width), f32(client.viewport_height))
+	name_scale := menuui.nametag_scale(client.hud_settings)
+	name_colors := menuui.nametag_colors_validate(client.hud_settings.nametag_colors)
 	// Krunker draws nameplates on its 2D overlay canvas, projected from 3D:
 	// geometry never cuts a plate. Whether a plate exists at all is decided by
 	// the line-of-sight gate and its fade (`nameplate_alpha`), so draw it whole, untested
@@ -250,7 +256,7 @@ player_healthbars_render :: proc(client: ^Client) {
 		unit := ui.scale * player_nameplate_scale(client.camera.position, anchor)
 		name := show_names ? player_nameplate_name(client, player) : ""
 		name_width := show_names ? ui_measure_text(ui, name, nameplate_font_size(NAMEPLATE_NAME_SIZE)) : 0
-		layout := player_nameplate_layout({screen.x, screen.y}, unit, name_width, show_bars)
+		layout := player_nameplate_layout({screen.x, screen.y}, unit, name_width, show_bars, name_scale)
 		friendly := client.me.team != 0 && player.team == client.me.team
 		alpha := player_nameplate_display_alpha(player.nameplate_alpha)
 		if show_bars {
@@ -263,8 +269,8 @@ player_healthbars_render :: proc(client: ^Client) {
 			ui_fill_rect(ui, color, layout.bar_left, layout.bar_top, layout.bar_width*progress, layout.bar_height)
 		}
 		if show_names {
-			// White, except enemies in team modes take the enemy colour.
-			color := client.me.team != 0 && !friendly ? shared.hex_to_vec(0xff4444) : shared.Vec4{1, 1, 1, 1}
+			// Krunker: white, except enemies in team modes take the enemy colour.
+			color := shared.hex_to_vec(i32(client.me.team != 0 && !friendly ? name_colors.enemy : name_colors.team))
 			color.a *= alpha
 			ui_fill_text(ui, color, name, layout.name_x, layout.name_baseline, nameplate_font_size(layout.name_size))
 		}

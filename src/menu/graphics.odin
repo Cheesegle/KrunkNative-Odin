@@ -55,7 +55,7 @@ spatial_audio_label :: proc(mode: i32, surround_channels: i32) -> string {
 
 // Sliders shown as percentages.
 settings_percent_action :: proc(kind: Action_Kind) -> bool {
-	return kind == .AUDIO_VOLUME || kind == .LEVELLING_STRENGTH
+	return kind == .AUDIO_VOLUME || kind == .LEVELLING_STRENGTH || kind == .NAMETAG_SIZE
 }
 Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
 DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
@@ -194,6 +194,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .VISUAL_VALUE: return values.visuals.values[Visual_Control(action.index)]
 	case .NIGHT_STRENGTH: return values.visuals.night_strength
 	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
+	case .NAMETAG_SIZE: return nametag_scale(state.settings_active ? values.hud : view.hud)
 	}
 	return values.sensitivity
 }
