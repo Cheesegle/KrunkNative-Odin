@@ -86,7 +86,8 @@ when ODIN_TEST {
 			full_players: [32]menuui.Player
 			for &player, i in full_players { player = {name="Competitive player with a long name", class_name="Run N Gun", team=i32(i%2+1), is_you=i==0} }
 			play_y: f32
-			for scenario in 0..<51 {
+			for scenario in 0..<53 {
+				view.guest_pending=false; view.connecting=false; view.browser_access_supported=false
 				view.online=true; view.team_pending=false; view.class_pending=false; view.spawn_pending=false; view.join_status=""; view.active=false
 				view.presentation=.COMPETITIVE; view.ranked=false; view.team_selection=false; view.local_practice=false; view.ready=true; view.confirmed_team=1; view.play_reason=""
 				view.teams[0].name="Alpha"; view.teams[1].name="Bravo"
@@ -157,10 +158,17 @@ when ODIN_TEST {
 				// Krunker's name finds the game FPS limit; "fps" lists both limits.
 				case 49: state.page=.SETTINGS; state.settings_tab=.VIDEO; state.search_length=copy(state.search_buffer[:], "frame cap")
 				case 50: state.page=.SETTINGS; state.settings_tab=.VIDEO; state.settings_active=false; view.game_fps_limit=144; state.search_length=copy(state.search_buffer[:], "fps")
+				// Play as guest beside Join, idle with Login, then signing in.
+				case 51: view.online=false; view.browser_access_supported=true; menuui.set_invite(&state,"https://krunker.io/?game=FRA:fixture")
+				case 52: view.online=false; view.guest_pending=true; view.connecting=true; view.join_status="Signing in as guest..."; menuui.set_invite(&state,"https://krunker.io/?game=FRA:fixture")
 				case 23: view.presentation=.STANDARD; state.page=.LOADOUT; classes[2].name="An exceptionally long selected class name"; classes[2].weapon="An exceptionally long primary weapon name"
 				}
 				page := state.page
 				commands := menuui.build(&state, view, {}, ui.width, ui.height, 1.0 / 60.0)
+				if scenario == 51 || scenario == 52 {
+					testing.expect(t, clay.GetElementData(clay.ID("JoinGuest")).found && clay.GetElementData(clay.ID("JoinLink")).found, "Play as guest sits beside Join")
+					testing.expect(t, (scenario == 52) == clay.GetElementData(clay.ID("CancelJoin")).found, "guest sign-in shows Cancel")
+				}
 				if scenario == 42 {
 					for control in state.controls[:state.control_count] { if control.id.id == clay.ID("CrosshairDot", u32(menuui.Crosshair_Toggle.DOT)).id { menuui.focus_visible(control, .SETTINGS) } }
 					commands = menuui.build(&state, view, {}, ui.width, ui.height, 1.0 / 60.0)
@@ -219,7 +227,7 @@ when ODIN_TEST {
 						"Techy-9 must remain selectable separately from Auto Pistol")
 				}
 				testing.expect(t, state.errors == 0, "menu layout reported an error")
-				if scenario >= 46 {
+				if scenario >= 46 && scenario <= 50 {
 					heading := clay.GetElementData(clay.ID("SettingsHeading")).boundingBox
 					for id in ([]string{"SettingsSearch", "SettingsReset", "SettingsExport", "SettingsImport"}) {
 						box := clay.GetElementData(clay.ID(id)).boundingBox
@@ -311,7 +319,7 @@ when ODIN_TEST {
 					}
 				}
 				labels := [?][2]string{
-					{"Quit", "Quit"}, {"Enter Game", "Play"}, {"Respawn", "Play"}, {"Resume", "Play"}, {"Join", "JoinLink"}, {"Paste", "Paste"},
+					{"Quit", "Quit"}, {"Enter Game", "Play"}, {"Respawn", "Play"}, {"Resume", "Play"}, {"Join", "JoinLink"}, {"Paste", "Paste"}, {"Play as guest", "JoinGuest"},
 					{"Change class", "ChangeClass"}, {"Done", "LoadoutDone"},
 					{"Save", "SettingsSave"}, {"Cancel", "SettingsCancel"},
 				}
@@ -326,13 +334,15 @@ when ODIN_TEST {
 					testing.expect(t, string(text.chars[:text.length]) != "Change secondary", "the lobby must not have a separate secondary button")
 					for label in labels {
 						if string(text.chars[:text.length]) != label[0] { continue }
+						// The join screen's Cancel (CancelJoin) shares the settings label.
+						if label[1] == "SettingsCancel" && page != .SETTINGS { continue }
 						index := label[1] == "ChangeClass" ? u32(menuui.Page.CLASSES) : 0
 						parent := clay.GetElementData(clay.ID(label[1], index))
 						box := command.boundingBox
-						testing.expect(t, parent.found && box.x >= parent.boundingBox.x && box.y >= parent.boundingBox.y &&
+						testing.expectf(t, parent.found && box.x >= parent.boundingBox.x && box.y >= parent.boundingBox.y &&
 							box.x + box.width <= parent.boundingBox.x + parent.boundingBox.width &&
 							box.y + box.height <= parent.boundingBox.y + parent.boundingBox.height,
-							"actual font label must fit inside its button")
+							"actual font label %q must fit inside its button (scenario %d, %v)", label[0], scenario, size)
 					}
 					if page == .CLASSES && command.zIndex == 10 {
 						label := string(text.chars[:text.length])

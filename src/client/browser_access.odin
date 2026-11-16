@@ -136,7 +136,7 @@ client_captcha_begin :: proc(client: ^Client, start_browser: proc(^Client) -> bo
 }
 
 client_access_login :: proc(client: ^Client, start_browser: proc(^Client_Access) -> bool = client_browser_start) -> bool {
-	if client.join_queued > 0 || client.access.status == .PENDING { return false }
+	if client.join_queued > 0 || client.access.status == .PENDING || client.guest.status == .PENDING { return false }
 	client.access.retried = false
 	return client_access_begin(client, start_browser, join_after_access = false)
 }
@@ -231,6 +231,12 @@ client_access_tick :: proc(client: ^Client, poll_browser: proc(^Client_Access) -
 				client_access_cancel(client); state.status = .ERROR
 				krunker_ws_set_status(client, access.status_text("CAPTCHA_SETUP_FAILED")); return
 			}
+			if client.guest.active {
+				// The browser's socket URL carries the browser's own account token.
+				client_access_log(state, "Socket handoff refused for a guest join; it would replace the guest identity with the browser's account.")
+				client_access_cancel(client); state.status = .ERROR
+				krunker_ws_set_status(client, GUEST_CAPTCHA_IDENTITY_TEXT); return
+			}
 			assignment_url, token, valid := client_access_assignment_url(message.value)
 			if !valid {
 				client_access_log(state, "Browser assignment failed native validation; contents omitted.")
@@ -297,8 +303,9 @@ client_access_tick :: proc(client: ^Client, poll_browser: proc(^Client_Access) -
 			}
 		case "ERROR":
 			client_access_log(state, access.status_text(message.value))
+			guest_login_required := client.guest.active && state.captcha_pending && message.value == "CAPTCHA_LOGIN_REQUIRED"
 			client_access_cancel(client); state.status = .ERROR
-			krunker_ws_set_status(client, access.status_text(message.value))
+			krunker_ws_set_status(client, guest_login_required ? GUEST_CAPTCHA_LOGIN_TEXT : access.status_text(message.value))
 		case:
 			client_access_log(state, "Unexpected helper message; stopping browser access (contents omitted).")
 			client_access_cancel(client); state.status = .ERROR
@@ -316,8 +323,13 @@ client_access_tick :: proc(client: ^Client, poll_browser: proc(^Client_Access) -
 client_access_forget :: proc(client: ^Client) {
 	client_access_log(&client.access, "Forget browser session requested; clearing access cache and Krodin browser profile.")
 	client_access_cancel(client)
+	client_guest_cancel(client)
 	client.join_queued = 0
 	delete(client.access.token); client.access.token = ""
+	// Guest tokens too; access.forget also deletes their encrypted cache.
+	delete(client.guest.access_token); client.guest.access_token = ""
+	delete(client.guest.refresh_token); client.guest.refresh_token = ""
+	client.guest.cache_loaded, client.guest.status = false, .IDLE
 	delete(client.access.assignment_url); client.access.assignment_url = ""
 	client.access.from_browser, client.access.retried = false, false
 	when ODIN_OS == .Windows {

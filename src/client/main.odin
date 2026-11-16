@@ -120,6 +120,7 @@ Client :: struct {
 	menu_text_length: int,
 	join_queued: int,
 	access: Client_Access,
+	guest: Client_Guest,
 	menu:             menuui.State,
 	menu_scroll:      clay.Vector2,
 	display_mode:      Display_Mode,
@@ -1212,6 +1213,10 @@ client_enter_game :: proc(client: ^Client) {
 }
 
 client_tick :: proc(client: ^Client, now, delta: f32) {
+	if client.krunker.auth_rejected && client.guest.active {
+		krunker_ws_disconnect(&client.krunker)
+		if !client_guest_retry(client, true) { krunker_ws_set_status(client, "Krunker rejected the renewed guest access. Retry Play as guest.") }
+	}
 	when ODIN_OS == .Windows {
 		if client.krunker.auth_rejected {
 			krunker_ws_disconnect(&client.krunker)
@@ -1219,6 +1224,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_access_tick(client)
+	client_guest_tick(client)
 	if client.join_queued > 0 {
 		client.join_queued -= 1
 		if client.join_queued == 0 { client_join_invite(client) }
@@ -1764,6 +1770,7 @@ main :: proc() {
 	phase_mark(.SHUTDOWN)
 
 	client_access_cancel(client)
+	client_guest_shutdown(client)
 	delete(client.access.token)
 	delete(client.access.assignment_url)
 	client_unload_map(client)

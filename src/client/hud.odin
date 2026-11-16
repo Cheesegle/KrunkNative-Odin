@@ -18,7 +18,7 @@ menu_measure_text :: proc "c" (label: clay.StringSlice, config: ^clay.TextElemen
 }
 
 client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.Join_Link) -> bool = krunker_ws_connect) {
-	if client.access.status == .PENDING { return }
+	if client.access.status == .PENDING || client.guest.status == .PENDING { return }
 	kproto.network_log_begin()
 	invite := menuui.invite(&client.menu)
 	kproto.network_log("invite", fmt.tprintf("input bytes=%d link=%s", len(invite), invite))

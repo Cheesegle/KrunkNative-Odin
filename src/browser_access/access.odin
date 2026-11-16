@@ -188,3 +188,29 @@ status_text :: proc(code: string) -> string {
 	case: return "Browser access failed. Retry Join, or rebuild the Windows browser helper."
 	}
 }
+
+// Reads a JWT's exp claim without verifying the signature, like the FRVR
+// SDK's TokenPair (decodeJWT, then exp). Accepts guest and account tokens.
+token_expiry :: proc(token: string) -> (exp: i64, ok: bool) {
+	if len(token) == 0 || len(token) > 32768 { return }
+	parts := strings.split(token, ".")
+	defer delete(parts)
+	if len(parts) != 3 { return }
+	payload, err := base64.decode(parts[1], base64.DEC_URL_TABLE)
+	if err != nil { return }
+	defer delete(payload)
+	value, parse_err := json.parse(payload, parse_integers = true)
+	if parse_err != .None { return }
+	defer json.destroy_value(value)
+	object, is_object := value.(json.Object)
+	if !is_object { return }
+	claim, valid := object["exp"].(json.Integer)
+	if !valid || claim <= 0 { return }
+	return i64(claim), true
+}
+
+// The SDK treats a token as valid while (exp - 60) seconds is in the future.
+token_fresh :: proc(token: string, now: i64) -> bool {
+	exp, ok := token_expiry(token)
+	return ok && now < exp - 60
+}

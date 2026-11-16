@@ -29,6 +29,8 @@ client_selection_status :: proc(client: ^Client, value: string) {
 client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	client_access_cancel(client)
 	client.access.retried = false
+	client_guest_cancel(client)
+	client.guest.retried = false
 	audio_stop_all(client.audio)
 	if client.audio != nil { client.audio.hit_revision, client.audio.health_drop_revision = 0, 0 }
 	client.hit_marker = {}
@@ -257,7 +259,8 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		spawn_pending = client.spawn_pending, ready = client.krunker.connected ? client.krunker_world.ready && client.krunker.render_map_ready : client.game.ready && (!client.net.connected || client.net.match_state_received),
 		map_name = map_name, mode = mode, lobby_name = online ? (len(client.join_link.game_id) > 0 ? client.join_link.game_id : client.join_link.host) : "Local practice",
 		browser_access_supported = ODIN_OS == .Windows, auth_pending = client.access.status == .PENDING,
-		connecting = client.join_queued > 0 || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
+		guest_pending = client.guest.status == .PENDING,
+		connecting = client.join_queued > 0 || client.guest.status == .PENDING || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
@@ -384,15 +387,23 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		menuui.set_invite(&client.menu, glfw.GetClipboardString(client.window))
 		client.menu.focus = clay.ID("Invite").id
 	case .JOIN_LINK:
-		if client.join_queued > 0 || client.access.status == .PENDING { return }
+		if client.join_queued > 0 || client.access.status == .PENDING || client.guest.status == .PENDING { return }
+		client.guest.active = false
 		client.join_queued = 2
 		krunker_ws_set_status(client, "Connecting to lobby...")
+		client.menu.page = .HOME
+	case .JOIN_GUEST:
+		if client.join_queued > 0 || client.access.status == .PENDING || client.guest.status == .PENDING { return }
+		client.guest.active = true
+		client.join_queued = 2
+		krunker_ws_set_status(client, "Signing in as guest...")
 		client.menu.page = .HOME
 	case .LOGIN:
 		when ODIN_OS == .Windows { client_access_login(client) }
 	case .CANCEL_JOIN:
 		login := client.access.status == .PENDING && !client.access.join_after_access
 		client_access_cancel(client)
+		client_guest_cancel(client)
 		client.join_queued = 0
 		krunker_ws_set_status(client, login ? "Login cancelled." : "Join cancelled.")
 	case .FORGET_BROWSER_SESSION:
