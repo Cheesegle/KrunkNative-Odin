@@ -131,6 +131,29 @@ test_settings_search :: proc() -> bool {
 	menu_test_click(&state, view, healthbars)
 	if state.settings_draft.hud.hide_healthbars != before { fmt.println("Toggling a result twice must restore it"); return false }
 
+	// "border" finds the healthbar border toggle, which works in place.
+	menu_test_click(&state, view, search)
+	search_test_type(&state, view, "border")
+	border := clay.ID("HudHealthbarBorder", 7)
+	if !search_test_shown(&state, border) || search_test_shown(&state, healthbars) { fmt.println("\"border\" must find Healthbar border only"); return false }
+	if menu_test_click(&state, view, border).kind != .NONE || !state.settings_draft.hud.healthbar_border { fmt.println("The Healthbar border result must toggle in place"); return false }
+	menu_test_click(&state, view, border)
+
+	// "healthbar color" finds both healthbar colour pickers.
+	menu_test_click(&state, view, search)
+	search_test_type(&state, view, "healthbar color")
+	if !search_test_shown(&state, clay.ID("CrosshairColor", u32(menuui.HEALTHBAR_ENEMY_COLOR_FIELD))) || !search_test_shown(&state, clay.ID("CrosshairColor", u32(menuui.HEALTHBAR_TEAM_COLOR_FIELD))) || search_test_shown(&state, healthbars) {
+		fmt.println("\"healthbar color\" must find the enemy and team healthbar colors only"); return false
+	}
+
+	// "nametag" finds the nametag toggle, size slider and both name colours.
+	menu_test_click(&state, view, search)
+	search_test_type(&state, view, "nametag")
+	if !search_test_shown(&state, clay.ID("HudNametags", 4)) || !search_test_shown(&state, clay.ID("HudNametagSize")) || !search_test_shown(&state, clay.ID("CrosshairColor", u32(menuui.NAMETAG_TEAM_COLOR_FIELD))) ||
+		!search_test_shown(&state, clay.ID("CrosshairColor", u32(menuui.NAMETAG_ENEMY_COLOR_FIELD))) || search_test_shown(&state, healthbars) {
+		fmt.println("\"nametag\" must find the nametag rows only"); return false
+	}
+
 	// Sliders in results stay interactive, and section names match their rows.
 	menu_test_click(&state, view, search)
 	search_test_type(&state, view, "players")

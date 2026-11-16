@@ -144,7 +144,16 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_fps_row(state)
 		settings_section(state, "Players")
 		settings_toggle_row(state, "Show nametags", "HudNametags", !values.hud.hide_nametags, {kind = .HUD_TOGGLE, index = 4})
+		settings_slider(state, "Nametag size", "HudNametagSize", nametag_scale(values.hud), NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX, {kind = .NAMETAG_SIZE})
+		settings_crosshair_color(state, "Nametag color", NAMETAG_TEAM_COLOR_FIELD)
+		settings_crosshair_color(state, "Enemy nametag color", NAMETAG_ENEMY_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Nametag size scales the name only (75-200% of Krunker's size). As in Krunker, names are white, with enemies in team modes #EB5656; FFA names use Nametag color.")
 		settings_toggle_row(state, "Show healthbars", "HudHealthbars", !values.hud.hide_healthbars, {kind = .HUD_TOGGLE, index = 5})
+		settings_toggle_row(state, "Healthbar border", "HudHealthbarBorder", values.hud.healthbar_border, {kind = .HUD_TOGGLE, index = 7})
+		// Krunker healthColE / healthColT (interface category).
+		settings_crosshair_color(state, "Enemy healthbar color", HEALTHBAR_ENEMY_COLOR_FIELD)
+		settings_crosshair_color(state, "Team healthbar color", HEALTHBAR_TEAM_COLOR_FIELD)
+		settings_note(state, state.color_invalid ? "Enter a six-digit color such as #00FF00. Escape discards the color edit." : "Krunker's defaults are #EB5656 for enemies (also their names in team modes) and #9EEB56 for teammates. Click a color to type or paste #RRGGBB.")
 		settings_section(state, "Killfeed")
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})

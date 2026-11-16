@@ -8,7 +8,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF }
@@ -22,7 +22,48 @@ HUD_Settings :: struct {
 	hide_timer, hide_round_score, hide_game_score, hide_ping, hide_nametags, hide_healthbars: bool,
 	hide_kill_feed: bool,
 	kill_feed_limit: i32,
+	// Krodin's own: Krunker's nameplate bars have no border (a translucent
+	// black track, `rgba(0, 0, 0, 0.4)`, under the fill). Off by default.
+	healthbar_border: bool,
+	healthbar_colors: Healthbar_Colors,
+	nametag_scale: f32, // See nametag_scale; 0 (a file without the key) is 100%.
+	nametag_colors: Nametag_Colors,
 	kill_feed_size: f32,
+}
+// Nameplate healthbar fills, Krunker's healthColE ("Nametag Health Color E")
+// and healthColT ("Nametag Health Color Team"). A zero value predates these
+// settings and means Krunker's defaults (healthbar_colors_validate).
+Healthbar_Colors :: struct { enemy, team: u32 }
+DEFAULT_HEALTHBAR_COLORS :: Healthbar_Colors{enemy = 0xeb5656, team = 0x9eeb56}
+// Color edit fields (settings_color_value); 1-7 are the crosshair's, the
+// hitmarker's and the damage feedback's.
+HEALTHBAR_ENEMY_COLOR_FIELD :: 8
+HEALTHBAR_TEAM_COLOR_FIELD :: 9
+healthbar_colors_validate :: proc(colors: Healthbar_Colors) -> Healthbar_Colors {
+	if colors == (Healthbar_Colors{}) { return DEFAULT_HEALTHBAR_COLORS }
+	return {colors.enemy & 0xffffff, colors.team & 0xffffff}
+}
+// Krodin's own nametag text size, a multiple of Krunker's 20px name. Only the
+// name scales; the healthbar keeps Krunker's 130x16 size.
+NAMETAG_SCALE_MIN :: 0.75 // 50% made names about 7 px tall at 1080p: unreadable.
+NAMETAG_SCALE_MAX :: 2
+nametag_scale :: proc(settings: HUD_Settings) -> f32 {
+	scale := settings.nametag_scale
+	if scale <= 0 || scale != scale { return 1 } // Unset or NaN.
+	return clamp(scale, NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX)
+}
+// Krodin's own name colours. Krunker draws names white, and enemies' names in
+// team modes in the enemy health colour (healthColE, #eb5656); it has no
+// separate name colour setting. A zero value predates these settings.
+Nametag_Colors :: struct { enemy, team: u32 }
+DEFAULT_NAMETAG_COLORS :: Nametag_Colors{enemy = 0xeb5656, team = 0xffffff}
+// Color edit fields (settings_color_value); 1-7 are the crosshair's, the
+// hitmarker's and the damage feedback's.
+NAMETAG_ENEMY_COLOR_FIELD :: 10
+NAMETAG_TEAM_COLOR_FIELD :: 11
+nametag_colors_validate :: proc(colors: Nametag_Colors) -> Nametag_Colors {
+	if colors == (Nametag_Colors{}) { return DEFAULT_NAMETAG_COLORS }
+	return {colors.enemy & 0xffffff, colors.team & 0xffffff}
 }
 KILL_FEED_DEFAULT_LIMIT :: 8
 KILL_FEED_MAX_LIMIT :: 10
@@ -542,6 +583,9 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 2: state.settings_draft.visuals.night_mode = !state.settings_draft.visuals.night_mode
 			}
 			return {}
+		case .NAMETAG_SIZE:
+			if value := control.action.value; value == value { state.settings_draft.hud.nametag_scale = clamp(value, NAMETAG_SCALE_MIN, NAMETAG_SCALE_MAX) } // Skips NaN.
+			return {}
 		case .KILL_FEED_LIMIT:
 			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_limit = i32(clamp(value + 0.5, 1, KILL_FEED_MAX_LIMIT)) } // Skips NaN.
 			return {}
@@ -595,6 +639,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 4: state.settings_draft.hud.hide_nametags = !state.settings_draft.hud.hide_nametags
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
+			case 7: state.settings_draft.hud.healthbar_border = !state.settings_draft.hud.healthbar_border
 			}
 			return {}
 		case .RESOLUTION:
