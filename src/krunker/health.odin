@@ -56,6 +56,13 @@ krunker_world_apply_player_gone :: proc(state: ^Krunker_World_State, packet: []K
 		// REMOVE_PLAYER(2) has no death count; KILL_PLAYER(3) does.
 		if (opcode == "3" || numeric == 3) && len(packet) > 2 {
 			if deaths, ok := krunker_world_bounded_number(packet[2], 0, 2147483647); ok { player.deaths = u32(deaths) }
+			if sid == state.local_sid {
+				state.local_killer_sid = -1
+				if len(packet) > 3 {
+					if killer, ok := krunker_world_bounded_number(packet[3], 0, 2147483647); ok { state.local_killer_sid = i32(killer) }
+				}
+				state.local_death_revision += 1
+			}
 			krunker_world_record_kill(state, sid, packet)
 		}
 		player.pose_count = 0

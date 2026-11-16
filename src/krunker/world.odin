@@ -110,6 +110,12 @@ Krunker_World_State :: struct {
 	shots:       [dynamic]Krunker_World_Shot,
 	// KILL_PLAYER (3) killfeed lines, drained by the client each frame.
 	kills:       [dynamic]Krunker_World_Kill,
+	// KILL_PLAYER (3) of the local player: the killer's SID (-1 for none) and
+	// a counter the client's kill cam compares against. Unlike `kills` this is
+	// recorded even when the packet hides the feed line, as the browser's
+	// camLookAt runs before that check.
+	local_killer_sid: i32,
+	local_death_revision: u64,
 	has_leaders: bool,
 	leader_stat_count: int,
 	match: shared.Match_State,
