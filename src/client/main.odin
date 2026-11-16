@@ -1557,6 +1557,8 @@ main :: proc() {
 	defer glfw.Terminate()
 	client_set_timer_precision()
 	defer client_restore_timer_precision()
+	client_platform_init()
+	defer client_platform_fini()
 
 	client := new(Client)
 	defer free(client)
