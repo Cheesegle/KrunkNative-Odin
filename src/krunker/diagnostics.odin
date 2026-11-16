@@ -23,7 +23,7 @@ network_log_secret :: proc(secret: string) {
 }
 
 network_log_sensitive_key :: proc(key: string) -> bool {
-	keys := []string{"accessToken", "validationToken", "captchaToken", "clientKey", "clientId", "clientUID", "at", "bpt", "token", "authorization", "cookie", "set-cookie", "password", "access_token", "refresh_token"}
+	keys := []string{"accessToken", "validationToken", "captchaToken", "clientKey", "clientId", "clientUID", "at", "bpt", "token", "authorization", "cookie", "set-cookie", "password", "access_token", "refresh_token", "refreshToken"}
 	for candidate in keys {
 		if strings.equal_fold(key, candidate) do return true
 	}

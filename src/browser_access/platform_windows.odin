@@ -9,6 +9,8 @@ import win "core:sys/windows"
 Blob :: struct { size: u32, data: ^byte }
 // Older builds accepted tokens without checking krunker_username. Ignore their cache.
 CACHE_NAME :: "access-account.dpapi"
+// Guest (anonymous) FRVR token pair, kept apart from the account cache.
+GUEST_CACHE_NAME :: "access-guest.dpapi"
 foreign import crypt "system:crypt32.lib"
 @(default_calling_convention="system")
 foreign crypt {
@@ -35,10 +37,10 @@ protect :: proc(data: []byte, encrypt: bool) -> ([]byte, bool) {
 	return copy_data, true
 }
 
-cache_load :: proc(directory: string = "") -> string {
+cache_load :: proc(directory: string = "", name: string = CACHE_NAME) -> string {
 	root := len(directory) > 0 ? strings.clone(directory) : root_path(); defer delete(root)
 	if len(root) == 0 { return "" }
-	path := fmt.tprintf("%s\\%s", root, CACHE_NAME)
+	path := fmt.tprintf("%s\\%s", root, name)
 	data, err := os.read_entire_file_from_path(path, context.allocator)
 	if err != nil { return "" }
 	defer delete(data)
@@ -47,21 +49,21 @@ cache_load :: proc(directory: string = "") -> string {
 	return string(plain)
 }
 
-cache_save :: proc(token: string, directory: string = "") -> bool {
+cache_save :: proc(token: string, directory: string = "", name: string = CACHE_NAME) -> bool {
 	root := len(directory) > 0 ? strings.clone(directory) : root_path(); defer delete(root)
 	if len(root) == 0 { return false }
 	if os.make_directory(root) != nil && !os.is_dir(root) { return false }
 	data, ok := protect(transmute([]byte)token, true)
 	if !ok { return false }
 	defer delete(data)
-	path := fmt.tprintf("%s\\%s", root, CACHE_NAME)
+	path := fmt.tprintf("%s\\%s", root, name)
 	return os.write_entire_file(path, data) == nil
 }
 
-cache_invalidate :: proc(directory: string = "") -> bool {
+cache_invalidate :: proc(directory: string = "", name: string = CACHE_NAME) -> bool {
 	root := len(directory) > 0 ? strings.clone(directory) : root_path(); defer delete(root)
 	if len(root) == 0 { return false }
-	path := fmt.tprintf("%s\\%s", root, CACHE_NAME)
+	path := fmt.tprintf("%s\\%s", root, name)
 	if !os.is_file(path) { return true }
 	return os.remove(path) == nil
 }
@@ -69,7 +71,7 @@ cache_invalidate :: proc(directory: string = "") -> bool {
 forget :: proc(directory: string = "") -> bool {
 	root := len(directory) > 0 ? strings.clone(directory) : root_path(); defer delete(root)
 	if len(root) == 0 { return false }
-	if !cache_invalidate(root) { return false }
+	if !cache_invalidate(root) || !cache_invalidate(root, GUEST_CACHE_NAME) { return false }
 	legacy := fmt.tprintf("%s\\access.dpapi", root)
 	if os.is_file(legacy) && os.remove(legacy) != nil { return false }
 	profile := fmt.tprintf("%s\\Browser", root)

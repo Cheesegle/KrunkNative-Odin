@@ -1,6 +1,7 @@
 package krunker
 
 import shared "../shared"
+import "core:fmt"
 import "core:math"
 import "core:strings"
 
@@ -336,7 +337,10 @@ krunker_world_apply_add_players :: proc(state: ^Krunker_World_State, packet: []K
 		sid := krunker_world_i32(records[offset + 1], -1)
 		if sid < 0 { continue }
 		player := krunker_world_upsert_player(state, sid)
-		if name, named := records[offset+5].(string); named && name != player.name { delete(player.name); player.name = strings.clone(name) }
+		// players.add: a nameless player (a guest) is shown as "Guest_" + sid.
+		name, _ := records[offset+5].(string)
+		if len(name) == 0 { name = fmt.tprintf("Guest_%d", sid) }
+		if name != player.name { delete(player.name); player.name = strings.clone(name) }
 		if socket_id, ok := records[offset].(string); ok && socket_id == state.local_socket_id && len(socket_id) > 0 { state.local_sid = sid }
 		if socket_id, ok := records[offset].(string); ok && socket_id != player.socket_id { delete(player.socket_id); player.socket_id = strings.clone(socket_id) }
 		player.position = {krunker_world_f32(records[offset + 2]), krunker_world_f32(records[offset + 3]), krunker_world_f32(records[offset + 4])}

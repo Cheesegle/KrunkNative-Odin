@@ -408,6 +408,8 @@ session :: proc(state: ^State, view: View) {
 	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
 		button(state, "Paste", "Paste", {kind = .PASTE})
 		button(state, view.auth_pending && view.connecting ? "Preparing access..." : view.connecting ? "Connecting..." : "Join", "JoinLink", {kind = .JOIN_LINK}, primary = true, enabled = len(invite(state)) > 0 && !view.connecting && !view.auth_pending)
+		// Anonymous FRVR access, as Krunker's page uses before an account login.
+		button(state, view.guest_pending ? "Signing in..." : "Play as guest", "JoinGuest", {kind = .JOIN_GUEST}, enabled = len(invite(state)) > 0 && !view.connecting && !view.auth_pending)
 	}
 	if view.connecting || view.auth_pending { button(state, "Cancel", "CancelJoin", {kind = .CANCEL_JOIN}) }
 	text(len(view.join_status) > 0 ? view.join_status : "Enter an invite to connect to a lobby.", 18, s, MUTED)

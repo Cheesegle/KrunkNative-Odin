@@ -159,6 +159,11 @@ krunker_ws_log_token_expiry :: proc(token: string) {
 	kproto.network_log("auth", "JWT exp missing; expiry unavailable")
 }
 
+// Tests point this at a loopback matchmaker.
+krunker_matchmaker_origin := "https://matchmaker.krunker.io"
+// Starts the verification helper; tests replace it so no browser launches.
+krunker_captcha_start: proc(^Client) -> bool = client_browser_captcha_start
+
 krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejected: ^bool, http: proc(string, string, string, string) -> ([dynamic]byte, i64, bool) = kproto.network_http, captcha: string = "", needs_captcha: ^bool = nil) -> (string, bool, string) {
 	rejected^ = false
 	if needs_captcha != nil { needs_captcha^ = false }
@@ -171,7 +176,7 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	access_encoded := krunker_ws_url_encode(access)
 	defer delete(access_encoded)
 	kproto.network_log_secret(access_encoded)
-	validation, validation_status, validation_ok := http("https://matchmaker.krunker.io/generate-token", "GET", "", "generate-token")
+	validation, validation_status, validation_ok := http(fmt.tprintf("%s/generate-token", krunker_matchmaker_origin), "GET", "", "generate-token")
 	defer delete(validation)
 	if !validation_ok || validation_status < 200 || validation_status >= 300 || len(strings.trim_space(string(validation[:]))) == 0 || accessui.captcha_required(validation[:]) {
 		return "", false, krunker_ws_http_failure("matchmaker /generate-token", validation_status, validation_ok, validation[:])
@@ -184,7 +189,7 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	kproto.network_log("generate-token", fmt.tprintf("validation token received; bytes=%d (value redacted)", len(validation_token)))
 	version := strings.clone("1.0.0")
 	defer delete(version)
-	game_list, game_status, game_ok := http("https://matchmaker.krunker.io/game-list?hostname=krunker.io", "GET", "", "game-list")
+	game_list, game_status, game_ok := http(fmt.tprintf("%s/game-list?hostname=krunker.io", krunker_matchmaker_origin), "GET", "", "game-list")
 	defer delete(game_list)
 	if game_ok && accessui.captcha_required(game_list[:]) { return "", false, krunker_ws_http_failure("matchmaker /game-list", game_status, true, game_list[:]) }
 	if game_ok && game_status >= 200 && game_status < 300 {
@@ -202,7 +207,7 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	game_encoded := krunker_ws_url_encode(link.game_id)
 	defer delete(data_encoded)
 	defer delete(game_encoded)
-	seek := fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=sgp&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", validation_encoded, data_encoded, access_encoded, game_encoded)
+	seek := fmt.tprintf("%s/seek-game?hostname=krunker.io&region=sgp&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", krunker_matchmaker_origin, validation_encoded, data_encoded, access_encoded, game_encoded)
 	if len(captcha) > 0 {
 		if !accessui.captcha_token_valid(captcha) { return "", false, accessui.status_text("CAPTCHA_BAD_TOKEN") }
 		kproto.network_log_secret(captcha)
@@ -656,6 +661,12 @@ krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
 }
 
 krunker_ws_connect :: proc(client: ^Client, link: ^shared.Join_Link) -> bool {
+	// Play as guest: anonymous FRVR access, never the browser helper.
+	if client.guest.active && client_access_browser_link(link) {
+		if client.access.status == .PENDING { return true }
+		client.access.captcha_retried = false
+		return client_guest_connect(client, link)
+	}
 	when ODIN_OS == .Windows {
 		if client.access.status == .PENDING { return true }
 		client.access.captcha_retried = false
@@ -676,12 +687,15 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	url := ""
 	if link.scheme == "http" || link.scheme == "https" || link.scheme == "game" {
 		krunker_ws_set_status(client, "Resolving lobby through Krunker matchmaker…")
-		token := client.access.token
+		guest := client.guest.active
+		token := guest ? client.guest.access_token : client.access.token
 		legacy := ""
 		defer delete(legacy)
 		when ODIN_OS != .Windows {
-			legacy, _ = krunker_ws_access_token()
-			token = legacy
+			if !guest {
+				legacy, _ = krunker_ws_access_token()
+				token = legacy
+			}
 		}
 		rejected, needs_captcha: bool
 		proof := client.access.captcha_token
@@ -701,14 +715,21 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 		if !ok {
 			krunker_ws_disconnect(state)
 			when ODIN_OS == .Windows {
+				// Guests use the same verification handoff as Krunker's page.
 				if needs_captcha {
 					if !client.access.captcha_retried {
-						if client_captcha_begin(client) { return true }
-						if client.access.status == .ERROR { return false }
+						if client_captcha_begin(client, krunker_captcha_start) { return true }
+						if client.access.status == .ERROR {
+							if guest { krunker_ws_set_status(client, GUEST_CAPTCHA_HELPER_TEXT) }
+							return false
+						}
 					} else { error_text = accessui.status_text("CAPTCHA_REJECTED") }
 				}
-				if client_access_retry(client, rejected) { return true }
+				if !guest && client_access_retry(client, rejected) { return true }
+			} else {
+				if guest && needs_captcha { error_text = GUEST_CAPTCHA_UNSUPPORTED_TEXT }
 			}
+			if guest && client_guest_retry(client, rejected) { return true }
 			krunker_ws_set_status(client, error_text); return false
 		}
 		if len(proof) > 0 { kproto.network_log("captcha", "Native matchmaking accepted the challenge handoff; opening the existing native WebSocket transport.") }
@@ -755,9 +776,12 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	status := kproto.network_http_info(handle, "websocket", code, string(cast(cstring)&state.error_buffer[0]))
 	kproto.network_log("websocket", fmt.tprintf("upgrade response headers=%s body=%s", string(state.upgrade_capture.headers[:]), string(state.upgrade_capture.body[:])))
 	if code != .E_OK {
-		when ODIN_OS == .Windows {
-			rejected := accessui.token_rejected(status, state.upgrade_capture.body[:])
-			if rejected && client_access_browser_link(link) {
+		rejected := accessui.token_rejected(status, state.upgrade_capture.body[:]) && client_access_browser_link(link)
+		if rejected && client.guest.active {
+			krunker_ws_disconnect(state)
+			if client_guest_retry(client, true) { return true }
+		} else if rejected {
+			when ODIN_OS == .Windows {
 				krunker_ws_disconnect(state)
 				if client_access_retry(client, true) { return true }
 			}
