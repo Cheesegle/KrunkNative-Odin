@@ -84,6 +84,15 @@ try {
     foreach ($file in $binaries) {
         if (-not (Test-Path -LiteralPath (Join-Path $root "bin\$file"))) { throw "Missing bin\$file; build first." }
     }
+    # Hybrid-GPU laptops pick the dedicated GPU only if the client exports
+    # NvOptimusEnablement / AmdPowerXpressRequestHighPerformance.
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        & $python.Source -I (Join-Path $root "tools\check_gpu_exports.py") (Join-Path $root "bin\krodin_client.exe")
+        if ($LASTEXITCODE -ne 0) { throw "krodin_client.exe is missing the dedicated-GPU exports." }
+    } else {
+        Write-Warning "Python not found; skipped the dedicated-GPU export check (tools\check_gpu_exports.py)."
+    }
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
     Write-Host "Sweeping assets in the repository..."
