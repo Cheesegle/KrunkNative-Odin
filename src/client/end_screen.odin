@@ -36,28 +36,31 @@ end_screen_reward :: proc(cell: string) -> string {
 }
 
 // Live END rows keep the server's endSort order and the mode's endStats
-// columns (minus sid). Without a decoded table, fall back to the leaderboard.
-end_screen_board_from_world :: proc(world: ^kproto.Krunker_World_State) -> Scoreboard {
-	stats, known := kproto.krunker_mode_end_stats(world.mode_index)
-	if !known || len(world.end_entries) == 0 { return scoreboard_from_world(world) }
+// columns (minus sid). Names and teams were resolved when END arrived.
+end_screen_board_from_entries :: proc(mode_index, local_sid, local_team: i32, entries: []kproto.Krunker_End_Entry) -> (Scoreboard, bool) {
 	board: Scoreboard
+	stats, known := kproto.krunker_mode_end_stats(mode_index)
+	if !known || len(entries) == 0 { return board, false }
 	scoreboard_set_columns(&board, stats[2:])
-	rows := make([]Scoreboard_Row, len(world.end_entries), context.temp_allocator)
-	for entry, i in world.end_entries {
+	rows := make([]Scoreboard_Row, len(entries), context.temp_allocator)
+	for entry, i in entries {
 		row := &rows[i]
-		row.name, row.order, row.is_you = entry.name, i32(i), entry.sid == world.local_sid
-		for player in world.players {
-			if player.sid != entry.sid { continue }
-			row.team = player.team
-			if len(player.name) > 0 { row.name = player.name } // the browser prefers the live alias
-		}
+		row.name, row.order, row.is_you, row.team = entry.name, i32(i), entry.sid == local_sid, entry.team
 		for c in 0..<board.column_count {
 			row.cells[c] = stats[c+2] == "reward" ? end_screen_reward(entry.cells[c]) : entry.cells[c]
 		}
 	}
-	for player in world.players { if player.sid == world.local_sid { board.local_team = player.team } }
+	board.local_team = local_team
 	scoreboard_finish(&board, rows)
-	return board
+	return board, true
+}
+
+// Without a decoded table, fall back to the leaderboard.
+end_screen_board_from_world :: proc(world: ^kproto.Krunker_World_State) -> Scoreboard {
+	local_team: i32
+	for player in world.players { if player.sid == world.local_sid { local_team = player.team } }
+	board, ok := end_screen_board_from_entries(world.mode_index, world.local_sid, local_team, world.end_entries[:])
+	return ok ? board : scoreboard_from_world(world)
 }
 
 // Native and local sessions resolve the same way as game_resolve_round: round
@@ -74,10 +77,44 @@ end_screen_native_result :: proc(match: ^shared.Match_State, board: ^Scoreboard)
 	return end_screen_result(board.local_team == winner ? 1 : 0, false), winner
 }
 
+// Krunker's server holds its end screen for endTimer (25 s by default) before
+// the next game. A match ended early with skip set (END's first value 2,
+// endTimer 1 ms) restarts at once, where the browser shows no results at all;
+// Krodin keeps that END's results up for the normal window instead.
+END_SCREEN_HOLD :: 25.0
+// An INIT this soon after END means the server skipped its end flow.
+END_SCREEN_IMMEDIATE_RESTART :: 3.0
+
+end_screen_finish :: proc(client: ^Client, screen: ^End_Screen, team_scores: [3]u32) {
+	screen.teams = screen.board.teams
+	screen.board.team_names = client_team_names(client)
+	screen.board.team_scores = team_scores
+	// The end table is one standings list; team colors stay on the names.
+	screen.board.teams = false
+	screen.board.rank_label = "#"
+}
+
+// The last END's results after INIT cleared the live end state.
+end_screen_from_final :: proc(client: ^Client, final: ^kproto.Krunker_End_Results) -> End_Screen {
+	screen: End_Screen
+	screen.board, _ = end_screen_board_from_entries(final.mode_index, final.local_sid, final.local_team, final.entries[:])
+	if !screen.board.teams && (final.local_team == 1 || final.local_team == 2) { screen.board.teams = true }
+	screen.board.local_team = final.local_team
+	screen.result = end_screen_result(final.result, false)
+	screen.winner_team = final.winner_team == 1 || final.winner_team == 2 ? final.winner_team : 0
+	screen.abandoned = final.end_index == 3
+	if screen.abandoned { screen.timer = "MATCH ABANDONED" }
+	end_screen_finish(client, &screen, final.team_scores)
+	return screen
+}
+
 client_end_screen :: proc(client: ^Client) -> End_Screen {
 	screen: End_Screen
 	if client.krunker.connected {
 		world := &client.krunker_world
+		if !client_match_ended(client) && world.final_results.revision > 0 {
+			return end_screen_from_final(client, &world.final_results)
+		}
 		screen.board = end_screen_board_from_world(world)
 		if world.end_received {
 			// noWinner modes are outside the decoded mode registry.
@@ -92,19 +129,15 @@ client_end_screen :: proc(client: ^Client) -> End_Screen {
 		switch {
 		case screen.abandoned: screen.timer = "MATCH ABANDONED"
 		case world.timer_kind == 2: screen.timer = "MATCH OVER"
-		case len(world.end_timer_text) > 0: screen.timer = fmt.tprintf("Next Round in %s", world.end_timer_text)
+		case world.timer_kind == 1 && len(world.end_timer_text) > 0: screen.timer = fmt.tprintf("Next Round in %s", world.end_timer_text)
 		}
+		// END's final tms totals live in the world state on live lobbies.
+		end_screen_finish(client, &screen, world.match.team_scores)
 	} else {
 		screen.board = scoreboard_from_game(&client.game)
 		screen.result, screen.winner_team = end_screen_native_result(&client.game.match, &screen.board)
+		end_screen_finish(client, &screen, client.game.match.team_scores)
 	}
-	screen.teams = screen.board.teams
-	screen.board.team_names = client_team_names(client)
-	// END's final tms totals live in the world state on live lobbies.
-	screen.board.team_scores = client.krunker.connected ? client.krunker_world.match.team_scores : client.game.match.team_scores
-	// The end table is one standings list; team colors stay on the names.
-	screen.board.teams = false
-	screen.board.rank_label = "#"
 	return screen
 }
 
@@ -113,15 +146,28 @@ client_match_ended :: proc(client: ^Client) -> bool {
 	return (client.net.connected || client.local_practice) && client.game.ready && client.game.match.phase == .ENDED
 }
 
-// Shown from the moment a match ends until the next match starts. Dismissing
-// (Escape or the Menu binding) reveals the lobby menu for the rest of the break.
+// When the next INIT follows END at once, the last END stays up for the rest
+// of Krunker's normal end window unless the player is already back in a game.
+client_end_screen_held :: proc(client: ^Client, now: f64) -> bool {
+	if !client.krunker.connected { return false }
+	final := &client.krunker_world.final_results
+	if final.revision == 0 || final.next_init_at == 0 || now-final.received_at >= END_SCREEN_HOLD { return false }
+	if final.game_state != 2 && final.next_init_at-final.received_at >= END_SCREEN_IMMEDIATE_RESTART { return false }
+	return !client.in_game && !client.krunker.spawned && !client.spawn_pending
+}
+
+// Shown from the moment a match ends until the next match starts (or, for a
+// match the server restarts at once, until Krunker's end window has passed).
+// Dismissing (Escape or the Menu binding) reveals the lobby menu.
 client_end_screen_update :: proc(client: ^Client, now: f64, dismiss: bool) -> bool {
-	if !client_match_ended(client) {
+	if !client_match_ended(client) && !client_end_screen_held(client, now) {
 		client.end_screen_active, client.end_screen_dismissed = false, false
 		return false
 	}
-	if !client.end_screen_active {
+	revision := client.krunker.connected ? client.krunker_world.final_results.revision : 0
+	if !client.end_screen_active || revision != client.end_screen_revision {
 		client.end_screen_active, client.end_screen_dismissed, client.end_screen_started = true, false, now
+		client.end_screen_revision = revision
 		// The browser releases pointer lock for its end UI.
 		if client.window != nil { glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL) }
 		client.mouse_state.locked, client.scoreboard_open = false, false
@@ -161,6 +207,8 @@ end_screen_render :: proc(client: ^Client, now: f64) {
 	color := end_screen_result_color(screen.result)
 	ui_fill_rect(ui, {0, 0, 0, 0.33}, 0, 0, ui.width, ui.height)
 	if elapsed < END_SCREEN_PANEL_DELAY {
+		// An abandoned match (endIndex 3) never shows the result title.
+		if screen.abandoned { return }
 		// Title zooms from 2.5x to its resting size while fading in.
 		t := clamp(elapsed/END_SCREEN_TITLE_INTRO, 0, 1)
 		size := 120*s*(2.5-1.5*t)
