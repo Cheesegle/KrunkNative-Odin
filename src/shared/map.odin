@@ -553,9 +553,51 @@ map_index_collision_objects :: proc(map_inst: ^Map) {
 // NOTE: client-side only — populates textures/geometry for each object's mesh.
 // The callback is invoked from the client (prefab_init) since shared has no GL.
 map_load_meshes :: proc(map_inst: ^Map, prefab_init_fn: proc(^Object, []Vec4, json.Value) -> rawptr) {
+	map_grass_default_tint = map_default_grass_tint(map_inst)
 	for obj in map_inst.objects {
 		obj.mesh = prefab_init_fn(obj, map_inst.colors, obj.raw_data)
 	}
+}
+
+// Krodin addition, not Krunker parity: GRASS tufts without a colour ("c" or
+// "ci") render Krunker's greyscale grass_0 texture untinted, which looks grey
+// (130 of Littletown's 163 tufts, 227 on Bazaar). They take the map's most
+// common grass colour instead, or a natural green on maps with no coloured
+// tuft. Set by map_load_meshes and read by the client's prefab_init.
+MAP_GRASS_FALLBACK_TINT :: Vec4{0x98 / 255.0, 0xa1 / 255.0, 0x63 / 255.0, 1} // #98a163, the most common grass colour across the bundled maps
+map_grass_default_tint := MAP_GRASS_FALLBACK_TINT
+
+map_default_grass_tint :: proc(map_inst: ^Map) -> Vec4 {
+	Tint_Count :: struct { color: Vec4, count: int }
+	counts: [dynamic]Tint_Count
+	defer delete(counts)
+	best := -1
+	for obj in map_inst.objects {
+		if obj.prefab != .GRASS do continue
+		fields, is_object := obj.raw_data.(json.Object)
+		if !is_object do continue
+		color: Vec4
+		if hex, has_hex := fields["c"].(json.String); has_hex {
+			color = {1, 1, 1, 1}
+			parse_hex_color(string(hex), &color)
+		} else if raw_index, has_index := fields["ci"]; has_index {
+			index := -1
+			#partial switch v in raw_index {
+			case json.Integer: index = int(v)
+			case json.Float:   index = int(v)
+			}
+			if index < 0 || index >= len(map_inst.colors) do continue
+			color = map_inst.colors[index]
+		} else {
+			continue
+		}
+		slot := -1
+		for entry, i in counts { if entry.color == color { slot = i; break } }
+		if slot < 0 { append(&counts, Tint_Count{color, 0}); slot = len(counts) - 1 }
+		counts[slot].count += 1
+		if best < 0 || counts[slot].count > counts[best].count { best = slot }
+	}
+	return best >= 0 ? counts[best].color : MAP_GRASS_FALLBACK_TINT
 }
 
 map_reset :: proc(map_inst: ^Map) {

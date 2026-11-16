@@ -207,6 +207,10 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		if idx >= 0 && idx < len(colors) {
 			color = colors[idx]
 		}
+	} else if prefab_id == int(shared.Prefab.GRASS) {
+		// Krodin: an uncoloured tuft takes the map's grass colour instead of
+		// rendering the greyscale texture grey (see map_default_grass_tint).
+		color = shared.map_grass_default_tint
 	}
 
 	if has_emissive {
