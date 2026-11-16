@@ -1,6 +1,9 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
+import "core:sync"
+import "core:thread"
 import "core:net"
 import "core:strings"
 import shared "../shared"
@@ -234,4 +237,86 @@ net_client_disconnect :: proc(nc: ^Net_Client_State) {
 		net.close(nc.socket)
 		nc.connected = false
 	}
+}
+
+// Native server connects resolve DNS and dial TCP on a worker thread, so a
+// slow or unreachable host never stalls the frame loop.
+Net_Connect_Job :: struct {
+	host: string,
+	port: int,
+	thread: ^thread.Thread,
+	done: bool, // atomic; the worker has finished
+	result: Net_Client_State,
+	ok: bool,
+}
+
+// Jobs cancelled before their dial finished; freed once done.
+net_connect_reaper: [dynamic]^Net_Connect_Job
+
+net_client_connect_run :: proc(t: ^thread.Thread) {
+	job := cast(^Net_Connect_Job)t.data
+	job.result, job.ok = net_client_connect(job.host, job.port)
+	sync.atomic_store(&job.done, true)
+	if context.temp_allocator.procedure == runtime.default_temp_allocator_proc {
+		runtime.default_temp_allocator_destroy(auto_cast context.temp_allocator.data)
+	}
+}
+
+net_client_connect_start :: proc(client: ^Client, host: string, port: int) {
+	net_client_connect_cancel(client)
+	job := new(Net_Connect_Job)
+	job.host, job.port = strings.clone(host), port
+	job.thread = thread.create(net_client_connect_run)
+	if job.thread == nil {
+		delete(job.host); free(job)
+		client.net, _ = net_client_connect(host, port)
+		krunker_ws_set_status(client, fmt.tprintf(client.net.connected ? "Connected to %s:%d." : "Could not connect to %s:%d; staying offline.", host, port))
+		return
+	}
+	job.thread.data = job
+	job.thread.init_context = context
+	thread.start(job.thread)
+	client.net_connect = job
+	krunker_ws_set_status(client, fmt.tprintf("Connecting to %s:%d…", host, port))
+}
+
+@(private = "file")
+net_connect_job_free :: proc(job: ^Net_Connect_Job, close_socket: bool) {
+	thread.join(job.thread)
+	thread.destroy(job.thread)
+	if close_socket && job.ok { net.close(job.result.socket) }
+	delete(job.host)
+	free(job)
+}
+
+// Applies a finished connect and frees finished cancelled ones. Never waits.
+net_client_connect_poll :: proc(client: ^Client) {
+	for i := 0; i < len(net_connect_reaper); {
+		if sync.atomic_load(&net_connect_reaper[i].done) {
+			net_connect_job_free(net_connect_reaper[i], true)
+			unordered_remove(&net_connect_reaper, i)
+			continue
+		}
+		i += 1
+	}
+	if len(net_connect_reaper) == 0 && net_connect_reaper != nil { delete(net_connect_reaper); net_connect_reaper = nil }
+	job := client.net_connect
+	if job == nil || !sync.atomic_load(&job.done) { return }
+	client.net_connect = nil
+	host, port := job.host, job.port
+	if job.ok { client.net = job.result }
+	krunker_ws_set_status(client, fmt.tprintf(job.ok ? "Connected to %s:%d." : "Could not connect to %s:%d; staying offline.", host, port))
+	job.host = ""
+	net_connect_job_free(job, false)
+	delete(host)
+}
+
+// Abandons a connect in progress without waiting for its dial.
+net_client_connect_cancel :: proc(client: ^Client) {
+	job := client.net_connect
+	if job == nil do return
+	client.net_connect = nil
+	if sync.atomic_load(&job.done) { net_connect_job_free(job, true); return }
+	if net_connect_reaper == nil { net_connect_reaper = make([dynamic]^Net_Connect_Job, runtime.heap_allocator()) }
+	append(&net_connect_reaper, job)
 }

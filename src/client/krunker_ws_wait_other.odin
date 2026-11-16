@@ -11,7 +11,9 @@ Krunker_WS_Wait :: struct {
 	wake: sync.Sema,
 }
 
-krunker_ws_wait_init :: proc(wait: ^Krunker_WS_Wait, handle: ^curl.CURL) -> bool { return true }
+krunker_ws_wait_init :: proc(wait: ^Krunker_WS_Wait) -> bool { return true }
+
+krunker_ws_wait_attach :: proc(wait: ^Krunker_WS_Wait, handle: ^curl.CURL) {}
 
 krunker_ws_wait :: proc(wait: ^Krunker_WS_Wait, timeout_ms: u32) {
 	sync.sema_wait_with_timeout(&wait.wake, time.Millisecond * time.Duration(min(timeout_ms, 1)))

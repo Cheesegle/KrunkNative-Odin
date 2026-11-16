@@ -69,6 +69,7 @@ network_log_safe :: proc(input: string, limit: int = 16384) -> string {
 	defer delete(value)
 	sync.mutex_lock(&network_log_state_mutex)
 	for secret in network_log_secrets {
+		if len(secret) == 0 do continue // replacing "" would grow without bound
 		replaced, allocated := strings.replace_all(value, secret, "[REDACTED]")
 		if allocated { delete(value); value = replaced }
 	}

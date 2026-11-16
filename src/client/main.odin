@@ -131,6 +131,8 @@ Client :: struct {
 	map_loaded:        bool,
 	offline_custom_map: ^shared.Map,
 	net:               Net_Client_State,
+	// A native server connect still resolving or dialing on its worker.
+	net_connect:       ^Net_Connect_Job,
 	krunker:           Krunker_WS_State,
 	krunker_world:     kproto.Krunker_World_State,
 	join_link:         shared.Join_Link,
@@ -1213,6 +1215,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_access_tick(client)
+	// Free network threads that finished after a leave or a cancelled join.
+	krunker_ws_reap()
+	net_client_connect_poll(client)
 	if client.join_queued > 0 {
 		client.join_queued -= 1
 		if client.join_queued == 0 { client_join_invite(client) }
@@ -1220,9 +1225,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	if client.net.connected {
 		net_client_poll(client, glfw.GetTime())
 	}
-	if client.krunker.connected {
+	if client.krunker.connected || client.krunker.connecting {
 		krunker_ws_poll(client)
-		krunker_client_sync_match(client, f64(now))
+		if client.krunker.connected { krunker_client_sync_match(client, f64(now)) }
 	}
 	if !client.game.ready && !(client.krunker.connected && client.krunker_world.ready) {
 		return
@@ -1756,6 +1761,9 @@ main :: proc() {
 	client_unload_map(client)
 	net_client_disconnect(&client.net)
 	krunker_ws_disconnect(&client.krunker)
+	// Shutdown may wait: aborted requests end within curl's progress interval.
+	krunker_ws_reap(wait = true)
+	net_client_connect_cancel(client)
 	shared.join_link_free(&client.join_link)
 	kproto.network_log_clear_secrets()
 	kproto.network_log_close()

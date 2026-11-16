@@ -34,6 +34,7 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	client.hit_marker = {}
 	client.damage_feedback = {}
 	net_client_disconnect(&client.net)
+	net_client_connect_cancel(client)
 	krunker_ws_disconnect(&client.krunker)
 	kproto.krunker_world_reset(&client.krunker_world)
 	client_clear_players(client)
@@ -257,7 +258,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		spawn_pending = client.spawn_pending, ready = client.krunker.connected ? client.krunker_world.ready && client.krunker.render_map_ready : client.game.ready && (!client.net.connected || client.net.match_state_received),
 		map_name = map_name, mode = mode, lobby_name = online ? (len(client.join_link.game_id) > 0 ? client.join_link.game_id : client.join_link.host) : "Local practice",
 		browser_access_supported = ODIN_OS == .Windows, auth_pending = client.access.status == .PENDING,
-		connecting = client.join_queued > 0 || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
+		connecting = client.join_queued > 0 || client.krunker.connecting || client.net_connect != nil || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
 		fov = client.camera.fov * 180 / math.PI, display_mode = i32(client.display_mode), sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
@@ -393,6 +394,9 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		login := client.access.status == .PENDING && !client.access.join_after_access
 		client_access_cancel(client)
 		client.join_queued = 0
+		// Aborts an in-flight matchmaker request or upgrade without waiting.
+		if client.krunker.connecting { krunker_ws_disconnect(&client.krunker) }
+		net_client_connect_cancel(client)
 		krunker_ws_set_status(client, login ? "Login cancelled." : "Join cancelled.")
 	case .FORGET_BROWSER_SESSION:
 		client_access_forget(client)

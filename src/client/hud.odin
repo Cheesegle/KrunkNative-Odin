@@ -64,13 +64,9 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 	net_client_disconnect(&client.net)
 	client_clear_players(client)
 	client.game.is_local = false
-	new_net, connected := net_client_connect(parsed.host, int(port))
-	client.net = new_net
-	if connected {
-		krunker_ws_set_status(client, fmt.tprintf("Connected to %s:%d.", parsed.host, port))
-	} else {
-		krunker_ws_set_status(client, fmt.tprintf("Could not connect to %s:%d; staying offline.", parsed.host, port))
-	}
+	// DNS and the TCP connect run on a worker; net_client_connect_poll applies
+	// the result and the same status text on a later frame.
+	net_client_connect_start(client, parsed.host, int(port))
 }
 
 menu_color :: proc(color: clay.Color) -> shared.Vec4 { return {color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255} }

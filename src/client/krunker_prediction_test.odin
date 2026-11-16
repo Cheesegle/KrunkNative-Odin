@@ -192,7 +192,7 @@ when ODIN_TEST {
 		}
 		state.send_elapsed = KRUNKER_SEND_SECONDS
 		// An earlier q still waits for the socket on the WebSocket thread.
-		state.transport = krunker_ws_transport_create(nil, nil)
+		state.transport = krunker_ws_transport_create()
 		state.transport.queued_inputs = 1
 		krunker_ws_send_input(&client)
 		testing.expect(t, state.input_reset && len(state.input_commands) == 5 && state.ah_num == 239,
@@ -266,7 +266,7 @@ when ODIN_TEST {
 		// commands or consuming their sequence numbers/counter.
 		client.krunker.connected = true
 		client.krunker.send_elapsed = 0.1
-		client.krunker.transport = krunker_ws_transport_create(nil, nil)
+		client.krunker.transport = krunker_ws_transport_create()
 		client.krunker.transport.queued_inputs = 1
 		count, sequence := len(client.krunker.input_commands), client.krunker.input_sequence
 		krunker_ws_send_input(&client)

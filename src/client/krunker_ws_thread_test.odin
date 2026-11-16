@@ -156,8 +156,17 @@ when ODIN_TEST {
 
 	ws_test_connect :: proc(t: ^testing.T, client: ^Client, port: int) -> bool {
 		link := shared.Join_Link{scheme = "ws", raw = fmt.tprintf("ws://127.0.0.1:%d/ws", port)}
-		return testing.expectf(t, krunker_ws_connect_ready(client, &link) && client.krunker.connected && client.krunker.transport != nil,
-			"loopback WebSocket must connect (status: %s)", client.join_status)
+		if !testing.expectf(t, krunker_ws_connect_ready(client, &link) && client.krunker.connecting, "the join must start (status: %s)", client.join_status) { return false }
+		// The upgrade runs on the WebSocket thread; its result arrives by poll.
+		start := time.tick_now()
+		for client.krunker.connecting && time.duration_seconds(time.tick_since(start)) < 5 {
+			krunker_ws_reap() // as client_tick does every frame
+			krunker_ws_poll(client)
+			time.sleep(time.Millisecond)
+		}
+		// The same poll may already have applied a burst and a close after
+		// CONNECTED, so a finished join is the success condition.
+		return testing.expectf(t, !client.krunker.connecting && client.krunker.transport != nil && client.krunker.rx_logged + int(client.krunker.connected) > 0, "loopback WebSocket must connect (status: %s)", client.join_status)
 	}
 
 	ws_test_gmsg :: proc(i: int) -> []byte {
@@ -203,26 +212,31 @@ when ODIN_TEST {
 		server := WS_Test_Server{burst = burst}
 		if !testing.expect(t, ws_test_server_start(&server, 1), "loopback listener") do return
 		defer ws_test_server_stop(&server)
+		// Runs after the client's disconnect: waits for released threads.
+		defer krunker_ws_reap(wait = true)
 		client: Client
 		defer { krunker_ws_disconnect(&client.krunker); delete(client.join_status); delete(client.selection_status) }
-		if !ws_test_connect(t, &client, server.port) do return
+		link := shared.Join_Link{scheme = "ws", raw = fmt.tprintf("ws://127.0.0.1:%d/ws", server.port)}
+		if !testing.expect(t, krunker_ws_connect_ready(&client, &link), "the join must start") do return
 		state := &client.krunker
+		allocator := state.transport.allocator
 
-		// Receive order, straight from the transport.
+		// Join result, then receive order, straight from the transport.
 		events: [dynamic]Krunker_WS_Event
-		defer { krunker_ws_events_free(events[:], state.transport.allocator); delete(events) }
+		defer { krunker_ws_events_free(events[:], allocator); delete(events) }
 		deadline := time.tick_now()
-		for len(events) < MESSAGES && time.duration_seconds(time.tick_since(deadline)) < 5 {
+		for len(events) < MESSAGES + 1 && time.duration_seconds(time.tick_since(deadline)) < 5 {
 			krunker_ws_transport_receive(state.transport, &events)
 			time.sleep(time.Millisecond)
 		}
-		if !testing.expectf(t, len(events) == MESSAGES, "every message must arrive (%d/%d)", len(events), MESSAGES) do return
-		for event, i in events {
+		if !testing.expectf(t, len(events) == MESSAGES + 1 && events[0].kind == .CONNECTED, "the upgrade, then every message, must arrive (%d/%d)", len(events), MESSAGES + 1) do return
+		for event, i in events[1:] {
 			if event.kind != .MESSAGE || string(event.payload) != string(burst[i]) {
 				testing.expectf(t, false, "message %d arrived out of order", i)
 				return
 			}
 		}
+		state.connecting, state.connected = false, true
 
 		// Send order and counters, interleaving control packets with q.
 		opcodes := [?]string{"po", "v", "q", "load", "v", "q", "po"}
@@ -277,6 +291,8 @@ when ODIN_TEST {
 		server := WS_Test_Server{burst = burst}
 		if !testing.expect(t, ws_test_server_start(&server, 2), "loopback listener") do return
 		defer ws_test_server_stop(&server)
+		// Runs after the client's disconnect: waits for released threads.
+		defer krunker_ws_reap(wait = true)
 		client: Client
 		defer { krunker_ws_disconnect(&client.krunker); delete(client.join_status); delete(client.selection_status); kproto.krunker_world_reset(&client.krunker_world) }
 		for attempt in 0 ..< 2 {
@@ -309,6 +325,8 @@ when ODIN_TEST {
 		server := WS_Test_Server{burst = burst, close_code = 4000, close_reason = "fixture closed"}
 		if !testing.expect(t, ws_test_server_start(&server, 1), "loopback listener") do return
 		defer ws_test_server_stop(&server)
+		// Runs after the client's disconnect: waits for released threads.
+		defer krunker_ws_reap(wait = true)
 		client: Client
 		defer { krunker_ws_disconnect(&client.krunker); delete(client.join_status); delete(client.selection_status); kproto.krunker_world_reset(&client.krunker_world) }
 		if !ws_test_connect(t, &client, server.port) do return

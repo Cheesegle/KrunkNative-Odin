@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:c"
 import "core:fmt"
 import "core:strings"
+import "core:sync"
 import curl "vendor:curl"
 
 Network_HTTP_Capture :: struct {
@@ -59,6 +60,24 @@ network_http_info :: proc(handle: ^curl.CURL, stage: string, code: curl.code, de
 	return i64(status)
 }
 
+// A thread that may abandon its requests (the Krunker WebSocket thread)
+// points this at its stop flag; curl then aborts a transfer, including DNS
+// and connect, soon after the flag becomes true.
+@(thread_local) network_http_abort: ^bool
+
+network_http_xferinfo :: proc "c" (abort: rawptr, dltotal, dlnow, ultotal, ulnow: curl.off_t) -> c.int {
+	flag := cast(^bool)abort
+	return flag != nil && sync.atomic_load(flag) ? 1 : 0
+}
+
+// Makes handle stop when abort becomes true. A nil abort leaves it as is.
+network_http_set_abort :: proc(handle: ^curl.CURL, abort: ^bool) -> bool {
+	if abort == nil do return true
+	return curl.easy_setopt(handle, .NOPROGRESS, c.long(0)) == .E_OK &&
+		curl.easy_setopt(handle, .XFERINFOFUNCTION, curl.xferinfo_callback(network_http_xferinfo)) == .E_OK &&
+		curl.easy_setopt(handle, .XFERINFODATA, rawptr(abort)) == .E_OK
+}
+
 // Always preserves the response body, including non-2xx and transport errors.
 // libcurl global initialization is owned by the caller.
 network_http :: proc(url, method, body, stage: string) -> (result: [dynamic]byte, status: i64, ok: bool) {
@@ -98,6 +117,7 @@ network_http :: proc(url, method, body, stage: string) -> (result: [dynamic]byte
 		if curl.easy_setopt(handle, .POST, c.long(1)) != .E_OK || curl.easy_setopt(handle, .POSTFIELDS, rawptr(body_c)) != .E_OK { network_log(stage, "ERROR configuring POST"); return }
 	}
 	if code := curl.easy_setopt(handle, .HTTPHEADER, headers); code != .E_OK { network_log(stage, fmt.tprintf("ERROR setting headers: %v", code)); return }
+	if !network_http_set_abort(handle, network_http_abort) { network_log(stage, "ERROR configuring cancellation"); return }
 	code := curl.easy_perform(handle)
 	status = network_http_info(handle, stage, code, string(cast(cstring)&error_buffer[0]))
 	network_log(stage, fmt.tprintf("response headers (%d bytes): %s", len(capture.headers), string(capture.headers[:])))

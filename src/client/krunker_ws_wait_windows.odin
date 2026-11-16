@@ -12,9 +12,14 @@ Krunker_WS_Wait :: struct {
 	selected: bool,
 }
 
-krunker_ws_wait_init :: proc(wait: ^Krunker_WS_Wait, handle: ^curl.CURL) -> bool {
+// On the frame thread, before the WebSocket thread starts.
+krunker_ws_wait_init :: proc(wait: ^Krunker_WS_Wait) -> bool {
 	wait.wake = win.CreateEventW(nil, false, false, nil)
-	if wait.wake == nil { return false }
+	return wait.wake != nil
+}
+
+// On the WebSocket thread, once the upgrade has produced a socket.
+krunker_ws_wait_attach :: proc(wait: ^Krunker_WS_Wait, handle: ^curl.CURL) {
 	// curl_socket_t is a SOCKET (pointer sized) on Windows.
 	socket := win.INVALID_SOCKET
 	if handle != nil && curl.easy_getinfo(handle, .ACTIVESOCKET, &socket) == .E_OK && socket != win.INVALID_SOCKET {
@@ -23,7 +28,6 @@ krunker_ws_wait_init :: proc(wait: ^Krunker_WS_Wait, handle: ^curl.CURL) -> bool
 			wait.socket, wait.selected = socket, true
 		}
 	}
-	return true
 }
 
 // Returns early when the socket or the frame thread signals.
