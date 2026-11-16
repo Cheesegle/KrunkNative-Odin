@@ -1150,6 +1150,13 @@ client_clear_impacts :: proc(client: ^Client) {
 	clear(&client.game.impacts)
 }
 
+// The ] freecam is an offline tool (Local Practice). Flying the camera out of
+// the body in a live Krunker lobby or on an online Krodin server would show
+// what the player's own view can't, so it's refused (and switched off) there.
+client_freecam_allowed :: proc(client: ^Client) -> bool {
+	return !client.krunker.connected && !client.net.connected
+}
+
 client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: f32) {
 	rotation := client_mouse_rotation(client, mouse_delta)
 	client.camera.rotation.x -= rotation.y
@@ -1301,7 +1308,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 
 	client.last_debug_key = debug_key
-	if !editing_settings && !client_binding_used(client, glfw.KEY_RIGHT_BRACKET) && freecam_key && !client.last_freecam_key && client.me != nil && client.me.active {
+	if !client_freecam_allowed(client) {
+		client.freecam_enabled = false
+	} else if !editing_settings && !client_binding_used(client, glfw.KEY_RIGHT_BRACKET) && freecam_key && !client.last_freecam_key && client.me != nil && client.me.active {
 		client.freecam_enabled = !client.freecam_enabled
 	}
 	client.last_freecam_key = freecam_key
