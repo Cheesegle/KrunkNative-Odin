@@ -52,6 +52,9 @@ when ODIN_TEST {
 	debug_ui_rendering_section_toggles :: proc(t: ^testing.T) {
 		client, dbg := perf_test_debug_ui()
 		defer { free(dbg); free(client) }
+		// 1080p: below the Player section the expanded Rendering section would
+		// scroll past a 720p screen's bottom.
+		debug_ui_layout(dbg, 1920, 1080)
 		perf_test_frame(client, dbg, {})
 		perf_test_frame(client, dbg, {}) // The window fits its content height after a frame.
 		header, has_header := debug_test_text_pos(dbg, "Rendering")
