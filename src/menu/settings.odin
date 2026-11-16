@@ -94,9 +94,10 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Display")
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_game_fps_limit_row(state)
 		settings_menu_fps_limit_row(state)
 		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.")
-		settings_note(state, "Menu FPS limit caps menus, loading and the end screen. Gameplay is never capped.")
+		settings_note(state, "Game FPS limit (Krunker's Frame Cap) caps frames while you play; 0 is unlimited, Krunker's default. With V-Sync also on, the lower rate wins. Menu FPS limit caps menus, loading and the end screen.")
 		settings_quality(state, view)
 	case .VISUALS:
 		settings_visuals(state)
@@ -241,7 +242,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .VIDEO:
 		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
 		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
-		draft.vsync, draft.menu_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.quality
+		draft.vsync, draft.menu_fps_limit, draft.game_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.game_fps_limit, defaults.quality
 	case .VISUALS:
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
@@ -483,8 +484,10 @@ slider_value_at :: proc(progress, minimum, maximum, curve, step: f32) -> f32 {
 	return clamp(value, minimum, maximum)
 }
 
-settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05, curve: f32 = 1) {
-	if !settings_search_show(state, label) { return }
+// zero_label replaces the value text at 0 (e.g. "Unlimited"); search_alias is
+// a second name search finds the row by (e.g. Krunker's name for it).
+settings_slider :: proc(state: ^State, label, name: string, value, minimum, maximum: f32, action: Action, step: f32 = 0.05, curve: f32 = 1, zero_label := "", search_alias := "") {
+	if !settings_search_show(state, label) && (len(search_alias) == 0 || !settings_search_show(state, search_alias)) { return }
 	s := state.scale
 	if clay.UI(clay.ID(fmt.tprintf("%sRow", name)))(settings_row(state)) {
 		settings_label(label, s)
@@ -508,6 +511,7 @@ settings_slider :: proc(state: ^State, label, name: string, value, minimum, maxi
 			clip={horizontal=editing, childOffset=clay.GetScrollOffset()},
 		}) {
 			label := settings_percent_action(action.kind) ? fmt.tprintf("%g%%", value*100) : fmt.tprintf("%g", value)
+			if value == 0 && len(zero_label) > 0 { label = zero_label }
 			if editing { label = fmt.tprintf("%s|", string(state.number_buffer[:state.number_length])) }
 			text(label, 20, s, SETTINGS_DARK)
 		}
