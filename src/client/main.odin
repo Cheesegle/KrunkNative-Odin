@@ -1479,6 +1479,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		overlay_render(client, delta)
 	}
 	fps_render(client)
+	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
 	when KRODIN_DEV {
 		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
@@ -1650,6 +1651,10 @@ main :: proc() {
 		}
 	}
 	defer gl_debug_shutdown()
+	// An exe older than assets/shaders (a pull without a rebuild) is reported
+	// before any shader compiles; build_status_banner_render shows it.
+	build_status_check_assets()
+	defer build_status_fini()
 	client_graphics_init(client)
 	defer client_graphics_fini(client)
 

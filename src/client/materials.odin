@@ -354,14 +354,10 @@ quad_material_init :: proc() -> ^Quad_Material {
 	material.base.vtable = &quad_material_vtable
 
 	if quad_shader_program == 0 {
-		vert_shader := shared.concat(shared.assets_path(), "shaders/quad.vert")
-		frag_shader := shared.concat(shared.assets_path(), "shaders/quad.frag")
-
-		quad_shader_program = shader_compile(vert_shader, frag_shader)
+		dir := shared.concat(shared.assets_path(), "shaders/")
+		quad_shader_program = shader_compile_ui(dir, "quad.vert", "quad.frag")
 		u_quad = cache_uniforms(quad_shader_program)
-
-		delete(vert_shader)
-		delete(frag_shader)
+		delete(dir)
 	}
 
 	if quad_shader_program == 0 {
@@ -412,14 +408,10 @@ text_material_init :: proc() -> ^Text_Material {
 	material.base.vtable = &text_material_vtable
 
 	if text_shader_program == 0 {
-		vert_shader := shared.concat(shared.assets_path(), "shaders/quad.vert")
-		frag_shader := shared.concat(shared.assets_path(), "shaders/text.frag")
-
-		text_shader_program = shader_compile(vert_shader, frag_shader)
+		dir := shared.concat(shared.assets_path(), "shaders/")
+		text_shader_program = shader_compile_ui(dir, "quad.vert", "text.frag")
 		u_text = cache_uniforms(text_shader_program)
-
-		delete(vert_shader)
-		delete(frag_shader)
+		delete(dir)
 	}
 
 	if text_shader_program == 0 {

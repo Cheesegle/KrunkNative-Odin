@@ -78,6 +78,19 @@ asset_sweep_run :: proc(manifest: string) -> int {
 		resource_cache_fini()
 	}
 
+	// The shader files must be the ones this exe was built with: the packager
+	// sweeps the unpacked zip with its own exe, so a stale exe or an
+	// incomplete shader folder fails here instead of warning testers. Reading
+	// them also records every shader file for the package.
+	stamp := build_stamp_check(strings.concatenate({strings.trim_right(shared.assets_path(), "/\\"), "/shaders"}, context.temp_allocator), build_stamp_built_sources())
+	defer build_stamp_check_destroy(&stamp)
+	if stamp.status != .MATCH {
+		fmt.eprintln("[Sweep]", stamp.message)
+		fmt.eprintln("[Sweep] Shader files", build_stamp_detail(stamp))
+		return ASSET_SWEEP_EXIT_FAILED
+	}
+	fmt.println("[Sweep] Shaders match this build:", build_stamp_exe_label(stamp))
+
 	config_path := shared.concat(shared.assets_path(), "config/game.toml")
 	defer delete(config_path)
 	config := shared.config_load_gameplay(config_path)

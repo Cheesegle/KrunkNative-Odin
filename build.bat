@@ -55,6 +55,11 @@ if errorlevel 1 (
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
+rem The client names the commit it was built from when its shaders do not
+rem match assets/shaders (src/client/build_stamp.odin). Without git it is 0.
+set "COMMIT_DEFINE="
+for /f "delims=" %%C in ('git rev-parse --short^=7 HEAD 2^>nul') do set "COMMIT_DEFINE=-define:KRODIN_COMMIT=0x%%C"
+
 goto:%TARGET%
 
 :browser
@@ -66,7 +71,7 @@ exit /b %errorlevel%
 :client
 call :browser
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE%
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE% %COMMIT_DEFINE%
 exit /b %errorlevel%
 
 :dev
@@ -74,7 +79,7 @@ rem Developer build: compiles in the debug tools (KRODIN_DEV). It uses its own
 rem file name so it can never be packaged or mistaken for a tester build.
 call :browser
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% build src/client -out:%BIN_DIR%\krodin_client_dev.exe -o:%PROFILE% -define:KRODIN_DEV=true
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client_dev.exe -o:%PROFILE% -define:KRODIN_DEV=true %COMMIT_DEFINE%
 exit /b %errorlevel%
 
 :inspect
@@ -100,7 +105,7 @@ exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/browser_helper
 if errorlevel 1 exit /b %errorlevel%
-%ODIN% check src/client
+%ODIN% check src/client %COMMIT_DEFINE%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client -define:KRODIN_DEV=true
 if errorlevel 1 exit /b %errorlevel%
