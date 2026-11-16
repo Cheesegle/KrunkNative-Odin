@@ -83,6 +83,8 @@ Client :: struct {
 	settings_dirty, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
+	game_fps_limit: i32, // menuui.game_fps_limit_validate: 0 = unlimited (Krunker's Frame Cap default).
+	game_frame_deadline: f64, // As idle_frame_deadline, for the game FPS limit.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
 	monitor_cache_refreshes: int, // Diagnostics: glfw.GetVideoModes enumerations.
@@ -1561,6 +1563,7 @@ main :: proc() {
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
 	client.menu_fps_limit = preferences.menu_fps_limit
+	client.game_fps_limit = preferences.game_fps_limit
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse
@@ -1743,11 +1746,16 @@ main :: proc() {
 		phase_mark(.SWAP_BUFFERS)
 		glfw.SwapBuffers(client.window)
 		swap_end := glfw.GetTime()
+		// The game FPS limit waits before polling, so the next frame reads the
+		// freshest keyboard state; the raw input thread keeps reading the mouse.
+		phase_mark(.GAME_FRAME_WAIT)
+		client_pace_game_frame(client, frame_start, client_game_frame_interval(client))
+		poll_start := glfw.GetTime()
 		phase_mark(.POLL_EVENTS)
 		client_poll_events()
 		when KRODIN_DEV {
 			prev_swap_ms = f32((swap_end-swap_start)*1000)
-			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
+			prev_events_ms = f32((glfw.GetTime()-poll_start)*1000)
 		}
 		phase_mark(.IDLE_WAIT)
 		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
