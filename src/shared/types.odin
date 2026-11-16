@@ -215,6 +215,7 @@ Class_Config :: struct {
 	throw_charge:    f32,
 	turn_speed:      f32,
 	wall_jump_max:   f32, // Krunker wallJM ("Walljumps Max"): wall jumps allowed before landing
+	wall_jump_decel: f32, // Krunker wallJD ("Wall Jump Decel", default 0.3): gravity scale while crouched on a wall
 	leap:            bool,
 	back_slide:      bool,
 	slide_time:      f32,
@@ -393,6 +394,7 @@ Player :: struct {
 	wall_jump:                       bool,
 	wall_jump_max:                   i32, // from the class; 0 means none
 	wall_jump_count:                 i32, // wall jumps since last landing (Krunker wallJumpC)
+	wall_jump_decel:                 f32, // from the class (Krunker config.wallJD)
 	did_act:                         bool,
 	did_shoot:                       bool,
 	did_jump:                        bool,
@@ -625,6 +627,9 @@ Game_Mode_Config :: struct {
 	lives:                 i32,
 	ammo_limit:            i32,
 	hitbox_pad:            f32,
+	// Krunker mode.wallJD overrides the class value when set (`p.mode.wallJD ?? ...`).
+	wall_jump_decel:       f32,
+	has_wall_jump_decel:   bool,
 }
 
 Game_Mode :: struct {
