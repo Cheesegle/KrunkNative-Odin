@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import gl "vendor:OpenGL"
 import stbtt "vendor:stb/truetype"
+import menuui "../menu"
 import shared "../shared"
 
 // Screen position and OpenGL clip depth from the world camera. The weapon
@@ -252,19 +253,21 @@ player_healthbars_render :: proc(client: ^Client) {
 		name_width := show_names ? ui_measure_text(ui, name, nameplate_font_size(NAMEPLATE_NAME_SIZE)) : 0
 		layout := player_nameplate_layout({screen.x, screen.y}, unit, name_width, show_bars)
 		friendly := client.me.team != 0 && player.team == client.me.team
+		colors := menuui.healthbar_colors_validate(client.hud_settings.healthbar_colors)
 		alpha := player_nameplate_display_alpha(player.nameplate_alpha)
 		if show_bars {
 			border := max(1, 2*unit)
 			progress := clamp(player.health/f32(player.max_health), 0, 1)
-			color := shared.hex_to_vec(friendly ? 0x9eeb56 : 0xff4444)
+			color := shared.hex_to_vec(i32(friendly ? colors.team : colors.enemy))
 			color.a *= alpha
 			ui_fill_rect(ui, {0, 0, 0, 0.85*alpha}, layout.bar_left-border, layout.bar_top-border, layout.bar_width+2*border, layout.bar_height+2*border)
 			ui_fill_rect(ui, {0.15, 0.15, 0.15, alpha}, layout.bar_left, layout.bar_top, layout.bar_width, layout.bar_height)
 			ui_fill_rect(ui, color, layout.bar_left, layout.bar_top, layout.bar_width*progress, layout.bar_height)
 		}
 		if show_names {
-			// White, except enemies in team modes take the enemy colour.
-			color := client.me.team != 0 && !friendly ? shared.hex_to_vec(0xff4444) : shared.Vec4{1, 1, 1, 1}
+			// White, except enemies in team modes take the enemy healthbar
+			// colour, as Krunker's names use healthColE.
+			color := client.me.team != 0 && !friendly ? shared.hex_to_vec(i32(colors.enemy)) : shared.Vec4{1, 1, 1, 1}
 			color.a *= alpha
 			ui_fill_text(ui, color, name, layout.name_x, layout.name_baseline, nameplate_font_size(layout.name_size))
 		}
