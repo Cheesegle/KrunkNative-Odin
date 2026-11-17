@@ -161,11 +161,14 @@ Object :: struct {
 	raw_data:       json.Value,
 }
 
+// Krunker map spawn: [x, y, z, team, dir, comp, teamOnly, spread].
 Spawn :: struct {
 	position:  Vec3,
 	team:      i32,
 	direction: i32,
-	comp:      i32,
+	comp:      i32,  // Competitive spawn: used only during comp waits / warmup reset.
+	team_only: bool, // Only players of `team` may use it, even in other checks.
+	spread:    f32,  // getPointSpread radius - 7, clamped 0..50 like Krunker.
 }
 
 Map_Config :: struct {
@@ -698,6 +701,15 @@ Game :: struct {
 	nuke_player:  ^Player,
 	vote_kick:    ^Vote_Kick,
 	server:       rawptr,
+	// Krunker sorts map.spawns in place on every getSpawnPoint; the order
+	// (and so tie-breaking) carries over between calls. See spawn.odin.
+	spawn_order:     [dynamic]Spawn_Rank,
+	spawn_order_map: ^Map,
+	// Krunker flippedSpawns: teams 1 and 2 swap spawns each round.
+	flipped_spawns:  bool,
+	// Krunker waitTimers[0].comp: a competitive wait (round intermission) is
+	// running, so spawns use comp spawns and getPointSpread(radius 10).
+	spawn_comp_wait: bool,
 }
 
 DEFAULT_GAME_CONFIG :: Game_Config {
