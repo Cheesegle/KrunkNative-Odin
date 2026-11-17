@@ -1356,7 +1356,14 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 				continue
 			}
 
+			// Krunker's browser runs this same ray against players through
+			// fetchState, which finds no stateHistory on a client (only the
+			// server's storeState fills it), so its tracer passes through
+			// everyone. A presentation-only shot in a live lobby must not stop
+			// at (or report a hit on) Krodin's own player boxes either.
+			skip_players := presentation_only && player.game.server_hits_players
 			for target in player.game.players {
+				if skip_players { break }
 				if target == player || !target.active || target.team != 0 && target.team == player.team && !player.game.mode.config.dmg_team {
 					continue
 				}
