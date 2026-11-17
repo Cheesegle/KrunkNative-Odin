@@ -19,6 +19,7 @@ Net_Client :: struct {
 	recv_buffer: [4096]byte,
 	recv_len:    int,
 	send_queue:  shared.Net_Send_Queue,
+	chat:        Net_Chat_Limit, // chat.odin
 }
 
 Net_Server :: struct {
@@ -249,6 +250,8 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 						if _, ping_ok := shared.packet_deserialize_ping(packet); ping_ok && !net_server_send(client, packet) {
 							client.active = false
 						}
+					case .CHAT:
+						net_server_chat(ns, client, packet)
 					case .DISCONNECT:
 						client.active = false
 						fmt.printf("[Net Server] Client #%d requested disconnect\n", client.id)
@@ -278,6 +281,18 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 			continue
 		}
 		i += 1
+	}
+}
+
+// net_server_broadcast_chat sends one chat line to every connected client, or
+// with team > 0 only to that team's players (team-only chat).
+net_server_broadcast_chat :: proc(ns: ^Net_Server, sender: i32, team: i32, text: string) {
+	buf: [shared.NET_CHAT_MAX_SIZE]byte
+	size := shared.packet_serialize_chat(buf[:], sender, team > 0, text)
+	if size == 0 { return }
+	for other in ns.clients {
+		if !other.active || team > 0 && (other.player == nil || other.player.team != team) { continue }
+		if !net_server_send(other, buf[:size]) { other.active = false }
 	}
 }
 

@@ -350,7 +350,7 @@ main :: proc() {
 	if !test_server_physics() {
 		os.exit(1)
 	}
-	if !test_server_settings() || !test_server_rotation() || !test_server_tick_timing() || !test_server_max_players() || !test_server_soak() {
+	if !test_server_settings() || !test_server_rotation() || !test_server_tick_timing() || !test_server_max_players() || !test_server_chat() || !test_server_soak() {
 		os.exit(1)
 	}
 	if !test_client_physics() {

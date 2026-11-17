@@ -175,6 +175,10 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 					fmt.printf("[Net Client] %s\n", text)
 					krunker_ws_set_status(client, text)
 				}
+			case .CHAT:
+				if sender, team, text, chat_ok := shared.packet_deserialize_chat(packet); chat_ok {
+					client_chat_receive_native(client, sender, team, text)
+				}
 			case .KILL_FEED:
 				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
 					shared.game_push_kill_event(&client.game, event)
@@ -207,6 +211,12 @@ net_client_disconnect_text :: proc(reason: shared.Disconnect_Reason) -> string {
 net_client_send_team :: proc(nc: ^Net_Client_State, team: i32) -> bool {
 	buf: [11]byte
 	size := shared.packet_serialize_team_request(buf[:], team)
+	return size > 0 && net_client_send(nc, buf[:size])
+}
+
+net_client_send_chat :: proc(nc: ^Net_Client_State, text: string, team: bool) -> bool {
+	buf: [shared.NET_CHAT_REQUEST_MAX_SIZE]byte
+	size := shared.packet_serialize_chat_request(buf[:], text, team)
 	return size > 0 && net_client_send(nc, buf[:size])
 }
 
