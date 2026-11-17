@@ -1157,6 +1157,12 @@ client_freecam_allowed :: proc(client: ^Client) -> bool {
 	return !client.krunker.connected && !client.net.connected
 }
 
+// The N noclip toggle is a developer tool: only dev builds (KRODIN_DEV) have
+// it, and never in a live Krunker lobby, where the server owns noclip.
+client_noclip_key_allowed :: proc(client: ^Client) -> bool {
+	return KRODIN_DEV && !client.krunker.connected
+}
+
 client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: f32) {
 	rotation := client_mouse_rotation(client, mouse_delta)
 	client.camera.rotation.x -= rotation.y
@@ -1387,7 +1393,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		after_scroll = input
 
 		if client.mouse_state.locked && !client.freecam_enabled {
-			if noclip_key && !client.last_noclip_key && !client.krunker.connected {
+			if noclip_key && !client.last_noclip_key && client_noclip_key_allowed(client) {
 				client.me.noclip = !client.me.noclip
 			}
 
