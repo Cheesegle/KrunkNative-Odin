@@ -413,6 +413,11 @@ game_tick :: proc(game: ^Game, now, delta: f32) {
 		}
 	}
 	game_tick_projectiles(game, delta * game.config.delta_mlt)
+	// The native server keeps every player's recent poses for lag compensation
+	// (Krunker's storeState after each server update).
+	if game.server != nil {
+		for player in game.players { player_lag_record(player, game.now) }
+	}
 }
 
 game_players_add :: proc(game: ^Game, player: ^Player) {

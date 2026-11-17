@@ -90,7 +90,9 @@ when ODIN_TEST {
 		victim := shared.player_init(&client.game)
 		shared.game_players_add(&client.game, victim)
 		shared.player_spawn(victim, 2)
-		victim.position, victim.scale, victim.height = {0, 0, -100}, 20, 100
+		// Native shots test Krunker's hurtboxes (a player's scale and height
+		// no longer grow them): the eye line (9.5) crosses the chest 10 ahead.
+		victim.position = {0, 3, -10}
 		client.me.position, client.me.direction = {}, {}
 		shared.player_shoot(client.me, true)
 		if !testing.expect(t, len(client.game.impacts) == 1) { return }
@@ -103,8 +105,8 @@ when ODIN_TEST {
 		shared.player_shoot(client.me, true)
 		if !testing.expect(t, len(client.game.impacts) == 2) { return }
 		native := client.game.impacts[1]
-		testing.expect(t, native.kind == .Player && native.hit && native.position.z > -100,
-			"native predicted shots still stop at Krodin's player boxes")
+		testing.expect(t, native.kind == .Player && native.hit && native.position.z > -10,
+			"native predicted shots still stop at the player's hurtboxes")
 	}
 
 	// k record value 6 is the server's stepVal. The browser interpolates it

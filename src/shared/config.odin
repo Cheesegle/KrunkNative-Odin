@@ -467,6 +467,7 @@ config_apply_weapon :: proc(
 	config_apply_f32(table, "jump_mlt", "weapon", id, &weapon.jump_mlt)
 	config_apply_f32(table, "damage", "weapon", id, &weapon.damage)
 	config_apply_f32(table, "headshot_mlt", "weapon", id, &weapon.headshot_mlt)
+	config_apply_f32(table, "legshot_mlt", "weapon", id, &weapon.legshot_mlt)
 	config_apply_f32(table, "pierce", "weapon", id, &weapon.pierce)
 	config_apply_f32(table, "range", "weapon", id, &weapon.range)
 	config_apply_f32(table, "drop_start", "weapon", id, &weapon.drop_start)

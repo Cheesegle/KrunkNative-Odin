@@ -5,6 +5,8 @@ import "core:math/linalg"
 
 // Player hitbox geometry. Krodin's native/offline hit tests and the developer
 // hitbox visualizer both read it from here, so what is drawn is what is hit.
+// Native hits follow Krunker: hitscan and projectiles test the complexHitboxes
+// (below), melee one axis-aligned box padded by the lobby's Hitbox Padding.
 
 // An axis-aligned box in ray_box_hit's convention: `origin` is the centre of
 // the bottom face, `scale` the full size.
@@ -13,31 +15,12 @@ Box :: struct {
 	scale:  Vec3,
 }
 
-// The two native hit tests use different player boxes: melee swings test a
-// box 10% wider (body) / 12.5% wider (head) than hitscan shots do.
+// What the native hit tests are for: hitscan shots test Krunker's hurtboxes
+// (krunker_player_shot_test), melee swings one padded box (krunker_melee_box).
+// The developer hitbox visualizer picks its drawing by this.
 Hitbox_Kind :: enum u8 {
-	SHOT,  // player_shoot
+	SHOT,  // player_shoot, projectiles
 	MELEE, // player_melee (non-throw swing)
-}
-
-// Krodin's player hitboxes: a body box from the feet to 72% of the current
-// height, and a head box on top of it up to the current height. Crouching
-// shrinks both through `height` (player_update_height); nothing else (no
-// hitbox padding, no head multiplier) changes them.
-player_hitboxes :: proc(target: ^Player, kind := Hitbox_Kind.SHOT) -> (body, head: Box) {
-	body_width, head_width: f32 = 2.0, 1.6
-	if kind == .MELEE { body_width, head_width = 2.2, 1.8 }
-	body_height := max(0.1, target.height * 0.72)
-	body = {
-		origin = {target.position.x, target.position.y, target.position.z},
-		scale  = {target.scale * body_width, body_height, target.scale * body_width},
-	}
-	head_height := max(0.1, target.height - body_height)
-	head = {
-		origin = {target.position.x, target.position.y + body_height, target.position.z},
-		scale  = {target.scale * head_width, head_height, target.scale * head_width},
-	}
-	return
 }
 
 // Unit-cube transform of a Box: maps [-0.5, 0.5]^3 onto it.
@@ -54,8 +37,9 @@ map_object_blocks_shots :: proc(object: ^Object) -> bool {
 
 // ---------------------------------------------------------------------------
 // Krunker's live hitboxes ("complexHitboxes", game.js updateComplexHitboxes,
-// the per-shot pose update and the server ray test). On official servers every
-// hitscan hit is decided by these oriented boxes, not by Krodin's two boxes:
+// the per-shot pose update and the server ray test). On official servers, and
+// on Krodin's native server and offline game, every hitscan and projectile hit
+// is decided by these oriented boxes:
 //
 //   root     at (x, y + |sin(sV) * stepAnim * 6|, z), yaw xD - 2 sin(sV) stepAnim
 //   upper    at legHeight - crouchDst * cV above the root, pitched yD * 0.5
@@ -249,3 +233,279 @@ krunker_arm_hurtboxes :: proc(out: ^[KRUNKER_HURTBOX_MAX]Krunker_Hurtbox, count:
 	hurtbox_append(out, count, .ARM, holder * node({0, -ua * math.cos(v), -ua * math.sin(v)}, linalg.matrix4_rotate_f32((v + p0) / 2, {1, 0, 0})), {f, gap, connector_depth}, hurt, moving)
 	hurtbox_append(out, count, .ARM, holder * node({0, -ua * math.cos(v) - half_lower * math.cos(p0), -ua * math.sin(v) - half_lower * math.sin(p0)}, linalg.matrix4_rotate_f32(p0, {1, 0, 0})), {f, la, f}, hurt, moving)
 }
+
+// ---------------------------------------------------------------------------
+// Krunker's per-player shot test (krunkbox game.min.js `function n1e(`), used
+// by the native/authoritative hitscan and projectiles:
+//
+//   - the ray is the shot direction from the shooter's eye, unbounded forward
+//     (three.js Ray), tested against B8 OBBs: fromBox3(geometry bounds), then
+//     halfSize + 1 when the target's velocity is non-zero, then
+//     applyMatrix4(matrixWorld);
+//   - head, then torso; only when the torso misses, the arms in the order
+//     left upper, right upper, left connector, left forearm, right connector,
+//     right forearm, stopping at the first hit; then the active leg set,
+//     stopping at the first hit;
+//   - the nearest of those hits wins (ties keep the earlier one), and its
+//     hitType decides the damage: headshot, torsoshot (torso and arms) or
+//     legshot.
+//
+// The caller first runs Krunker's cheap prefilter (krunker_hurtbox_prefilter).
+
+Krunker_Hit_Type :: enum u8 { NONE, HEADSHOT, TORSOSHOT, LEGSHOT }
+
+krunker_hit_type :: proc(part: Krunker_Hurtbox_Part) -> Krunker_Hit_Type {
+	switch part {
+	case .HEAD:       return .HEADSHOT
+	case .TORSO, .ARM: return .TORSOSHOT
+	case .LEG:        return .LEGSHOT
+	}
+	return .NONE
+}
+
+// Ray (origin + direction * t, t >= 0) against an oriented box whose
+// transform maps the unit cube onto it. The ray goes into box space (the
+// transform's columns are the box axes times its full size; the hurtbox
+// chains have no shear) and runs the slab test there. three.js Ray.intersectBox:
+// the entry point, or the exit point when the origin is inside.
+krunker_hurtbox_ray :: proc(box: Krunker_Hurtbox, origin, direction: Vec3) -> (t: f32, hit: bool) {
+	m := box.transform
+	center := Vec3{m[0, 3], m[1, 3], m[2, 3]}
+	rel := origin - center
+	t_near := f32(-math.F32_MAX)
+	t_far := f32(math.F32_MAX)
+	for axis in 0 ..< 3 {
+		column := Vec3{m[0, axis], m[1, axis], m[2, axis]}
+		length_sq := linalg.dot(column, column)
+		if length_sq <= 0 { return 0, false }
+		// Box-space coordinates: [-0.5, 0.5] on this axis.
+		o := linalg.dot(rel, column) / length_sq
+		d := linalg.dot(direction, column) / length_sq
+		if abs(d) < 1e-12 {
+			if o < -0.5 || o > 0.5 { return 0, false }
+			continue
+		}
+		t1 := (-0.5 - o) / d
+		t2 := (0.5 - o) / d
+		if t1 > t2 { t1, t2 = t2, t1 }
+		t_near = max(t_near, t1)
+		t_far = min(t_far, t2)
+		if t_near > t_far { return 0, false }
+	}
+	if t_far < 0 { return 0, false }
+	return t_near >= 0 ? t_near : t_far, true
+}
+
+// Krunker's arm test order (n1e's L list) as indices into the arm boxes that
+// krunker_player_hurtboxes emits: left upper/connector/forearm, then right.
+@(private="file")
+KRUNKER_ARM_ORDER := [6]int{0, 3, 1, 2, 4, 5}
+
+// n1e over one target's boxes (krunker_player_hurtboxes output, active legs
+// only). `t` is in units of `direction`.
+krunker_hurtboxes_ray :: proc(boxes: []Krunker_Hurtbox, origin, direction: Vec3) -> (t: f32, hit_type: Krunker_Hit_Type) {
+	best := f32(math.F32_MAX)
+	consider :: proc(best: ^f32, hit_type: ^Krunker_Hit_Type, t: f32, part: Krunker_Hurtbox_Part) {
+		if t < best^ { best^, hit_type^ = t, krunker_hit_type(part) }
+	}
+	first_arm, arm_count, first_leg := -1, 0, len(boxes)
+	for box, i in boxes {
+		if box.part == .ARM && first_arm < 0 { first_arm = i }
+		if box.part == .ARM { arm_count += 1 }
+		if box.part == .LEG && first_leg == len(boxes) { first_leg = i }
+	}
+	torso_hit := false
+	for box in boxes {
+		if box.part != .HEAD && box.part != .TORSO { continue }
+		if bt, ok := krunker_hurtbox_ray(box, origin, direction); ok {
+			consider(&best, &hit_type, bt, box.part)
+			if box.part == .TORSO { torso_hit = true }
+		}
+	}
+	if !torso_hit && arm_count == 6 {
+		for k in KRUNKER_ARM_ORDER {
+			box := boxes[first_arm + k]
+			if bt, ok := krunker_hurtbox_ray(box, origin, direction); ok {
+				consider(&best, &hit_type, bt, box.part)
+				break
+			}
+		}
+	}
+	for box in boxes[first_leg:] {
+		if box.part != .LEG || !box.active { continue }
+		if bt, ok := krunker_hurtbox_ray(box, origin, direction); ok {
+			consider(&best, &hit_type, bt, box.part)
+			break
+		}
+	}
+	if hit_type == .NONE { return 0, .NONE }
+	return best, hit_type
+}
+
+// The pose Krunker's server tests a native target in: its current state, and
+// the +1 padding only while its actual velocity is non-zero (n1e's `y`).
+krunker_target_pose :: proc(target: ^Player) -> Krunker_Hurtbox_Pose {
+	moving := target.velocity.x != 0 || target.velocity.y != 0 || target.velocity.z != 0
+	pose := krunker_hurtbox_pose(target, moving)
+	if target.game != nil && target.game.config.hurtbox_scale > 0 { pose.hurtbox_scale = target.game.config.hurtbox_scale }
+	return pose
+}
+
+// Everything a shot tests about one target: its hurtbox pose plus the sizes
+// of Krunker's prefilter and melee boxes (fetchState's x/y/z, xD/yD, sV,
+// stepChase, cV, h/ah and weapon).
+Krunker_Shot_Target :: struct {
+	pose:       Krunker_Hurtbox_Pose,
+	scale:      f32,
+	height:     f32, // adjustedHeight
+	hitbox_pad: f32, // the lobby's hitBoxPad
+}
+
+krunker_shot_target :: proc(target: ^Player) -> Krunker_Shot_Target {
+	return {
+		pose = krunker_target_pose(target),
+		scale = target.scale,
+		height = target.height,
+		hitbox_pad = target.game != nil ? target.game.config.hitbox_pad : KRUNKER_HITBOX_PAD_DEFAULT,
+	}
+}
+
+// Krunker's prefilter before n1e (hitscan and projectiles): the segment must
+// reach an axis-aligned box scale + 5 out from the target on x/z and from its
+// feet to adjustedHeight + 5 up. `segment` is the whole shot (t <= 1).
+krunker_hurtbox_prefilter :: proc(target: Krunker_Shot_Target, origin, segment: Vec3) -> bool {
+	width := (target.scale + 5) * 2
+	_, _, hit := ray_box_hit(origin, segment, target.pose.position, {width, target.height + 5, width})
+	return hit
+}
+
+// One target through Krunker's shot test: prefilter, pose, n1e.
+krunker_shot_target_test :: proc(target: Krunker_Shot_Target, origin, segment: Vec3) -> (t: f32, hit_type: Krunker_Hit_Type) {
+	if !krunker_hurtbox_prefilter(target, origin, segment) { return 0, .NONE }
+	boxes: [KRUNKER_HURTBOX_MAX]Krunker_Hurtbox
+	count := krunker_player_hurtboxes(target.pose, &boxes)
+	return krunker_hurtboxes_ray(boxes[:count], origin, segment)
+}
+
+// The same, for a target as it is now (projectiles, tests).
+krunker_player_shot_test :: proc(target: ^Player, origin, segment: Vec3) -> (t: f32, hit_type: Krunker_Hit_Type) {
+	return krunker_shot_target_test(krunker_shot_target(target), origin, segment)
+}
+
+// ---------------------------------------------------------------------------
+// Lag compensation on the native server (Krunker's storeState/fetchState).
+// After every server tick each player's pose is stored with the tick's time;
+// a command carries the tick its view showed (Input.view_tick/view_frac, set
+// by the client's remote-player clock), and its shots and melee swings test
+// every target as it was at that moment, blended between the two stored
+// ticks around it. Like Krunker, history older than 500 ms is not used (the
+// oldest kept pose is), the +1 moving padding follows the target's current
+// velocity, and crouch, height and weapon come from the older of the two
+// poses. Unstamped commands (and the offline game) test targets as they are.
+
+LAG_HISTORY_MAX :: 64
+LAG_HISTORY_WINDOW :: f32(0.5) // Krunker: `N-h.stateHistory[Y].time>=500` is dropped
+
+Lag_Sample :: struct {
+	time:          f32, // game.now after the tick (the snapshot time)
+	position:      Vec3,
+	direction:     Vec2,
+	crouch_val:    f32,
+	step_val:      f32,
+	step_chase:    f32,
+	recoil_anim_y: f32,
+	height:        f32,
+	weapon:        ^Weapon,
+}
+
+player_lag_record :: proc(player: ^Player, now: f32) {
+	if !player.active {
+		player.lag_count, player.lag_next = 0, 0
+		return
+	}
+	player.lag_history[player.lag_next] = {
+		time = now,
+		position = player.position, direction = player.direction,
+		crouch_val = player.crouch_val, step_val = player.step_val, step_chase = player.step_chase,
+		recoil_anim_y = player.recoil_anim_y, height = player.height, weapon = player.weapon,
+	}
+	player.lag_next = (player.lag_next + 1) % LAG_HISTORY_MAX
+	player.lag_count = min(player.lag_count + 1, LAG_HISTORY_MAX)
+}
+
+// The k-th newest stored pose (0 = newest).
+@(private="file")
+lag_sample :: proc(player: ^Player, k: i32) -> ^Lag_Sample {
+	return &player.lag_history[(player.lag_next - 1 - k + 2 * LAG_HISTORY_MAX) % LAG_HISTORY_MAX]
+}
+
+// `target` as it was at server time `time`. ok is false without history or
+// when `time` is at or past the newest stored tick (the current state is then
+// the newest the shooter can have seen).
+player_lag_target :: proc(target: ^Player, time: f32) -> (result: Krunker_Shot_Target, ok: bool) {
+	if target.lag_count == 0 { return }
+	newest := lag_sample(target, 0)
+	if time >= newest.time { return }
+	// The newest pose at or before `time` and the one after it.
+	older, newer: ^Lag_Sample = nil, newest
+	for k in 0 ..< target.lag_count {
+		sample := lag_sample(target, k)
+		if newest.time - sample.time >= LAG_HISTORY_WINDOW { break }
+		if sample.time <= time { older = sample; break }
+		newer = sample
+	}
+	frac: f32 = 1
+	if older == nil {
+		older = newer // before the window: the oldest kept pose
+	} else if newer.time > older.time {
+		frac = clamp((time - older.time) / (newer.time - older.time), 0, 1)
+	} else {
+		frac = 0
+	}
+	result = krunker_shot_target(target)
+	pose := &result.pose
+	pose.position = older.position + (newer.position - older.position) * frac
+	pose.pitch = older.direction.x + (newer.direction.x - older.direction.x) * frac
+	pose.yaw = older.direction.y + normalize_angle(newer.direction.y - older.direction.y) * frac
+	pose.step_val = older.step_val + (newer.step_val - older.step_val) * frac
+	pose.step_chase = older.step_chase + (newer.step_chase - older.step_chase) * frac
+	pose.recoil_anim_y = older.recoil_anim_y + (newer.recoil_anim_y - older.recoil_anim_y) * frac
+	pose.crouch = math.round(clamp(older.crouch_val, 0, 1))
+	pose.weapon = older.weapon
+	result.height = older.height
+	return result, true
+}
+
+// The target a shot from `shooter` tests: rewound to the shooter's view on
+// the native server when the command was stamped, else as it is now.
+player_shot_target :: proc(shooter, target: ^Player, rewind: bool) -> Krunker_Shot_Target {
+	game := shooter.game
+	if rewind && shooter.view_stamped && game != nil && game.server != nil && game.config.tick_rate > 0 {
+		time := (f64(shooter.view_tick) + f64(shooter.view_frac)) / f64(game.config.tick_rate)
+		if rewound, ok := player_lag_target(target, f32(time)); ok { return rewound }
+	}
+	return krunker_shot_target(target)
+}
+
+// Damage multiplier for a hit type (Krunker's shot and projectile damage):
+// headshot x hsMlt (1.5 when unset), legshot x lsMlt (0.5 when unset),
+// torsoshot x 1.
+krunker_hit_damage_mlt :: proc(weapon: ^Weapon, hit_type: Krunker_Hit_Type) -> f32 {
+	if weapon == nil { return 1 }
+	#partial switch hit_type {
+	case .HEADSHOT: return weapon.headshot_mlt != 0 ? weapon.headshot_mlt : 1.5
+	case .LEGSHOT:  return weapon.legshot_mlt != 0 ? weapon.legshot_mlt : 0.5
+	}
+	return 1
+}
+
+// Krunker's melee swing test (players.melee): no complexHitboxes, one
+// axis-aligned box scale + hitboxPadW out on x/z and adjustedHeight +
+// hitboxPadH tall, both pads the lobby's Hitbox Padding (hitBoxPad).
+krunker_melee_box :: proc(target: Krunker_Shot_Target) -> Box {
+	width := (target.scale + target.hitbox_pad) * 2
+	return {origin = target.pose.position, scale = {width, max(0.1, target.height + target.hitbox_pad), width}}
+}
+
+// Krunker's lobby default for Hitbox Padding (hitBoxPad: def .6, -2..2).
+KRUNKER_HITBOX_PAD_DEFAULT :: 0.6

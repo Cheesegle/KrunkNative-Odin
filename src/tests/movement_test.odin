@@ -380,7 +380,7 @@ main :: proc() {
 	if !test_spawn_selection() || !test_spawn_selection_timing() {
 		os.exit(1)
 	}
-	if !test_player_hitboxes_match_inline() || !test_shot_paths_use_player_hitboxes() {
+	if !test_native_hurtbox_shots() || !test_native_hurtbox_projectiles() || !test_native_hurtbox_cost() {
 		os.exit(1)
 	}
 	fmt.println()

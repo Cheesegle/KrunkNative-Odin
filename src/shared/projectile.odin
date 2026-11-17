@@ -48,6 +48,7 @@ game_tick_projectiles :: proc(game: ^Game, delta: f32) {
 		padding := Vec3{radius * 2, radius * 2, radius * 2}
 		nearest: f32 = 2
 		target: ^Player
+		target_hit: Krunker_Hit_Type
 		for object in game.map_inst.objects {
 			if !object.active || object.collision_type == .NONE || object.score_zone || object.objective || object.team_zone || object.bomb_site || object.flag || object.trigger || object.premium || object.verified || object.teleporter || object.checkpoint || object.pickup { continue }
 			position := object.position - Vec3{0, radius, 0}
@@ -57,19 +58,22 @@ game_tick_projectiles :: proc(game: ^Game, delta: f32) {
 		}
 		for player in game.players {
 			if player == owner || !player.active || (player.team != 0 && player.team == owner.team && (game.mode == nil || !game.mode.config.dmg_team)) { continue }
-			position := player.position - Vec3{0, radius, 0}
-			size := Vec3{player.scale * 2, player.height, player.scale * 2} + padding
-			if t, _, hit := ray_box_hit(projectile.position, segment, position, size); hit && t < nearest {
+			// Krunker's projectile update: the prefilter box over this tick's
+			// segment, then n1e from the projectile along its heading. That
+			// ray is unbounded, so a hit can land past this tick's segment.
+			if t, hit_type := krunker_player_shot_test(player, projectile.position, segment); hit_type != .NONE && t < nearest {
 				nearest = t
 				target = player
+				target_hit = hit_type
 			}
 		}
-		if nearest <= 1 {
+		if nearest <= 1 || target != nil {
 			if weapon.physical_power > 0 && game_is_authority(game) {
 				game_emit_presentation(game, {kind = .EXPLOSION, position = projectile.position + segment * nearest})
 			}
 			if target != nil && game_is_authority(game) {
-				player_apply_damage(target, owner, weapon.projectile_damage, projectile.weapon_id, false)
+				damage := weapon.projectile_damage * krunker_hit_damage_mlt(weapon, target_hit)
+				player_apply_damage(target, owner, damage, projectile.weapon_id, target_hit == .HEADSHOT)
 			}
 			unordered_remove(&game.projectiles, i)
 			continue

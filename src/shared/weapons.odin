@@ -489,6 +489,7 @@ WEAPON_SEMI_AUTO := Weapon {
 }
 
 WEAPON_RPG := Weapon {
+	legshot_mlt = 1, // Krunker lsMlt: 1
 	physical_range = 46,
 	physical_power = 0.095,
 	move_spread = 1,
@@ -673,6 +674,7 @@ WEAPON_ALIEN_BLASTER := Weapon {
 }
 
 WEAPON_KNIFE := Weapon {
+	legshot_mlt = 1, // Krunker lsMlt: 1
 	move_spread = 1,
 	name          = "Combat Knife",
 	secondary     = false,
@@ -704,6 +706,7 @@ WEAPON_KNIFE := Weapon {
 
 // Current browser weapon 18. Timings and recoil use seconds in the native game.
 WEAPON_BLASTER := Weapon {
+	legshot_mlt = 1, // Krunker lsMlt: 1
 	move_spread = 1,
 	name = "Blaster",
 	sound = "weapon_19",
@@ -767,6 +770,7 @@ WEAPON_BLASTER := Weapon {
 
 // Browser weapon 13: current base asset and first-person rig.
 WEAPON_CROSSBOW := Weapon {
+	legshot_mlt = 1, // Krunker lsMlt: 1
 	move_spread = 1,
 	name = "Crossbow",
 	src = "weapon_14",

@@ -12,9 +12,12 @@ import shared "../shared"
 // frame does no extra work beyond one bool test.
 //
 // Player boxes come from the same procs the hit tests use:
-//   - native/offline: shared.player_hitboxes (Krodin's body + head boxes);
-//   - live Krunker:   shared.krunker_player_hurtboxes (Krunker's oriented
-//     head/torso/arm/leg boxes; Krunker's server decides those hits).
+//   - native/offline: shared.krunker_target_pose + krunker_player_hurtboxes,
+//     exactly the pose and boxes player_shoot tests (Krunker's oriented
+//     head/torso/arm/leg boxes, +1 per side while the target's velocity is
+//     non-zero), or shared.krunker_melee_box while holding a melee weapon;
+//   - live Krunker:   shared.krunker_player_hurtboxes (Krunker's server
+//     decides those hits).
 // Positions are the ones this client simulates or shows: offline that is the
 // simulation itself; online, remote players are drawn where they are displayed
 // (interpolated), which is the pose Krunker's server rewinds to for your shots.
@@ -94,8 +97,8 @@ debug_hitbox_model :: proc(client: ^Client) -> Debug_Hitbox_Model {
 	return client.krunker.connected ? .KRUNKER : .KRODIN
 }
 
-// Krodin's two shot paths use different player boxes; show the ones the local
-// weapon would use.
+// The two native shot paths use different player boxes (hurtboxes for shots,
+// one padded box for melee); show the ones the local weapon would use.
 debug_hitbox_kind :: proc(client: ^Client) -> shared.Hitbox_Kind {
 	if client.me != nil && client.me.weapon != nil && client.me.weapon.melee { return .MELEE }
 	return .SHOT
@@ -167,9 +170,11 @@ debug_hitbox_player_shown :: proc(client: ^Client, player: ^shared.Player) -> bo
 debug_lines_player :: proc(lines: ^[dynamic]Debug_Line_Vertex, player: ^shared.Player, model: Debug_Hitbox_Model, kind: shared.Hitbox_Kind, moving: bool) {
 	switch model {
 	case .KRODIN:
-		body, head := shared.player_hitboxes(player, kind)
-		debug_lines_box(lines, body, DEBUG_COLOR_BODY)
-		debug_lines_box(lines, head, DEBUG_COLOR_HEAD)
+		if kind == .MELEE {
+			debug_lines_box(lines, shared.krunker_melee_box(shared.krunker_shot_target(player)), DEBUG_COLOR_BODY)
+		} else {
+			debug_lines_krunker_pose(lines, shared.krunker_target_pose(player), moving)
+		}
 	case .KRUNKER:
 		debug_lines_krunker_pose(lines, shared.krunker_hurtbox_pose(player, moving), moving)
 	}
@@ -302,7 +307,10 @@ debug_render_build :: proc(client: ^Client, now: f64) {
 				padded := dr.hurtbox_padding == .AUTO ? server_moving : dr.hurtbox_padding == .PADDED
 				debug_lines_krunker_pose(&dr.lines, pose, padded)
 			} else {
-				debug_lines_player(&dr.lines, player, model, kind, false)
+				// player_shoot pads by the target's own velocity.
+				server_moving := player.velocity != {}
+				padded := dr.hurtbox_padding == .AUTO ? server_moving : dr.hurtbox_padding == .PADDED
+				debug_lines_player(&dr.lines, player, model, kind, padded)
 			}
 			if dr.model_bounds { debug_lines_model_bounds(&dr.lines, player) }
 		}

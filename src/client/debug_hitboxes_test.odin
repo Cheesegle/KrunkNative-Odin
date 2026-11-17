@@ -70,7 +70,7 @@ when ODIN_TEST {
 		}
 		dr := &client.debug_render
 		testing.expect(t, dr.player_hitboxes && dr.map_collision && dr.shot_rays && dr.xray, "each checkbox flips its toggle")
-		_, labelled := debug_test_text_pos(dbg, "Krodin shot boxes")
+		_, labelled := debug_test_text_pos(dbg, "Native server hurtboxes")
 		testing.expect(t, labelled, "the hitbox model in use is labelled")
 	}
 
@@ -80,26 +80,45 @@ when ODIN_TEST {
 		for crouch in ([3]f32{0, 0.5, 1}) {
 			player.crouch_val = crouch
 			shared.player_update_height(&player)
-			for kind in shared.Hitbox_Kind {
-				lines: [dynamic]Debug_Line_Vertex
-				defer delete(lines)
-				debug_lines_player(&lines, &player, .KRODIN, kind, false)
-				if !testing.expect(t, len(lines) == 48, "Krodin players draw two boxes of 12 edges") { return }
-				body, head := shared.player_hitboxes(&player, kind)
-				for box, b in ([2]shared.Box{body, head}) {
-					// ray_box_hit's slab bounds for this box.
-					want_min := shared.Vec3{box.origin.x - box.scale.x * 0.5, box.origin.y, box.origin.z - box.scale.z * 0.5}
-					want_max := shared.Vec3{box.origin.x + box.scale.x * 0.5, box.origin.y + box.scale.y, box.origin.z + box.scale.z * 0.5}
-					got_min, got_max := lines[b * 24].position, lines[b * 24].position
-					for vertex in lines[b * 24:][:24] {
-						got_min = linalg.min(got_min, vertex.position)
-						got_max = linalg.max(got_max, vertex.position)
-					}
-					testing.expectf(t, linalg.length(got_min - want_min) < 1e-4 && linalg.length(got_max - want_max) < 1e-4,
-						"crouch %v %v box %d: drawn %v..%v, hit-tested %v..%v", crouch, kind, b, got_min, got_max, want_min, want_max)
-					testing.expect(t, lines[b * 24].color == (b == 0 ? DEBUG_COLOR_BODY : DEBUG_COLOR_HEAD), "body and head use different colours")
+			for moving in ([2]bool{false, true}) {
+				player.velocity = moving ? shared.Vec3{0.02, 0, 0} : {}
+				// Shots: the hurtboxes player_shoot tests, in the pose and size
+				// it tests them (solid), the other size and leg set dim.
+				lines, want: [dynamic]Debug_Line_Vertex
+				defer { delete(lines); delete(want) }
+				debug_lines_player(&lines, &player, .KRODIN, .SHOT, moving)
+				debug_lines_krunker_pose(&want, shared.krunker_target_pose(&player), moving)
+				testing.expectf(t, len(lines) == len(want) && len(lines) > 0, "crouch %v: native shot boxes draw the server's hurtboxes (%d vs %d vertices)", crouch, len(lines), len(want))
+				same := len(lines) == len(want)
+				for v, i in lines { if same && v != want[i] { same = false } }
+				testing.expectf(t, same, "crouch %v moving %v: drawn lines match the tested pose", crouch, moving)
+				// Every box the shot test uses is drawn solid.
+				boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+				count := shared.krunker_player_hurtboxes(shared.krunker_target_pose(&player), &boxes)
+				colors := DEBUG_KRUNKER_COLORS
+				for box in boxes[:count] {
+					corner := (box.transform * shared.Vec4{-0.5, -0.5, -0.5, 1}).xyz
+					found := false
+					for v in lines { if v.color == colors[box.part] && linalg.length(v.position - corner) < 1e-4 { found = true; break } }
+					testing.expectf(t, found, "crouch %v moving %v: tested %v box is drawn solid", crouch, moving, box.part)
 				}
 			}
+			player.velocity = {}
+			// Melee: Krunker's one padded box (players.melee).
+			lines: [dynamic]Debug_Line_Vertex
+			defer delete(lines)
+			debug_lines_player(&lines, &player, .KRODIN, .MELEE, false)
+			if !testing.expect(t, len(lines) == 24, "native melee draws one box of 12 edges") { return }
+			box := shared.krunker_melee_box(shared.krunker_shot_target(&player))
+			want_min := shared.Vec3{box.origin.x - box.scale.x * 0.5, box.origin.y, box.origin.z - box.scale.z * 0.5}
+			want_max := shared.Vec3{box.origin.x + box.scale.x * 0.5, box.origin.y + box.scale.y, box.origin.z + box.scale.z * 0.5}
+			got_min, got_max := lines[0].position, lines[0].position
+			for vertex in lines {
+				got_min = linalg.min(got_min, vertex.position)
+				got_max = linalg.max(got_max, vertex.position)
+			}
+			testing.expectf(t, linalg.length(got_min - want_min) < 1e-4 && linalg.length(got_max - want_max) < 1e-4,
+				"crouch %v melee: drawn %v..%v, hit-tested %v..%v", crouch, got_min, got_max, want_min, want_max)
 		}
 	}
 
@@ -425,18 +444,24 @@ when ODIN_TEST {
 		// 1. Lines alone on black: edges at the projected hit-tested boxes.
 		dr.player_hitboxes = true
 		debug_render_build(&client, 0)
-		testing.expect(t, len(dr.lines) == 48, "only the remote player is drawn (first-person you is not)")
+		player_lines: [dynamic]Debug_Line_Vertex
+		defer delete(player_lines)
+		debug_lines_player(&player_lines, remote, .KRODIN, .SHOT, false)
+		testing.expect(t, len(dr.lines) == len(player_lines), "only the remote player is drawn (first-person you is not)")
 		gl.ClearColor(0, 0, 0, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-		testing.expect(t, debug_render_lines(dr, view_projection, true) == 48)
+		testing.expect(t, debug_render_lines(dr, view_projection, true) == len(player_lines))
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "wireframes must draw without OpenGL errors")
 		debug_test_read(pixels)
-		body, head := shared.player_hitboxes(remote, .SHOT)
-		front_z := body.origin.z + body.scale.z * 0.5
-		left_x := body.origin.x - body.scale.x * 0.5
-		body_left_mid, ok1 := debug_test_project(view_projection, {left_x, body.origin.y + body.scale.y * 0.5, front_z})
-		body_center, ok2 := debug_test_project(view_projection, {body.origin.x, body.origin.y + body.scale.y * 0.5, front_z})
-		head_top_mid, ok3 := debug_test_project(view_projection, {head.origin.x, head.origin.y + head.scale.y, head.origin.z + head.scale.z * 0.5})
+		// The torso and head boxes the native shot test uses (standing still: unpadded).
+		tested: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+		shared.krunker_player_hurtboxes(shared.krunker_target_pose(remote), &tested)
+		head, torso := tested[0], tested[1]
+		at :: proc(box: shared.Krunker_Hurtbox, local: shared.Vec3) -> shared.Vec3 { return (box.transform * shared.Vec4{local.x, local.y, local.z, 1}).xyz }
+		body_left_mid, ok1 := debug_test_project(view_projection, at(torso, {-0.5, 0, 0.5}))
+		// Inside the head's face, above the arms and off its centre marker.
+		body_center, ok2 := debug_test_project(view_projection, at(head, {0.3, 0.35, 0.5}))
+		head_top_mid, ok3 := debug_test_project(view_projection, at(head, {0, 0.5, 0.5}))
 		testing.expect(t, ok1 && ok2 && ok3, "the target is in front of the camera")
 		testing.expectf(t, debug_test_pixel_near(pixels, body_left_mid, 1, is_green), "body edge must be drawn at its projected position %v", body_left_mid)
 		testing.expectf(t, debug_test_pixel_near(pixels, head_top_mid, 1, is_yellow), "head edge must be drawn at its projected position %v", head_top_mid)
@@ -468,7 +493,7 @@ when ODIN_TEST {
 		scene_add_player_mesh(client.scene, cast(^Player_Mesh)remote.mesh, int(remote.loadout_size))
 		player_update_meshes(remote, false)
 		debug_render_build(&client, 0)
-		testing.expect(t, len(dr.lines) == 48 + 24 + (16*2 + 4)*2 + 2 + 6, "players, the two nearby map objects and the shot ray")
+		testing.expect(t, len(dr.lines) == len(player_lines) + 24 + (16*2 + 4)*2 + 2 + 6, "players, the two nearby map objects and the shot ray")
 		shots := [2]cstring{"bin/debug_hitboxes/krodin_hitboxes.png", "bin/debug_hitboxes/krunker_hurtboxes.png"}
 		for model, i in ([2]Debug_Hitbox_Model{.KRODIN, .KRUNKER}) {
 			if model == .KRUNKER {
