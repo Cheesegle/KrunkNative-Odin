@@ -9,17 +9,21 @@ PROFILE ?= none
 
 UNAME_S := $(shell uname -s)
 
-.PHONY: all client dev server test check clean dist-windows
+.PHONY: all client dev server check-server test check clean dist-windows
 
 all: client server
 
 # On Linux the Odin vendor binds GLFW dynamically to the system libglfw.so.3.
 # Fail early with an actionable message instead of producing a binary that
 # crashes with "error while loading shared libraries: libglfw.so.3".
+# The headless dedicated server needs no GLFW: `make server` works on a bare box.
+NEEDS_GLFW := $(if $(MAKECMDGOALS),$(filter-out server check-server clean,$(MAKECMDGOALS)),all)
+ifneq ($(NEEDS_GLFW),)
 ifneq ($(UNAME_S),Darwin)
 ifneq ($(UNAME_S),)
 ifeq ($(shell pkg-config --exists glfw3 && echo yes),)
 $(error GLFW3 not found. Install it and retry:  sudo apt install libglfw3 libglfw3-dev pkg-config)
+endif
 endif
 endif
 endif
@@ -37,6 +41,11 @@ dev:
 server:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/server -out:$(BIN_DIR)/krodin_server -o:$(PROFILE)
+
+# Typecheck the dedicated server for Linux from any host.
+check-server:
+	$(ODIN) check src/server
+	$(ODIN) check src/server -target:linux_amd64
 
 test:
 	# Tests are correctness checks; always compile fast with -o:none.

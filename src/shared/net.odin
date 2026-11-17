@@ -165,14 +165,42 @@ Packet_Player_State :: struct {
 	score, kills, deaths: u32,
 }
 
-packet_serialize_disconnect :: proc(buf: []byte) -> int {
-	if len(buf) < PACKET_HEADER_SIZE {
+// Why the server closed a connection. Sent as an optional 1-byte DISCONNECT
+// payload; a client's own DISCONNECT stays empty. Older clients skip the
+// packet by its length, so this needs no PROTOCOL_VERSION bump.
+Disconnect_Reason :: enum u8 {
+	NONE        = 0,
+	SERVER_FULL = 1,
+	SHUTDOWN    = 2,
+}
+
+packet_serialize_disconnect :: proc(buf: []byte, reason := Disconnect_Reason.NONE) -> int {
+	payload := reason == .NONE ? 0 : 1
+	if len(buf) < PACKET_HEADER_SIZE + payload {
 		return 0
 	}
 	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
 	buf[4] = u8(Packet_Type.DISCONNECT)
-	endian.put_u16(buf[5:7], .Little, 0)
-	return PACKET_HEADER_SIZE
+	endian.put_u16(buf[5:7], .Little, u16(payload))
+	if payload > 0 {
+		buf[PACKET_HEADER_SIZE] = u8(reason)
+	}
+	return PACKET_HEADER_SIZE + payload
+}
+
+packet_deserialize_disconnect :: proc(buf: []byte) -> (reason: Disconnect_Reason, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .DISCONNECT || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) {
+		return .NONE, false
+	}
+	if header.payload_len == 0 {
+		return .NONE, true
+	}
+	value := buf[PACKET_HEADER_SIZE]
+	if value > u8(max(Disconnect_Reason)) {
+		return .NONE, true
+	}
+	return Disconnect_Reason(value), true
 }
 
 Packet_Match_State :: struct {
