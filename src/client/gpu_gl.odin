@@ -247,7 +247,7 @@ when !KRODIN_VULKAN {
 
 	gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
 		// .UI data is per frame: gpu_transient_bind.
-		if vertices == 0 || indices == 0 || layout == .UI { return 0 }
+		if vertices == 0 || indices == 0 || layout == .UI || layout == .Debug_Line { return 0 }
 		vao: u32
 		gl.CreateVertexArrays(1, &vao)
 		gl.VertexArrayElementBuffer(vao, u32(indices))
@@ -265,7 +265,7 @@ when !KRODIN_VULKAN {
 			gl.VertexArrayAttribFormat(vao, 2, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, face_idx)))
 			gl.VertexArrayAttribFormat(vao, 3, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, object_index)))
 			attribs = 4
-		case .UI:
+		case .UI, .Debug_Line:
 		}
 		for attrib in 0 ..< attribs {
 			gl.EnableVertexArrayAttrib(vao, attrib)
@@ -277,7 +277,12 @@ when !KRODIN_VULKAN {
 	gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 		gl.BindVertexArray(u32(input))
 		g_gl_index_base = 0
+		g_gl_topology = gl.TRIANGLES
 	}
+
+	// Lines for the .Debug_Line layout, triangles otherwise.
+	@(private = "file")
+	g_gl_topology: u32 = gl.TRIANGLES
 
 	// Byte offset of index 0 in the bound element buffer: 0 for vertex inputs,
 	// the ring position after gpu_transient_bind.
@@ -315,7 +320,7 @@ when !KRODIN_VULKAN {
 		segment_size: int,
 		fences:   [GPU_UNIFORM_RING_SEGMENTS]gl.sync_t,
 		context_: glfw.WindowHandle,
-		vao:      u32, // transient ring: the .UI vertex input reading it
+		vaos:     [Gpu_Vertex_Layout]u32, // transient ring: the vertex inputs reading it
 	}
 
 	@(private = "file")
@@ -381,7 +386,7 @@ when !KRODIN_VULKAN {
 		for ring in ([2]^Gl_Uniform_Ring{&g_uniform_ring, &g_transient_ring}) {
 			if ring.buffer != 0 && ring.context_ == glfw.GetCurrentContext() {
 				for fence in ring.fences { if fence != nil { gl.DeleteSync(fence) } }
-				if ring.vao != 0 { gl.DeleteVertexArrays(1, &ring.vao) }
+				for &vao in ring.vaos { if vao != 0 { gl.DeleteVertexArrays(1, &vao) } }
 				gl.UnmapNamedBuffer(ring.buffer)
 				gl.DeleteBuffers(1, &ring.buffer)
 			}
@@ -391,10 +396,10 @@ when !KRODIN_VULKAN {
 
 	// Copies this frame's vertices (laid out as `layout`) and indices into the
 	// transient ring and binds them for the following gpu_draw_indexed calls,
-	// whose first_index counts from the start of `indices`. Only .UI so far.
-	// False when the data does not fit (a quarter of the ring).
+	// whose first_index counts from the start of `indices`. .UI and
+	// .Debug_Line. False when the data does not fit (a quarter of the ring).
 	gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
-		assert(layout == .UI)
+		assert(layout == .UI || layout == .Debug_Line)
 		ring := &g_transient_ring
 		current := glfw.GetCurrentContext()
 		if ring.context_ != current { ring^ = {context_ = current} }
@@ -409,22 +414,33 @@ when !KRODIN_VULKAN {
 		copy(ring.mapped[vertex_offset:][:len(vertices)], vertices)
 		copy(ring.mapped[index_offset:][:index_bytes], ([^]u8)(raw_data(indices))[:index_bytes])
 		ring.offset = (index_offset + index_bytes + 15) &~ 15
-		if ring.vao == 0 {
-			gl.CreateVertexArrays(1, &ring.vao)
-			formats := [6]struct{size: i32, offset: uintptr}{
+		Format :: struct{size: i32, offset: uintptr}
+		formats: []Format
+		stride: i32
+		if layout == .UI {
+			@(static) ui := [6]Format{
 				{2, offset_of(UI_Vertex, position)}, {2, offset_of(UI_Vertex, local)}, {2, offset_of(UI_Vertex, uv)},
 				{4, offset_of(UI_Vertex, color)}, {4, offset_of(UI_Vertex, radii)}, {4, offset_of(UI_Vertex, params)},
 			}
-			for f, attrib in formats {
-				gl.VertexArrayAttribFormat(ring.vao, u32(attrib), f.size, gl.FLOAT, false, u32(f.offset))
-				gl.EnableVertexArrayAttrib(ring.vao, u32(attrib))
-				gl.VertexArrayAttribBinding(ring.vao, u32(attrib), 0)
-			}
-			gl.VertexArrayElementBuffer(ring.vao, ring.buffer)
+			formats, stride = ui[:], size_of(UI_Vertex)
+		} else {
+			@(static) lines := [2]Format{{3, offset_of(Debug_Line_Vertex, position)}, {4, offset_of(Debug_Line_Vertex, color)}}
+			formats, stride = lines[:], size_of(Debug_Line_Vertex)
 		}
-		gl.VertexArrayVertexBuffer(ring.vao, 0, ring.buffer, vertex_offset, size_of(UI_Vertex))
-		gl.BindVertexArray(ring.vao)
+		vao := &ring.vaos[layout]
+		if vao^ == 0 {
+			gl.CreateVertexArrays(1, vao)
+			for f, attrib in formats {
+				gl.VertexArrayAttribFormat(vao^, u32(attrib), f.size, gl.FLOAT, false, u32(f.offset))
+				gl.EnableVertexArrayAttrib(vao^, u32(attrib))
+				gl.VertexArrayAttribBinding(vao^, u32(attrib), 0)
+			}
+			gl.VertexArrayElementBuffer(vao^, ring.buffer)
+		}
+		gl.VertexArrayVertexBuffer(vao^, 0, ring.buffer, vertex_offset, stride)
+		gl.BindVertexArray(vao^)
 		g_gl_index_base = uintptr(index_offset)
+		g_gl_topology = layout == .Debug_Line ? gl.LINES : gl.TRIANGLES
 		return true
 	}
 
@@ -469,7 +485,11 @@ when !KRODIN_VULKAN {
 			gl.PolygonMode(gl.FRONT_AND_BACK, state.wireframe ? gl.LINE : gl.FILL)
 		}
 		if force || current.depth_test != state.depth_test {
-			if state.depth_test == .Off { gl.Disable(gl.DEPTH_TEST) } else { gl.Enable(gl.DEPTH_TEST); gl.DepthFunc(gl.LESS) }
+			switch state.depth_test {
+			case .Off:        gl.Disable(gl.DEPTH_TEST)
+			case .Less:       gl.Enable(gl.DEPTH_TEST); gl.DepthFunc(gl.LESS)
+			case .Less_Equal: gl.Enable(gl.DEPTH_TEST); gl.DepthFunc(gl.LEQUAL)
+			}
 		}
 		g_gl_draw = {state = state, known = true}
 	}
@@ -489,7 +509,7 @@ when !KRODIN_VULKAN {
 	}
 
 	gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
-		gl.DrawElements(gl.TRIANGLES, index_count, gl.UNSIGNED_INT, rawptr(g_gl_index_base + uintptr(first_index) * size_of(u32)))
+		gl.DrawElements(g_gl_topology, index_count, gl.UNSIGNED_INT, rawptr(g_gl_index_base + uintptr(first_index) * size_of(u32)))
 	}
 
 	// Clips draws to `rect` (x, y, width, height in target pixels, y up from
@@ -498,6 +518,16 @@ when !KRODIN_VULKAN {
 		if !enabled { gl.Disable(gl.SCISSOR_TEST); return }
 		gl.Enable(gl.SCISSOR_TEST)
 		gl.Scissor(rect[0], rect[1], max(rect[2], 0), max(rect[3], 0))
+	}
+
+	gpu_program_create_debug_lines :: proc() -> Gpu_Program {
+		dir := shared.concat(shared.assets_path(), "shaders/")
+		defer delete(dir)
+		vert := shared.concat(dir, "debug_line.vert")
+		defer delete(vert)
+		frag := shared.concat(dir, "debug_line.frag")
+		defer delete(frag)
+		return Gpu_Program(shader_compile(vert, frag))
 	}
 
 	gpu_program_create_ui :: proc() -> Gpu_Program {

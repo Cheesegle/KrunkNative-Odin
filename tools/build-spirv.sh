@@ -19,7 +19,7 @@ build basic_batched -DBATCHED
 build basic_shadow -DSHADOW_DEPTH_PASS
 build basic_shadow_batched -DBATCHED -DSHADOW_DEPTH_PASS
 # Other programs are one source pair each.
-for name in ui; do
+for name in ui debug_line; do
 	for stage in vert frag; do
 		glslc --target-env=vulkan1.3 -O -o "$out/$name.$stage.spv" "$src/$name.$stage"
 	done

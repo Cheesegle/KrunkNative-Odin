@@ -47,8 +47,9 @@ GPU_UNIT_SHADOW        :: 1
 GPU_UNIT_PLAYER_SHADOW :: 2
 
 Gpu_Depth_Test :: enum u8 {
-	Less, // the world's test (the zero value)
-	Off,  // flat overlays: the interface, nameplates
+	Less,       // the world's test (the zero value)
+	Off,        // flat overlays: the interface, nameplates
+	Less_Equal, // lines over the surfaces they outline (debug overlay)
 }
 
 // Fixed-function state of a draw. Culling is a property of the pass (shadow
@@ -70,6 +71,9 @@ Gpu_Vertex_Layout :: enum u8 {
 	Basic,   // Vertex: position (0), tex_coord (1)
 	Batched, // Batched_Vertex: position (0), tex_coord (1), face_idx (2), object_index (3)
 	UI,      // UI_Vertex: position (0), local (1), uv (2), color (3), radii (4), params (5)
+	// Debug_Line_Vertex: position (0), color (1). Drawn as a line list (pairs
+	// of indices) rather than triangles.
+	Debug_Line,
 }
 
 // Batched work a caller keeps on the CPU (the interface's draw list) is drawn

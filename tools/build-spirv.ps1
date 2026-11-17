@@ -1,6 +1,6 @@
 # Compiles the shaders to SPIR-V for the Vulkan backend: the world shaders
 # (assets/shaders/basic.vert, basic.frag) once per variant, and the other
-# programs (ui) once each. The modules are written next to the backend in
+# programs (ui, debug_line) once each. The modules are written next to the backend in
 # src/client/spirv/ (gpu_vk.odin embeds them with #load).
 #
 # The Batch_Object layout defines come from src/client/spirv/basic_defines.glsl,
@@ -37,7 +37,7 @@ foreach ($name in $variants.Keys) {
         if ($LASTEXITCODE -ne 0) { Write-Error "glslc failed for $name.$stage"; exit 1 }
     }
 }
-foreach ($name in @('ui')) {
+foreach ($name in @('ui', 'debug_line')) {
     foreach ($stage in @('vert', 'frag')) {
         $target = Join-Path $out "$name.$stage.spv"
         & $glslc.Source --target-env=vulkan1.3 -O -o $target (Join-Path $source "$name.$stage")

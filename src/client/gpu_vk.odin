@@ -39,6 +39,8 @@ when KRODIN_VULKAN {
 @(private = "file") SPIRV_SHADOW_BATCHED_FRAG :: #load("spirv/basic_shadow_batched.frag.spv")
 @(private = "file") SPIRV_UI_VERT :: #load("spirv/ui.vert.spv")
 @(private = "file") SPIRV_UI_FRAG :: #load("spirv/ui.frag.spv")
+@(private = "file") SPIRV_DEBUG_LINE_VERT :: #load("spirv/debug_line.vert.spv")
+@(private = "file") SPIRV_DEBUG_LINE_FRAG :: #load("spirv/debug_line.frag.spv")
 
 VK_COLOR_FORMAT :: vk.Format.R8G8B8A8_UNORM
 VK_DEPTH_FORMAT :: vk.Format.D32_SFLOAT
@@ -708,7 +710,7 @@ gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 // Copies this frame's vertices and indices into the frame's region of the
 // transient ring and makes them the next draws' input (see gpu_gl.odin).
 gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
-	assert(layout == .UI)
+	assert(layout == .UI || layout == .Debug_Line)
 	if !g_vk.ready { return false }
 	vk_cmd() // the region belongs to the frame being recorded
 	vertex_bytes := (len(vertices) + 15) &~ 15
@@ -1214,6 +1216,12 @@ gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
 	return Gpu_Program(vk_table_add(&g_vk.programs, program))
 }
 
+gpu_program_create_debug_lines :: proc() -> Gpu_Program {
+	if !g_vk.ready { return 0 }
+	program := Vk_Program{vert = vk_shader_module(SPIRV_DEBUG_LINE_VERT), frag = vk_shader_module(SPIRV_DEBUG_LINE_FRAG), layout = .Debug_Line}
+	return Gpu_Program(vk_table_add(&g_vk.programs, program))
+}
+
 gpu_program_create_ui :: proc() -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	program := Vk_Program{vert = vk_shader_module(SPIRV_UI_VERT), frag = vk_shader_module(SPIRV_UI_FRAG), layout = .UI}
@@ -1285,9 +1293,14 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 		attributes[4] = {location = 4, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(UI_Vertex, radii))}
 		attributes[5] = {location = 5, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(UI_Vertex, params))}
 		attribute_count = 6
+	case .Debug_Line:
+		binding = {binding = 0, stride = size_of(Debug_Line_Vertex), inputRate = .VERTEX}
+		attributes[0] = {location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = u32(offset_of(Debug_Line_Vertex, position))}
+		attributes[1] = {location = 1, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Debug_Line_Vertex, color))}
+		attribute_count = 2
 	}
 	vertex_input := vk.PipelineVertexInputStateCreateInfo{sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, vertexBindingDescriptionCount = 1, pVertexBindingDescriptions = &binding, vertexAttributeDescriptionCount = attribute_count, pVertexAttributeDescriptions = &attributes[0]}
-	assembly := vk.PipelineInputAssemblyStateCreateInfo{sType = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology = .TRIANGLE_LIST}
+	assembly := vk.PipelineInputAssemblyStateCreateInfo{sType = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology = p.layout == .Debug_Line ? .LINE_LIST : .TRIANGLE_LIST}
 	viewport := vk.PipelineViewportStateCreateInfo{sType = .PIPELINE_VIEWPORT_STATE_CREATE_INFO, viewportCount = 1, scissorCount = 1}
 	raster := vk.PipelineRasterizationStateCreateInfo{
 		sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -1299,7 +1312,8 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	multisample := vk.PipelineMultisampleStateCreateInfo{sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples = {._1}}
 	depth := vk.PipelineDepthStencilStateCreateInfo{
 		sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-		depthTestEnable = key.state.depth_test != .Off, depthWriteEnable = b32(key.state.depth_write), depthCompareOp = .LESS,
+		depthTestEnable = key.state.depth_test != .Off, depthWriteEnable = b32(key.state.depth_write),
+		depthCompareOp = key.state.depth_test == .Less_Equal ? .LESS_OR_EQUAL : .LESS,
 	}
 	blend_attachment := vk.PipelineColorBlendAttachmentState{
 		blendEnable = b32(key.state.blend),
