@@ -198,7 +198,7 @@ when ODIN_TEST {
 		}
 		run(client, &now, &k_index, 180, delta, start, yaw, {})
 		spec := &client.spectator
-		if !testing.expect(t, spec.active && spec.target_sid == 21 && spec.mode == .FIRST_PERSON && spec.view.valid, "following the first player in first person") do return
+		if !testing.expectf(t, spec.active && spec.target_sid == 21 && spec.mode == .FIRST_PERSON && spec.view.valid, "following the first player in first person (active=%v target=%d mode=%v valid=%v)", spec.active, spec.target_sid, spec.mode, spec.view.valid) do return
 		eye := spec.view.position + shared.Vec3{0, shared.GAME_CONSTANTS.player_height - shared.GAME_CONSTANTS.camera_height, 0}
 		d := client.camera.position - eye
 		testing.expectf(t, d.x*d.x + d.y*d.y + d.z*d.z < 0.01, "first person: camera at the followed eye (%v vs %v)", client.camera.position, eye)
@@ -229,8 +229,24 @@ when ODIN_TEST {
 			if complete {
 				// First person.
 				spec.mode = .FIRST_PERSON
-				run(client, &now, &k_index, 12, delta, start, yaw, {})
+				// Past the hit grace after the last switch (F back at the end of the previous size).
+				run(client, &now, &k_index, 30, delta, start, yaw, {})
 				testing.expect(t, spectate_render_shot(t, client, "first_person", w, h, delta) > 8, "first person is a real frame")
+				// The crosshair with Always Show while the followed player is
+				// scoped in, and a hitmarker from his hit on the opponent (22).
+				{
+					saved_crosshair, saved_aim := client.crosshair_settings, spec.aim
+					client.crosshair_settings.toggles[.ALWAYS_SHOW] = true
+					client.hitmarker_settings = client_settings_defaults().hitmarker
+					spectate_test_do_damage(client, now, 22, 60, headshot = true)
+					spectate_render_frame(client, now, 0.03, {})
+					testing.expect(t, client.spectator.hits_shown > 0 && client.hit_marker.active, "the followed player's hit shows a marker")
+					spec.aim = 1
+					testing.expect(t, spectator_crosshair_opacity(client, client_crosshair_values(client)) == 1, "Always Show keeps the crosshair while scoped")
+					testing.expect(t, spectate_render_shot(t, client, "crosshair_hitmarker", w, h, 0.03) > 8)
+					client.crosshair_settings, spec.aim = saved_crosshair, saved_aim
+					client.hit_marker = {revision = client.hit_marker.revision}
+				}
 				// HUD with the scoreboard held.
 				client.scoreboard_open = true
 				testing.expect(t, spectate_render_shot(t, client, "hud_scoreboard", w, h, delta) > 8)

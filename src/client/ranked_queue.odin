@@ -432,10 +432,16 @@ ranked_account_token :: proc(client: ^Client) -> string {
 	return client.access.token
 }
 
+// Ranked forbids spectators ("Spectating Disabled in Ranked"), so the
+// spectator build (KRODIN_SPECTATOR) has no ranked queue at all: every entry
+// point (menu action, queue start, rejoin, match join, tick) checks this.
+ranked_allowed :: proc() -> bool { return !KRODIN_SPECTATOR }
+
 // startMatchmaking. Returns false without opening a socket when there is no
 // account token.
 ranked_queue_begin :: proc(client: ^Client) -> bool {
 	q := &client.ranked
+	if !ranked_allowed() { ranked_log("Ranked is not available in the spectator build; no socket opened."); return false }
 	if q.phase != .IDLE || q.job != nil { return false }
 	token := ranked_account_token(client)
 	if len(token) == 0 {
@@ -470,6 +476,7 @@ ranked_queue_begin :: proc(client: ^Client) -> bool {
 // Opening the ranked menu: Krunker resets the REJOIN offer and asks whether
 // a ranked match is already running.
 ranked_open :: proc(client: ^Client) {
+	if !ranked_allowed() { return }
 	q := &client.ranked
 	q.rejoin = false
 	token := ranked_account_token(client)
@@ -504,6 +511,7 @@ ranked_join_live :: proc(client: ^Client, url: string) -> bool {
 // game socket, then a join to the ranked server.
 ranked_join_server :: proc(client: ^Client, server: string, join: proc(^Client, string) -> bool = ranked_join_live) -> bool {
 	q := &client.ranked
+	if !ranked_allowed() { ranked_log("Ranked is not available in the spectator build; not joining."); return false }
 	token := ranked_account_token(client)
 	if len(token) == 0 {
 		// Keep the server so REJOIN works after logging in again.
@@ -572,6 +580,8 @@ ranked_handle_message :: proc(client: ^Client, text: string) {
 }
 
 ranked_tick :: proc(client: ^Client, join: proc(^Client, string) -> bool = ranked_join_live) {
+	// The spectator build never starts a queue, check or join.
+	if !ranked_allowed() { return }
 	q := &client.ranked
 	ranked_reap(q)
 	if check := q.check; check != nil && intrinsics.atomic_load(&check.done) {
@@ -614,6 +624,7 @@ ranked_tick :: proc(client: ^Client, join: proc(^Client, string) -> bool = ranke
 
 // The ranked button: REJOIN, FIND MATCH or CANCEL.
 ranked_queue_action :: proc(client: ^Client, join: proc(^Client, string) -> bool = ranked_join_live) {
+	if !ranked_allowed() { return }
 	q := &client.ranked
 	if q.rejoin && len(q.rejoin_url) > 0 {
 		server := strings.clone(q.rejoin_url); defer delete(server)

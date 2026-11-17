@@ -9,10 +9,10 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, RANKED }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE, REMEMBER_SECONDARY, CHAT_MODE, CHAT_VALUE, CHAT_TOGGLE, SPECTATOR_SMOOTHING, SPECTATOR_TOGGLE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE, REMEMBER_SECONDARY, CHAT_MODE, CHAT_VALUE, CHAT_TOGGLE, SPECTATOR_SMOOTHING, SPECTATOR_TOGGLE, SPECTATOR_ON_DEATH }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, NET_RATE, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION, CHAT_MODE }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, NET_RATE, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION, CHAT_MODE, SPECTATOR_ON_DEATH }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
@@ -590,6 +590,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .NET_RATE: index = net_rate_index(state.settings_draft.net_rate)
 		case .RANKED_REGION: index = clamp(state.ranked_region, 0, RANKED_ALL_REGIONS_CHOICE)
 		case .CHAT_MODE: index = clamp(state.settings_draft.hud.chat.mode, 0, 2)
+		case .SPECTATOR_ON_DEATH: index = clamp(state.settings_draft.spectator.on_death, 0, i32(max(Spectator_On_Death)))
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
 		return {}
@@ -763,9 +764,9 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			spectator := &state.settings_draft.spectator
 			switch Spectator_Toggle(control.action.index) {
 			case .VIEWMODEL: spectator.hide_viewmodel = !spectator.hide_viewmodel
-			case .FOLLOW_KILLER: spectator.no_follow_killer = !spectator.no_follow_killer
 			}
 			return {}
+		case .SPECTATOR_ON_DEATH: state.settings_draft.spectator.on_death = clamp(control.action.index, 0, i32(max(Spectator_On_Death))); return {}
 		case .MENU_FPS_LIMIT: state.settings_draft.menu_fps_limit = MENU_FPS_LIMITS[clamp(control.action.index, 0, len(MENU_FPS_LIMITS)-1)]; return {}
 		case .NET_RATE: state.settings_draft.net_rate = shared.NET_RATES[clamp(control.action.index, 0, len(shared.NET_RATES)-1)]; return {}
 		case .GAME_FPS_LIMIT: state.settings_draft.game_fps_limit = game_fps_limit_from_value(control.action.value); return {}
@@ -855,6 +856,8 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		state.settings_dropdown, state.pressed, state.focus = .NONE, 0, clay.ID("RankedRegion").id
 		return control.action
 	}
+	// The spectator build has no ranked menu (ranked forbids spectators).
+	if KRODIN_SPECTATOR && (control.action.kind == .RANKED_OPEN || control.action.kind == .RANKED_QUEUE || control.action.kind == .RANKED_REGION || control.action.kind == .RANKED_MAP) { return {} }
 	if control.action.kind == .RANKED_OPEN {
 		if state.page == .HOME { state.return_focus = control.id.id }
 		state.page, state.focus, state.pressed = .RANKED, 0, 0
@@ -896,7 +899,7 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .CLASSES { container = "ClassPicker" }
 	}
 	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .REMEMBER_SECONDARY || control.action.kind == .SPECTATOR_TOGGLE || control.action.kind == .CHAT_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .NET_RATE || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION || control.action.kind == .CHAT_MODE { container = "SettingsOptions" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .NET_RATE || control.action.kind == .SPECTATOR_ON_DEATH || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION || control.action.kind == .CHAT_MODE { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))

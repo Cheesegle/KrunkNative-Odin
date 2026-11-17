@@ -180,6 +180,10 @@ Krunker_World_State :: struct {
 	hit_revision: u64,
 	hit_lethal: bool,
 	hit_headshot: bool,
+	// DO_DAMAGE's first value, the damaged player's SID (-1 when bare: an
+	// object, spawnable or nuke). A spectator gets it for the followed
+	// player's hits (spectator.odin).
+	hit_victim_sid: i32,
 	// CHANGE_HEALTH drops of the local player with the attacker's x/z, for
 	// Krunker's hit indicators (browser JP).
 	damage_revision: u64,

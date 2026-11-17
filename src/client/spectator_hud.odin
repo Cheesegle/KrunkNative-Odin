@@ -4,6 +4,7 @@ import "core:fmt"
 import gl "vendor:OpenGL"
 import shared "../shared"
 import kproto "../krunker"
+import menuui "../menu"
 
 // The spectator HUD. Krunker's spectate UI shows the followed player's name
 // and health and a fake crosshair, with the player list and the scoreboard
@@ -50,9 +51,15 @@ spectator_hud_render :: proc(client: ^Client, delta: f32) {
 
 	// Fake crosshair (browser ct.fakeCross) in first person, fading with ADS.
 	if spec.mode == .FIRST_PERSON && target != nil && !client.scoreboard_open {
+		// The followed player's ADS fades it like your own, unless the
+		// crosshair settings say Always Show (or a custom opacity).
 		crosshair := client_crosshair_values(client)
-		crosshair_render(ui, crosshair, ui.width*0.5, ui.height*0.5, s, 1 - clamp(spec.aim, 0, 1))
+		crosshair_render(ui, crosshair, ui.width*0.5, ui.height*0.5, s, spectator_crosshair_opacity(client, crosshair))
 	}
+	// The followed player's hits (spectator_hits), at the centre.
+	hitmarker := client_hitmarker_values(client)
+	hit_marker_tick(&client.hit_marker, hitmarker, delta)
+	if spec.mode != .FREE { hit_marker_render(ui, client.hit_marker, hitmarker, ui.width*0.5, ui.height*0.5, s) }
 
 	// Title: who and how.
 	{
@@ -171,4 +178,11 @@ spectator_names_render :: proc(client: ^Client) {
 		ui_fill_rect(ui, {0, 0, 0, 0.5}, screen.x - bar*0.5, screen.y - 4*ui.scale, bar, 5*ui.scale)
 		ui_fill_rect(ui, SPECTATOR_HUD_HEALTH, screen.x - bar*0.5, screen.y - 4*ui.scale, bar*clamp(source.health/max_health, 0, 1), 5*ui.scale)
 	}
+}
+
+// Krunker's spectator fakeCross fades with the followed player's ADS (the
+// browser sets the reticle opacity from aimVal); Always Show and Custom
+// opacity apply as they do to your own crosshair.
+spectator_crosshair_opacity :: proc(client: ^Client, settings: menuui.Crosshair_Settings) -> f32 {
+	return menuui.crosshair_opacity(settings, 1 - clamp(client.spectator.aim, 0, 1))
 }

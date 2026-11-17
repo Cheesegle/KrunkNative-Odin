@@ -2,9 +2,11 @@ package main
 
 import "core:fmt"
 import "core:math"
+import "core:math/rand"
 import glfw "vendor:glfw"
 import shared "../shared"
 import kproto "../krunker"
+import menuui "../menu"
 
 // The spectator build: -define:KRODIN_SPECTATOR=true, bin\krodin_spectator.exe
 // (`build.bat spectator`). It joins live Krunker lobbies the way the browser
@@ -71,6 +73,11 @@ Spectator :: struct {
 	previous: Spectator_Input,
 	target_lost_at: f64,
 	pending_killer: i32,
+	// Hits by the followed player (DO_DAMAGE routed to this socket by fpSp).
+	hit_revision: u64,  // The last world.hit_revision looked at.
+	hits_shown: int,
+	switched_at: f64,   // When the followed player last changed.
+	clock: f64,         // The newest spectator_update time.
 	rejoin: bool,
 	next_enter_at: f64,
 	switches: int,
@@ -128,6 +135,7 @@ spectator_select :: proc(client: ^Client, sid: i32) {
 	spec.last_fed = 0
 	spec.target_lost_at = 0
 	spec.pending_killer = -1
+	spec.switched_at = spec.clock
 	// Start the filter with the poses already buffered for this player, so a
 	// switch shows them at once.
 	spectator_feed(client)
@@ -142,6 +150,25 @@ spectator_select :: proc(client: ^Client, sid: i32) {
 		client.krunker.spectate_target = sid
 		spectator_send_control(&client.krunker, "fpSp")
 	}
+}
+
+// Whether sid is a living player the spectator can follow.
+spectator_followable :: proc(client: ^Client, sid: i32) -> bool {
+	list: [dynamic; 64]i32
+	spectator_candidates(client, &list)
+	for candidate in list { if candidate == sid { return true } }
+	return false
+}
+
+// A random living player other than `except` (never the local spectator),
+// -1 when there is none.
+spectator_random_other :: proc(client: ^Client, except: i32) -> i32 {
+	list: [dynamic; 64]i32
+	spectator_candidates(client, &list)
+	others: [dynamic; 64]i32
+	for sid in list { if sid != except { append(&others, sid) } }
+	if len(others) == 0 { return -1 }
+	return others[rand.int_max(len(others))]
 }
 
 // Krunker's spectMode(dir): the next/previous followable player, wrapping.
@@ -165,6 +192,7 @@ spectator_set_free :: proc(client: ^Client) {
 	if client.krunker.connected && client.krunker_world.spectating {
 		client.krunker.spectate_target = -1
 		spectator_send_control(&client.krunker, "fpSp")
+		spec.switched_at = spec.clock
 	}
 }
 
@@ -181,27 +209,32 @@ spectator_feed :: proc(client: ^Client) {
 	}
 }
 
-spectator_read_input :: proc(client: ^Client, look: shared.Vec2) -> Spectator_Input {
+// Reads the spectator's keys. `read` is client_binding_down's shape (GLFW
+// key codes, mouse buttons as -(button+1)) so tests can hold keys.
+spectator_read_input :: proc(client: ^Client, look: shared.Vec2, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down) -> Spectator_Input {
 	input: Spectator_Input
-	if client.window == nil || client.chat.open || !client.mouse_state.locked { return input }
-	key :: proc(window: glfw.WindowHandle, code: i32) -> bool { return glfw.GetKey(window, code) == glfw.PRESS }
+	if client.window == nil && read == client_binding_down { return input }
+	if client.chat.open || !client.mouse_state.locked { return input }
 	w := client.window
-	input.previous_target = glfw.GetMouseButton(w, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
-	input.next = glfw.GetMouseButton(w, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS
-	input.free = key(w, glfw.KEY_F)
-	input.toggle_first = key(w, glfw.KEY_R)
-	input.names = key(w, glfw.KEY_M)
-	for n in 1 ..= 9 { if key(w, glfw.KEY_0 + i32(n)) { input.pick = i32(n) } }
+	input.previous_target = read(w, -(glfw.MOUSE_BUTTON_LEFT+1))
+	input.next = read(w, -(glfw.MOUSE_BUTTON_RIGHT+1))
+	input.free = read(w, glfw.KEY_F)
+	input.toggle_first = read(w, glfw.KEY_R)
+	input.names = read(w, glfw.KEY_M)
+	for n in 1 ..= 9 { if read(w, glfw.KEY_0 + i32(n)) { input.pick = i32(n) } }
 	input.look = look
 	input.scroll = client.spectator.scroll
 	client.spectator.scroll = 0
-	input.forward = client_action_down(client, .FORWARD, scroll = false)
-	input.back = client_action_down(client, .BACKWARD, scroll = false)
-	input.left = client_action_down(client, .LEFT, scroll = false)
-	input.right = client_action_down(client, .RIGHT, scroll = false)
-	input.up = key(w, glfw.KEY_E) || key(w, glfw.KEY_SPACE)
-	input.down = key(w, glfw.KEY_Q)
-	input.sprint = key(w, glfw.KEY_LEFT_SHIFT)
+	input.forward = client_action_down(client, .FORWARD, read, scroll = false)
+	input.back = client_action_down(client, .BACKWARD, read, scroll = false)
+	input.left = client_action_down(client, .LEFT, read, scroll = false)
+	input.right = client_action_down(client, .RIGHT, read, scroll = false)
+	// Up: Krunker's E, or Space. Down: Krunker's Q, or the rebindable
+	// "Spectator: free cam down" (default Left/Right Ctrl, Krodin-only). A
+	// spectator sends no gameplay input, so neither ever crouches or jumps.
+	input.up = read(w, glfw.KEY_E) || read(w, glfw.KEY_SPACE)
+	input.down = read(w, glfw.KEY_Q) || client_action_down(client, .SPECTATOR_DOWN, read, scroll = false)
+	input.sprint = read(w, glfw.KEY_LEFT_SHIFT) || read(w, glfw.KEY_RIGHT_SHIFT)
 	return input
 }
 
@@ -209,6 +242,9 @@ spectator_read_input :: proc(client: ^Client, look: shared.Vec2) -> Spectator_In
 spectator_begin :: proc(client: ^Client) {
 	spec := &client.spectator
 	spec.active = true
+	// Nobody followed yet (the zeroed Client would read as sid 0), so the
+	// first frame picks a player at once.
+	spec.target_sid, spec.pending_killer, spec.target_lost_at = -1, -1, 0
 	client.spawn_pending = false
 	client.in_game = true
 	if spec.follow_distance == 0 { spec.follow_distance, spec.free_speed = SPECTATOR_FOLLOW_DEFAULT, 1 }
@@ -241,6 +277,7 @@ spectator_update :: proc(client: ^Client, input: Spectator_Input, now: f64, delt
 	}
 	spec.rejoin = false
 	if !spec.active { spectator_begin(client) }
+	spec.clock = now
 	spec.smoother.strength = client.spectator_settings.smoothing
 	pressed :: proc(now, before: bool) -> bool { return now && !before }
 
@@ -255,6 +292,7 @@ spectator_update :: proc(client: ^Client, input: Spectator_Input, now: f64, delt
 				// Back on the same player: name them to the server again.
 				client.krunker.spectate_target = spec.target_sid
 				spectator_send_control(&client.krunker, "fpSp")
+				spec.switched_at = spec.clock
 			}
 		}
 		else { spectator_set_free(client) }
@@ -281,8 +319,8 @@ spectator_update :: proc(client: ^Client, input: Spectator_Input, now: f64, delt
 	}
 	spec.previous = input
 
-	// Follow the killer (Krodin-only), else the next player once the target
-	// is gone.
+	// On death (Krodin-only): about a second after the followed player dies,
+	// watch a random living player, their killer, or stay on them.
 	for kill in world.kills {
 		if kill.victim_sid == spec.target_sid && kill.killer_sid >= 0 && kill.killer_sid != kill.victim_sid { spec.pending_killer = kill.killer_sid }
 	}
@@ -291,19 +329,27 @@ spectator_update :: proc(client: ^Client, input: Spectator_Input, now: f64, delt
 	if spec.mode != .FREE {
 		if !alive {
 			if spec.target_lost_at == 0 { spec.target_lost_at = now }
-			if spec.target_sid < 0 || now - spec.target_lost_at >= SPECTATOR_RETARGET_DELAY {
-				switched := false
-				if spec.pending_killer >= 0 && !client.spectator_settings.no_follow_killer {
-					list: [dynamic; 64]i32
-					spectator_candidates(client, &list)
-					for sid in list { if sid == spec.pending_killer { spectator_select(client, sid); switched = true; break } }
+			on_death := menuui.Spectator_On_Death(menuui.spectator_settings_validate(client.spectator_settings).on_death)
+			// Stay only while they are still in the lobby; a player who left
+			// is replaced like any other.
+			stay := on_death == .STAY && source != nil && spec.target_sid >= 0
+			if !stay && (spec.target_sid < 0 || now - spec.target_lost_at >= SPECTATOR_RETARGET_DELAY) {
+				if spec.target_sid < 0 {
+					spectator_cycle(client, 1)
+				} else {
+					next: i32 = -1
+					if on_death == .KILLER && spec.pending_killer >= 0 && spectator_followable(client, spec.pending_killer) { next = spec.pending_killer }
+					if next < 0 { next = spectator_random_other(client, spec.target_sid) }
+					// Nobody else alive: keep the view until someone spawns.
+					if next >= 0 { spectator_select(client, next) }
 				}
-				if !switched { spectator_cycle(client, 1) }
 				source, target = spectator_target(client)
-				alive = source != nil && source.active && target != nil && target.active
+				alive = source != nil && source.active && !source.life_ended && target != nil && target.active
 			}
 		} else { spec.target_lost_at = 0 }
 	}
+
+	spectator_hits(client, now)
 
 	spectator_feed(client)
 	rate := source != nil && source.send_rate > 0 ? source.send_rate : 10
@@ -455,4 +501,36 @@ spectator_update_meshes :: proc(client: ^Client, target: ^shared.Player, delta: 
 	shared.player_update_visual_animations(proxy, delta)
 	player_update_meshes(proxy, false)
 	spectator_mesh_shown(proxy, !client.spectator_settings.hide_viewmodel)
+}
+
+// Hitmarkers for the followed player's hits (Krodin's hitmarker, Krunker's
+// sound). The server sends DO_DAMAGE(victim sid, damage, headshot) to each
+// socket whose specStream is the attacker (changeHealth:
+// `specStream==N.sid&&...send($e.DO_DAMAGE,h.sid,Y,J)`), and fpSp is what
+// names our stream. So a DO_DAMAGE that names a player, while we follow
+// someone, is that player's hit. Guards: none in free cam (fpSp null), none
+// within SPECTATOR_HIT_GRACE of a switch (in flight for the previous
+// stream), none naming the followed player himself (self damage), and only
+// for victims in the lobby. The spectator variant has no kill flag; the
+// victim's CHANGE_HEALTH arrives just before it, so health 0 (or a
+// KILL_PLAYER by the followed player) marks a kill.
+SPECTATOR_HIT_GRACE :: f64(0.3)
+
+spectator_hits :: proc(client: ^Client, now: f64) {
+	spec := &client.spectator
+	world := &client.krunker_world
+	if world.hit_revision == spec.hit_revision { return }
+	spec.hit_revision = world.hit_revision
+	if world.hit_revision == 0 || spec.mode == .FREE || spec.target_sid < 0 { return }
+	if world.last_hit_at - spec.switched_at < SPECTATOR_HIT_GRACE { return }
+	victim_sid := world.hit_victim_sid
+	if victim_sid < 0 || victim_sid == spec.target_sid { return }
+	victim: ^kproto.Krunker_World_Player
+	for &p in world.players { if p.sid == victim_sid { victim = &p } }
+	if victim == nil { return }
+	lethal := victim.health <= 0 || victim.life_ended
+	for kill in world.kills { if kill.victim_sid == victim_sid && kill.killer_sid == spec.target_sid { lethal = true } }
+	hit_marker_show(&client.hit_marker, client_hitmarker_values(client), lethal, world.hit_headshot)
+	spec.hits_shown += 1
+	audio_play_effect(client.audio, world.hit_headshot ? "crit_0" : "hit_0", gain = 0.7, priority = 4)
 }

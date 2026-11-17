@@ -118,7 +118,27 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
 		return client_settings_validate(client_settings_defaults())
 	}
+	client_settings_migrate_spectator(data, &settings)
 	return client_settings_validate(settings)
+}
+
+// The first spectator build saved a "Follow the killer" toggle,
+// spectator.no_follow_killer, before On death replaced it. Every save wrote
+// the toggle, so its default (false, follow the killer) is not a choice the
+// player made; both values become Random player, the new default the
+// player asked for. (true meant "the next player", whose closest
+// equivalent is also Random.) Files that already have on_death keep it.
+client_settings_migrate_spectator :: proc(data: []byte, settings: ^Client_Settings) {
+	value, err := json.parse(data, parse_integers = true)
+	if err != .None { return }
+	defer json.destroy_value(value)
+	root, ok := value.(json.Object); if !ok { return }
+	spectator_value, found := root["spectator"]; if !found { return }
+	spectator, is_object := spectator_value.(json.Object); if !is_object { return }
+	if _, has_new := spectator["on_death"]; has_new { return }
+	if _, has_old := spectator["no_follow_killer"]; has_old {
+		settings.spectator.on_death = i32(menuui.Spectator_On_Death.RANDOM)
+	}
 }
 
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {

@@ -46,6 +46,7 @@ play_reason :: proc(view: View) -> string {
 
 build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32) -> clay.ClayArray(clay.RenderCommand) {
 	clay.SetCurrentContext(state.ctx)
+	if KRODIN_SPECTATOR && state.page == .RANKED { state.page = .HOME }
 	prepare_settings(state, view)
 	clay.SetLayoutDimensions({width, height})
 	clay.SetPointerState(input.pointer, input.down)
@@ -84,7 +85,10 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 		}
 		if clay.UI(clay.ID("Footer"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(200*s)}}}) { button(state, "Session / Invite", "Session", {index = i32(Page.SESSION)}) }
-			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Ranked", "Ranked", {kind = .RANKED_OPEN}) }
+			// Ranked forbids spectators: the spectator build has no Ranked entry.
+			if !KRODIN_SPECTATOR {
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Ranked", "Ranked", {kind = .RANKED_OPEN}) }
+			}
 			spacer()
 			text("Tab  Navigate     Enter  Select     Esc  Back", 16, s, MUTED)
 			spacer()
@@ -110,7 +114,7 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 					case .SETTINGS, .CONTROLS:
 					case .CLASSES: class_picker(state, view)
 					case .LOADOUT: class_loadout(state, view)
-					case .RANKED: ranked_page(state, view)
+					case .RANKED: if !KRODIN_SPECTATOR { ranked_page(state, view) }
 					case .SESSION:
 						text("Session / Invite", 32, s)
 						text(view.lobby_name, 20, s, MUTED)
