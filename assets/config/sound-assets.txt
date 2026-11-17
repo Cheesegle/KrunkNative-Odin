@@ -25,7 +25,6 @@ sound/swsh_def_1.mp3
 sound/step_0.mp3
 sound/step_1.mp3
 sound/jump_0.mp3
-sound/land_1.mp3
 sound/slide_0.mp3
 sound/reload_1.mp3
 sound/select_0.mp3

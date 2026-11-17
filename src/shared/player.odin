@@ -779,6 +779,22 @@ player_update_recoil :: proc(player: ^Player, delta: f32) {
 	}
 }
 
+// Krunker's resetStep plays the landing step when a player who was not on the
+// ground comes down onto something: !(wasOnGround || oldY <= y) with a
+// non-zero falling velocity. Krodin also skips falls slower than 0.02 units/ms
+// (about 130 ms of free fall, a drop of ~1.3 units) so a single tick off the
+// ground on stairs or a ramp edge does not sound like a landing.
+PLAYER_LAND_MIN_FALL_SPEED :: 0.02
+
+player_landed :: proc(was_grounded, on_ground: bool, previous_y_velocity: f32) -> bool {
+	return !was_grounded && on_ground && previous_y_velocity < -PLAYER_LAND_MIN_FALL_SPEED
+}
+
+// Remote players arrive as poses without velocity: any return to the ground.
+player_remote_landed :: proc(was_grounded, on_ground: bool) -> bool {
+	return !was_grounded && on_ground
+}
+
 // Fresh client prediction may play movement effects. Reconciliation replays
 // leave predict_effects false so snapshots cannot restart the same animation.
 player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool, predict_effects: bool = false, predict_combat: bool = false) {
@@ -793,7 +809,7 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			if previous_weapon != player.loadout_index { player_emit_presentation(player, .SWAP) }
 			if previous_reload <= 0 && player.reload_timer > 0 { player_emit_presentation(player, .RELOAD) }
 			if was_grounded && !player.on_ground && player.velocity.y > 0 || !was_wall_jump && player.did_wall_jump { player_emit_presentation(player, .JUMP) }
-			if !was_grounded && player.on_ground && previous_y_velocity < -0.02 { player_emit_presentation(player, .LAND) }
+			if player_landed(was_grounded, player.on_ground, previous_y_velocity) { player_emit_presentation(player, .LAND) }
 			if previous_slide <= 0 && player.slide_timer > 0 { player_emit_presentation(player, .SLIDE) }
 		}
 	}
