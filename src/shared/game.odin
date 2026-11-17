@@ -27,6 +27,12 @@ game_init_match :: proc(game: ^Game) {
 	game.match.time_remaining = max(0.0, f32(game.config.game_time) * 60.0)
 	game.match.objective.active_object_index = -1
 	game.match.objective.active_zone = -1
+	// Krunker starts every game with flippedSpawns=!1 and a freshly loaded
+	// map.spawns order.
+	game.flipped_spawns = false
+	game.spawn_comp_wait = false
+	clear(&game.spawn_order)
+	game.spawn_order_map = nil
 
 	if game.map_inst == nil {
 		return
@@ -88,8 +94,14 @@ game_resolve_round :: proc(game: ^Game, round_winner: i32) {
 
 	rounds_target := max(u32(1), game.match.rounds_to_win)
 	if winner > 0 && game.match.round_wins[winner] >= rounds_target {
-		game.match.phase = .ENDED
-		game.move_lock = true
+		game_end_match(game)
+		return
+	}
+	// Krunker's endGame only plays another round while roundCount > 0
+	// (gamRounds - 1, so 0 by default); a draw in the last round ends the game.
+	// Overtime on a tie is Krunker's noDraws option, which pubs leave off.
+	if winner == 0 && rounds_target <= 1 {
+		game_end_match(game)
 		return
 	}
 
@@ -106,11 +118,18 @@ game_resolve_round :: proc(game: ^Game, round_winner: i32) {
 
 	game_reset_objective(game)
 
+	// Krunker's round end flips the spawns (this.flippedSpawns=!this.flippedSpawns)
+	// and starts the intermission wait timer ({comp:!0, msg:"intermission "}),
+	// during which players respawn on comp spawns. Krodin respawns at once, so
+	// the comp wait covers just this respawn.
+	game.flipped_spawns = !game.flipped_spawns
+	game.spawn_comp_wait = true
 	for player in game.players {
 		if player != nil {
 			player_spawn(player, player.class_index)
 		}
 	}
+	game.spawn_comp_wait = false
 }
 
 game_rotate_objective :: proc(game: ^Game) {
@@ -183,14 +202,42 @@ game_update_objective :: proc(game: ^Game, delta: f32) {
 	}
 }
 
+// Krunker's endTimer (config endTimer: 25e3 ms): how long the end screen
+// stays up before update() calls setGameState(ENDED) and initNewGameAsync().
+GAME_END_TIMER :: 25.0
+
+// Krunker's endGame: lock movement and start the end timer.
+game_end_match :: proc(game: ^Game) {
+	game.match.phase = .ENDED
+	game.match.overtime = false
+	game.move_lock = true
+	game.end_timer = GAME_END_TIMER
+	game.new_game_pending = false
+}
+
+// The end timer runs out: the owner of the game (the client for Local
+// Practice) starts the next one with game_init, as initNewGameAsync does.
+game_update_intermission :: proc(game: ^Game, delta: f32) {
+	if game.match.phase != .ENDED || game.end_timer <= 0 {
+		return
+	}
+	game.end_timer = max(0.0, game.end_timer - delta)
+	if game.end_timer == 0 {
+		game.new_game_pending = true
+	}
+}
+
 game_update_match :: proc(game: ^Game, delta: f32) {
 	if game.match.phase == .ENDED {
+		game_update_intermission(game, delta)
 		return
 	}
 
 	if game.match.phase == .WARMUP {
 		game.match.phase_remaining = max(0.0, game.match.phase_remaining - delta)
 		if game.match.phase_remaining == 0 {
+			// Krunker's warmup timer trigger: warmupReset() then IN_PROGRESS.
+			if game_is_authority(game) { game_warmup_reset(game) }
 			game.match.phase = .LIVE
 		}
 		return
@@ -205,7 +252,11 @@ game_update_match :: proc(game: ^Game, delta: f32) {
 	}
 
 	if game.match.time_remaining == 0 {
-		if game.match.team_scores[1] == game.match.team_scores[2] || game.match.objective.contested {
+		// Krunker's update calls endGame as soon as gameTimer reaches 0. Krodin
+		// only holds the clock (its own rule) while both teams contest the
+		// objective; a tie otherwise resolves as a draw instead of an overtime
+		// that a solo Local Practice player could never end.
+		if game.match.objective.contested {
 			game.match.overtime = true
 		} else {
 			game_resolve_round(game, 0)
@@ -238,6 +289,7 @@ game_configure :: proc(game: ^Game, config: ^Game_Config, maps: []^Map, modes: [
 game_init :: proc(game: ^Game, map_index, mode_index: i32, is_local: bool) {
 	game.ready = false
 	game.is_local = is_local
+	game.server_hits_players = false
 
 	game_clear_players(game)
 
@@ -297,6 +349,8 @@ game_init :: proc(game: ^Game, map_index, mode_index: i32, is_local: bool) {
 
 	game.ready = true
 	game.move_lock = false
+	game.end_timer = 0
+	game.new_game_pending = false
 	game_init_match(game)
 }
 
@@ -387,6 +441,9 @@ game_destroy :: proc(game: ^Game) {
 	delete(game.presentation_events)
 	delete(game.projectiles)
 	delete(game.objective_indices)
+	delete(game.spawn_order)
+	game.spawn_order = nil
+	game.spawn_order_map = nil
 
 	if game.mode != nil {
 		mode_fini(game.mode)

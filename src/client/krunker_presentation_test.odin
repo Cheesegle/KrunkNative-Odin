@@ -12,6 +12,7 @@ when ODIN_TEST {
 		map_inst^ = {death_y = -1000, config = {speed = {1, 1, 1}, air_accel = 1}}
 		shared.game_configure(&client.game, nil, []^shared.Map{map_inst}, nil, nil, nil)
 		shared.game_init(&client.game, 0, 0, false)
+		client.game.server_hits_players = true // As krunker_client_load_world_map sets it.
 		client.me = shared.player_init(&client.game)
 		shared.game_players_add(&client.game, client.me)
 		shared.player_spawn(client.me, 2)
@@ -42,7 +43,7 @@ when ODIN_TEST {
 		frame := shared.Input{delta = 0.007, move_dir = -1, shoot = true}
 		krunker_client_predict_input(&client, &frame)
 		testing.expect(t, client.me.ammo[0] == 23 && client.me.shot_seq == 1, "live firing must consume a round immediately")
-		if !testing.expect(t, len(client.game.impacts) == 1 && client.game.impacts[0].kind == .Player, "local fire must generate a resolved tracer path") { return }
+		if !testing.expect(t, len(client.game.impacts) == 1 && client.game.impacts[0].kind == .Miss, "local fire must generate a tracer path, through the player as in the browser") { return }
 		testing.expect(t, victim.health == 100 && victim.active, "local shot presentation must never apply server-owned damage")
 		source := kproto.Krunker_World_Player{position = client.me.position, weapon_slot = 0, has_ack = true, ack_seq = 12, sync_revision = 1}
 		for _ in 0..<3 {
@@ -74,6 +75,78 @@ when ODIN_TEST {
 		before := len(client.game.impacts)
 		shared.player_melee(client.me, true)
 		testing.expect(t, len(client.game.impacts) == before && victim.health == 100, "predicted knives must create no bullet effects or damage")
+	}
+
+	// Krunker's browser shoots the same ray as its server, but its players have
+	// no stateHistory (only the server's storeState writes it), so fetchState
+	// returns nothing and the browser's tracer never stops at a player. Live
+	// predicted shots must pass through players; native prediction still stops.
+	@(test)
+	krunker_live_predicted_shots_pass_through_players :: proc(t: ^testing.T) {
+		client: Client
+		map_inst: shared.Map
+		krunker_presentation_fixture(&client, &map_inst)
+		defer krunker_presentation_cleanup(&client)
+		victim := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, victim)
+		shared.player_spawn(victim, 2)
+		victim.position, victim.scale, victim.height = {0, 0, -100}, 20, 100
+		client.me.position, client.me.direction = {}, {}
+		shared.player_shoot(client.me, true)
+		if !testing.expect(t, len(client.game.impacts) == 1) { return }
+		live := client.game.impacts[0]
+		range := client.me.weapon.range
+		testing.expect(t, live.kind == .Miss && !live.hit && abs(live.position.z+range) < 0.5,
+			"a live predicted bullet must reach its full range through the player, as the browser's does")
+		testing.expect(t, victim.health == 100)
+		client.game.server_hits_players = false
+		shared.player_shoot(client.me, true)
+		if !testing.expect(t, len(client.game.impacts) == 2) { return }
+		native := client.game.impacts[1]
+		testing.expect(t, native.kind == .Player && native.hit && native.position.z > -100,
+			"native predicted shots still stop at Krodin's player boxes")
+	}
+
+	// k record value 6 is the server's stepVal. The browser interpolates it
+	// like the position (stepVal = m.s + (g.s - m.s) * p) and plays a remote
+	// footstep whenever its sign changes (posStep). Deriving it locally from
+	// the displacement put the stride, and the drawn complexHitboxes, out of
+	// phase with the server's.
+	@(test)
+	krunker_remote_stride_follows_server_step :: proc(t: ^testing.T) {
+		client: Client
+		map_inst: shared.Map
+		krunker_presentation_fixture(&client, &map_inst)
+		defer krunker_presentation_cleanup(&client)
+		client.game.presentation_enabled = true
+		peer := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, peer)
+		shared.player_spawn(peer, 2)
+		peer.uid = 8
+		record := []kproto.Krunker_Msgpack_Value{i64(8), i64(0), i64(0), i64(-100), i64(0), i64(0), f64(-0.2), true, i64(0), i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(20)}
+		packet := []kproto.Krunker_Msgpack_Value{"k", record, i64(10), i64(1000)}
+		client.krunker_world.received_at = 1
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		record[1], record[6], packet[3], client.krunker_world.received_at = i64(4), f64(0.6), i64(1100), 1.1
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		steps :: proc(game: ^shared.Game) -> (n: int) {
+			for event in game.presentation_events { if event.kind == .STEP && event.uid == 8 { n += 1 } }
+			return
+		}
+		krunker_client_interpolate_remotes(&client, 1.15, 0.007)
+		testing.expectf(t, abs(peer.step_val-0.2) < 1e-5 && abs(peer.position.x-2) < 1e-4, "stepVal -0.2 -> 0.6 at p = 0.5 is 0.2, got %v", peer.step_val)
+		testing.expect(t, steps(&client.game) == 1, "crossing zero upward plays one footstep")
+		pose := shared.krunker_hurtbox_pose(peer, true)
+		testing.expect(t, abs(pose.step_val-0.2) < 1e-5, "the drawn hurtboxes use the server's stride phase")
+		krunker_client_interpolate_remotes(&client, 1.16, 0.007)
+		testing.expect(t, abs(peer.step_val-0.28) < 1e-5 && steps(&client.game) == 1, "no footstep without a sign change")
+		// Standing still: the server pulls stepVal back toward zero, which a
+		// displacement-driven stride never did.
+		record[6], packet[3], client.krunker_world.received_at = f64(-0.5), i64(1200), 1.2
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		krunker_client_interpolate_remotes(&client, 1.29, 0.007)
+		testing.expectf(t, abs(peer.step_val-(-0.39)) < 1e-5 && abs(peer.position.x-4) < 1e-4, "0.6 -> -0.5 at p = 0.9, got %v", peer.step_val)
+		testing.expect(t, steps(&client.game) == 2, "crossing zero downward plays the next footstep")
 	}
 
 	@(test)

@@ -17,6 +17,7 @@ import "core:strings"
 Krunker_Key :: enum {
 	UPDATE_RATE,
 	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS, HEALTH_COL_T, HEALTH_COL_E,
+	CHAT_SHOW, CHAT_FILTER, CHAT_MESSAGES, CHAT_OPACITY, CHAT_BG_OPACITY, CHAT_TEXT_OUTLINE, CHAT_HEIGHT, CHAT_TIMER,
 	CROSSHAIR_TYPE, CROSSHAIR_OPACITY, CROSSHAIR_USE_OPACITY, CROSSHAIR_ALWAYS, CROSSHAIR_COLOR, CROSSHAIR_SHADOW,
 	CROSSHAIR_SHADOW_THICKNESS, CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, CROSSHAIR_GAP, CROSSHAIR_DOT,
 	HITMARKER_SHOW, HITMARKER_COLOR, HITMARKER_KILL_COLOR, HITMARKER_OPACITY, HITMARKER_LENGTH, HITMARKER_THICKNESS, HITMARKER_SPACING, HITMARKER_ANIM_SIZE, HITMARKER_FADE,
@@ -24,7 +25,7 @@ Krunker_Key :: enum {
 	SOUND, GUNS_VOLUME, PLAYER_VOLUME, UI_VOLUME,
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
-	SATURATION, FEED_LIMIT,
+	SATURATION, FEED_LIMIT, SCOPE_BORDERS,
 	SHOW_HIT_INDICATORS, HIT_INDICATOR_COLOR, USE_DAMAGE_OVERLAY,
 }
 Krunker_Value_Kind :: enum { NUMBER, SWITCH, COLOR }
@@ -42,6 +43,15 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	// Nameplate health colors (krunkbox game.min.js `healthColT:{name:`; R8=["#9eeb56","#eb5656"]).
 	.HEALTH_COL_T = {"healthColT", .COLOR, 0x9eeb56, 0, 0},
 	.HEALTH_COL_E = {"healthColE", .COLOR, 0xeb5656, 0, 0},
+	// Chat category (krunkbox current.analysis.js near line 252040).
+	.CHAT_SHOW = {"shwChat", .NUMBER, 0, 0, 2}, // 0 Always, 1 While Focused, 2 Off.
+	.CHAT_FILTER = {"chatFilter", .SWITCH, 0, 0, 0},
+	.CHAT_MESSAGES = {"showMessages", .SWITCH, 1, 0, 0},
+	.CHAT_OPACITY = {"chatOp", .NUMBER, 1, 0, 1},
+	.CHAT_BG_OPACITY = {"chatBGOp", .NUMBER, 0.2, 0, 1},
+	.CHAT_TEXT_OUTLINE = {"chatTextOutline", .SWITCH, 0, 0, 0},
+	.CHAT_HEIGHT = {"chatHeight", .NUMBER, 2.5, 0, 5},
+	.CHAT_TIMER = {"chatTimer", .NUMBER, 0, 0, 10},
 	.CROSSHAIR_TYPE = {"crosshairSho", .NUMBER, 1, 0, 5}, // 1 Dynamic ... 5 Precision.
 	.CROSSHAIR_OPACITY = {"crosshairOpacity", .NUMBER, 1, 0, 1},
 	.CROSSHAIR_USE_OPACITY = {"crosshairUseOpacity", .SWITCH, 0, 0, 0},
@@ -94,6 +104,8 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.LEFT_HAND = {"leftHand", .SWITCH, 0, 0, 0},
 	.SATURATION = {"saturationn", .NUMBER, 1, 0, 3}, // Krunker's spelling.
 	.FEED_LIMIT = {"feedLimit", .NUMBER, KILL_FEED_DEFAULT_LIMIT, 1, KILL_FEED_MAX_LIMIT},
+	// Scope window (krunkbox game.min.js `scopeBorders:{name:"settings.mods.borders"`, val:!0).
+	.SCOPE_BORDERS = {"scopeBorders", .SWITCH, 1, 0, 0},
 	// Damage feedback (krunkbox current.analysis.js near lines 251334 and 254710).
 	.SHOW_HIT_INDICATORS = {"showHitInd", .SWITCH, 1, 0, 0},
 	.HIT_INDICATOR_COLOR = {"hitColor", .COLOR, 0xff3f3f, 0, 0},
@@ -118,6 +130,7 @@ KRUNKER_BINDS := #partial [Binding_Action]Krunker_Bind{
 	.AIM = {"aim1Key", 10003, 221}, .FIRE = {"shoot1Key", 10001, 220},
 	.RELOAD = {"reloadKey", 82, -1}, .INSPECT = {"inspKey", 88, -1},
 	.SECONDARY = {"swapKey", 69, -1}, .MELEE = {"meleeKey", 81, -1},
+	.CHAT = {"chatKey", 13, -1},
 }
 KRUNKER_MOVE_ACTIONS := [4]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT}
 KRUNKER_MOVE_DEFAULTS := [4]i64{87, 83, 65, 68}
@@ -350,8 +363,13 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string, exclude:
 	draft.game_fps_limit = game_fps_limit_from_value(f32(numbers[.UPDATE_RATE]))
 	draft.trails = {hide_others = !switches[.SHOW_TRAILS], hide_yours = !switches[.YOUR_TRAILS]}
 	draft.hud.hide_kill_feed = !switches[.SHOW_KILLS]
+	draft.hud.hide_scope_borders = !switches[.SCOPE_BORDERS]
 	draft.hud.kill_feed_limit = i32(clamp(math.round(numbers[.FEED_LIMIT]), 1, KILL_FEED_MAX_LIMIT))
 	draft.hud.healthbar_colors = {enemy = colors[.HEALTH_COL_E], team = colors[.HEALTH_COL_T]}
+	draft.hud.chat = chat_settings_validate(Chat_Settings{
+		mode = i32(math.round(numbers[.CHAT_SHOW])), filter = switches[.CHAT_FILTER], hide_messages = !switches[.CHAT_MESSAGES], text_outline = switches[.CHAT_TEXT_OUTLINE],
+		opacity = f32(numbers[.CHAT_OPACITY]), background = f32(numbers[.CHAT_BG_OPACITY]), height = f32(numbers[.CHAT_HEIGHT]), timer = f32(numbers[.CHAT_TIMER]),
+	})
 	if .SOUND not_in exclude {
 		draft.audio_volumes[0] = f32(numbers[.SOUND])
 		draft.audio_volumes[2] = f32(numbers[.PLAYER_VOLUME])
@@ -447,7 +465,7 @@ krunker_import_controls :: proc(bindings: ^Bindings, controls: json.Object, resu
 			} else { result.ignored += 1 }
 			continue outer
 		}
-		result.ignored += 1 // Spray, chat, toggles and other unsupported binds.
+		result.ignored += 1 // Spray, voice chat, toggles and other unsupported binds.
 	}
 }
 
@@ -493,8 +511,12 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
 	numbers[.UPDATE_RATE] = f64(game_fps_limit_validate(values.game_fps_limit))
 	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))
+	switches[.SCOPE_BORDERS] = !values.hud.hide_scope_borders
 	healthbar_colors := healthbar_colors_validate(values.hud.healthbar_colors)
 	colors[.HEALTH_COL_E], colors[.HEALTH_COL_T] = healthbar_colors.enemy, healthbar_colors.team
+	chat := chat_settings_validate(values.hud.chat)
+	numbers[.CHAT_SHOW], switches[.CHAT_FILTER], switches[.CHAT_MESSAGES], switches[.CHAT_TEXT_OUTLINE] = f64(chat.mode), chat.filter, !chat.hide_messages, chat.text_outline
+	numbers[.CHAT_OPACITY], numbers[.CHAT_BG_OPACITY], numbers[.CHAT_HEIGHT], numbers[.CHAT_TIMER] = f64(chat.opacity), f64(chat.background), f64(chat.height), f64(chat.timer)
 
 	builder := strings.builder_make(allocator)
 	strings.write_byte(&builder, '{')

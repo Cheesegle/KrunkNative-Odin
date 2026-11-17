@@ -66,12 +66,27 @@ Krunker_WS_State :: struct {
 	acked_ramp_fix: f32,
 	acked_has_ramp_fix: bool,
 	input_sequence: i32,
+	// An l ACK at or above input_sequence names an id this life never sent
+	// (the previous life's ACK, or the server's pre-input ACK after start).
+	stale_ack_logged: bool,
+	// Krodin's own ghost watchdog (Krunker has no equivalent): the newest
+	// accepted ACK, when a q was first sent without ACK progress since, and
+	// when the watchdog last forced a reset.
+	ghost_ack: i32,
+	ghost_ack_seen: bool,
+	ghost_armed_at: f64,
+	ghost_fired_at: f64,
 	input_logged: int,
 	heartbeat_logged: int,
 	snapshots_received: int,
 	server_error: string,
 	auth_rejected: bool,
+	// Chat messages waiting for the socket, sent in order after control packets.
+	chat_outbox: [dynamic]Krunker_Chat_Outgoing,
 }
+
+Krunker_Chat_Outgoing :: struct { text: string, team: bool }
+Krunker_Send_Result :: enum { SENT, AGAIN, FAILED }
 
 krunker_ws_set_status :: proc(client: ^Client, text: string) {
 	delete(client.join_status)
@@ -368,6 +383,47 @@ krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
 	return krunker_ws_send_internal(state, opcode, true)
 }
 
+// One complete binary frame. AGAIN means nothing was sent; retry later.
+krunker_ws_send_bytes :: proc(state: ^Krunker_WS_State, packet: []byte) -> Krunker_Send_Result {
+	sent: c.size_t
+	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
+	if code == .E_AGAIN && sent == 0 { return .AGAIN }
+	if code != .E_OK || int(sent) != len(packet) {
+		kproto.network_log("chat", fmt.tprintf("ERROR ct curl=%v sent=%d expected=%d", code, sent, len(packet)))
+		return .FAILED
+	}
+	return .SENT
+}
+
+krunker_ws_queue_chat :: proc(state: ^Krunker_WS_State, text: string, team: bool) {
+	clean := kproto.krunker_chat_clean_outgoing(text)
+	if len(clean) == 0 { return }
+	append(&state.chat_outbox, Krunker_Chat_Outgoing{strings.clone(clean), team})
+}
+
+// Sends queued chat as CHAT_MESSAGE ["ct", tab, text]. Control packets queued
+// earlier go first, and each send takes the next shared trailer counter only
+// once it is fully written. Only lengths are logged, never chat text.
+krunker_ws_flush_chat :: proc(state: ^Krunker_WS_State, send: proc(^Krunker_WS_State, []byte) -> Krunker_Send_Result = krunker_ws_send_bytes) -> bool {
+	for len(state.chat_outbox) > 0 {
+		if len(state.pending) > 0 || !state.connected { return true }
+		item := state.chat_outbox[0]
+		next := kproto.krunker_msgpack_counter_next(state.ah_num, kproto.KRUNKER_CHAT_SEND_OPCODE)
+		packet, ok := kproto.krunker_chat_encode(item.text, item.team, next)
+		if ok {
+			result := send(state, packet)
+			delete(packet)
+			if result == .AGAIN { return true }
+			if result == .FAILED { return false }
+			state.ah_num = next
+			kproto.network_log("chat", fmt.tprintf("SENT ct tab=%d text_bytes=%d counter=%d", item.team ? 1 : 0, len(item.text), next))
+		}
+		delete(item.text)
+		ordered_remove(&state.chat_outbox, 0)
+	}
+	return true
+}
+
 krunker_ws_flush_pending :: proc(state: ^Krunker_WS_State) -> bool {
 	for len(state.pending) > 0 {
 		opcode := state.pending[0]
@@ -473,7 +529,7 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				krunker_ws_set_status(client, "Lobby ready. Choose a team and class, then enter game.")
 			case "start":
 				kproto.network_log("spawn", fmt.tprintf("server start received; local_sid=%d players=%d; waiting for renderer handoff", client.krunker_world.local_sid, len(client.krunker_world.players)))
-				state.input_sequence = max(state.input_sequence, 13)
+				krunker_ws_reset_input_for_start(client)
 				if !state.spawned { krunker_ws_set_status(client, "Server confirmed entry; waiting for local player position...") }
 			case "rds", "obj", "gsc", "lkt", "ulm":
 				world := &client.krunker_world
@@ -521,6 +577,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				client_selection_status(client, reason)
 				kproto.network_log("spawn", fmt.tprintf("entry rejected; server_args=%v", packet[1:]))
 				krunker_ws_set_status(client, reason)
+			case "ch":
+				krunker_client_receive_chat(client, packet)
 			case "chi":
 				// Localized server chat can explain a subsequent argumentless fe.
 				kproto.network_log("server-notice", fmt.tprintf("localized_args=%v", packet[1:]))
@@ -545,6 +603,74 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 		}
 		if applied { krunker_client_sync_world(client) }
 	}
+}
+
+// Krunker's START handler (krunkbox u3e) calls St.reset(), which sets isn=0
+// and clears tmpInpts, and clears every pending input field: the reset flag
+// (eR=0), the first input id (M7=null), batched durations/angles/controls
+// and shot timing. The next life's inputs therefore restart at id 0. Only
+// input state is reset; the packet counter (ah_num) continues.
+krunker_ws_reset_input_for_start :: proc(client: ^Client) {
+	state := &client.krunker
+	kproto.network_log("input", fmt.tprintf("start: restarting input ids at 0 (previous next_seq=%d unsent=%d predicted=%d reset_pending=%v)", state.input_sequence, len(state.input_commands), len(client.predicted_inputs), state.input_reset))
+	krunker_client_reset_prediction(client)
+	state.input_sequence = 0
+	state.input_reset = false
+	state.input_blocked = false
+	state.stale_ack_logged = false
+	krunker_ws_ghost_reset(state)
+}
+
+// Server ACK bookkeeping for one life. An ACK that is not below
+// input_sequence is not for anything this life sent: ignore it, so it can
+// neither drop fresh predictions nor move the sequence past queued commands
+// (krunker_input_encode_batch requires consecutive ids). Returns whether the
+// ACK applies to this life.
+krunker_ws_accept_ack :: proc(state: ^Krunker_WS_State, ack: i32) -> bool {
+	if ack >= state.input_sequence {
+		if !state.stale_ack_logged {
+			state.stale_ack_logged = true
+			kproto.network_log("input", fmt.tprintf("ignoring ACK %d for an input this life has not sent (next_seq=%d unsent=%d)", ack, state.input_sequence, len(state.input_commands)))
+		}
+		return false
+	}
+	if !state.ghost_ack_seen || ack != state.ghost_ack {
+		// ACKs are monotonic within a life, so any change is progress.
+		state.ghost_ack, state.ghost_ack_seen = ack, true
+		state.ghost_armed_at = 0
+	}
+	return true
+}
+
+KRUNKER_GHOST_STALL_SECONDS :: 1.0
+KRUNKER_GHOST_COOLDOWN_SECONDS :: 2.0
+
+krunker_ws_ghost_reset :: proc(state: ^Krunker_WS_State) {
+	state.ghost_ack, state.ghost_ack_seen = 0, false
+	state.ghost_armed_at, state.ghost_fired_at = 0, 0
+}
+
+// A q went out: start timing ACK progress if nothing is pending already.
+krunker_ws_ghost_note_sent :: proc(state: ^Krunker_WS_State, now: f64) {
+	if state.ghost_armed_at <= 0 { state.ghost_armed_at = now }
+}
+
+// Krodin's own recovery for "ghosting": the server stops acknowledging our
+// inputs (e.g. it dropped the f reset while we were dead) and never sends
+// another f. After ~1 s of sending without ACK progress while alive, the next
+// q carries the reset flag. At most once per KRUNKER_GHOST_COOLDOWN_SECONDS.
+krunker_ws_ghost_watchdog :: proc(client: ^Client, now: f64) -> bool {
+	state := &client.krunker
+	world := &client.krunker_world
+	if !state.connected || !state.spawned || !state.bootstrapped || client.me == nil || !client.me.active { state.ghost_armed_at = 0; return false }
+	if world.has_match && world.match.phase == .ENDED { state.ghost_armed_at = 0; return false }
+	if state.ghost_armed_at <= 0 || now - state.ghost_armed_at < KRUNKER_GHOST_STALL_SECONDS { return false }
+	if state.ghost_fired_at > 0 && now - state.ghost_fired_at < KRUNKER_GHOST_COOLDOWN_SECONDS { return false }
+	kproto.network_log("ghost", fmt.tprintf("no input ACK progress for %.2fs (ack=%d seen=%v next_seq=%d unsent=%d); next q carries the reset flag", now - state.ghost_armed_at, state.ghost_ack, state.ghost_ack_seen, state.input_sequence, len(state.input_commands)))
+	state.input_reset = true
+	state.ghost_fired_at = now
+	state.ghost_armed_at = 0
+	return true
 }
 
 // Encoding is side-effect free: E_AGAIN and pending control messages must keep
@@ -590,6 +716,7 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	}
 	// Keep commands intact on E_AGAIN; only successful sends consume the queue.
 	krunker_ws_input_sent(state, count, counter)
+	krunker_ws_ghost_note_sent(state, glfw.GetTime())
 	if state.input_blocked || len(state.input_commands) > kproto.KRUNKER_MAX_INPUT_BATCH {
 		kproto.network_log("input", fmt.tprintf("q send resumed/backlog: seq=%d remaining=%d", first_sequence, len(state.input_commands)))
 	}
@@ -601,6 +728,7 @@ krunker_ws_poll :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected do return
 	if !krunker_ws_flush_pending(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
+	if !krunker_ws_flush_chat(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
 	buffer: [4096]byte
 	// Drain bursts promptly instead of imposing an eight-chunk-per-frame lag.
 	// A time budget and chunk ceiling still leave time for prediction/rendering.
@@ -665,6 +793,8 @@ krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
 	delete(state.input_commands)
 	delete(state.last_server_message)
 	delete(state.server_error)
+	for item in state.chat_outbox { delete(item.text) }
+	delete(state.chat_outbox)
 	state^ = {}
 }
 
@@ -800,6 +930,7 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	state.connected = true
 	client_clear_players(client)
 	client.game.is_local = false
+	client.game.server_hits_players = true
 	state.team = 0
 	state.class_index = client.selected_class
 	state.secondary_index = client_secondary_request(client, client.selected_class)

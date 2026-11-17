@@ -596,7 +596,10 @@ packet_match_state_from_game :: proc(game: ^Game) -> Packet_Match_State {
 	state := Packet_Match_State{
 		phase               = game.match.phase,
 		map_index           = game.current_map_index,
-		time_remaining      = game.match.time_remaining,
+		// During WARMUP the match clock is not running, so time_remaining
+		// carries the warmup left (phase_remaining) for the client's
+		// countdown; the client keeps its match clock as it was.
+		time_remaining      = game.match.phase == .WARMUP ? game.match.phase_remaining : game.match.time_remaining,
 		team1_score         = game.match.team_scores[1],
 		team2_score         = game.match.team_scores[2],
 		active_object_index = game.match.objective.active_object_index,
@@ -618,7 +621,8 @@ packet_match_state_from_game :: proc(game: ^Game) -> Packet_Match_State {
 packet_apply_match_state :: proc(game: ^Game, state: ^Packet_Match_State) {
 	game.match.phase = state.phase
 	game.current_map_index = state.map_index
-	game.match.time_remaining = state.time_remaining
+	if state.phase == .WARMUP { game.match.phase_remaining = state.time_remaining }
+	else { game.match.time_remaining = state.time_remaining }
 	game.match.team_scores[1] = state.team1_score
 	game.match.team_scores[2] = state.team2_score
 	game.match.objective.active_object_index = state.active_object_index

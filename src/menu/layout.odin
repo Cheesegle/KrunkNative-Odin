@@ -159,7 +159,7 @@ lobby :: proc(state: ^State, view: View, available_width: f32) {
 		if !detail.available { text(len(detail.reason) > 0 ? detail.reason : "Unavailable in this lobby", 16, s, MUTED) }
 		if detail.limit > 0 { text(fmt.tprintf("%d / %d in use", detail.used, detail.limit), 16, s, MUTED) }
 		spacer()
-		text(fmt.tprintf("Secondary: %s", view.secondary_name), 16, s, MUTED)
+		text(secondary_summary(view), 16, s, MUTED)
 	}
 	if clay.UI(clay.ID("Lobby"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, childGap = u16(32*s), childAlignment = {x = .Center, y = .Center}}}) {
 		roster(state, view, view.teams[0])
@@ -234,7 +234,7 @@ class_picker :: proc(state: ^State, view: View) {
 		text(fmt.tprintf("%s / %s", detail.name, detail.weapon), 20, s)
 		if !detail.available { text(len(detail.reason)>0 ? detail.reason : "Unavailable in this lobby", 16, s, MUTED) }
 		if detail.limit > 0 { text(fmt.tprintf("%d / %d in use", detail.used, detail.limit), 16, s, MUTED) }
-		text(view.selection_status, 16, s, MUTED)
+		text(len(view.selection_status) == 0 && view.remember_secondary ? REMEMBER_SECONDARY_HINT : view.selection_status, 16, s, MUTED)
 	}
 }
 
@@ -277,6 +277,15 @@ class_loadout :: proc(state: ^State, view: View) {
 			}
 		}
 	}
+}
+
+// With Remember last secondary on, choosing a class skips its loadout unless
+// it is already your class; the class picker says how to reach it.
+REMEMBER_SECONDARY_HINT :: "Remembered secondaries: choose your current class again to change it"
+
+secondary_summary :: proc(view: View) -> string {
+	if view.remember_secondary && len(view.secondary_reason) == 0 { return fmt.tprintf("Secondary: %s (remembered)", view.secondary_name) }
+	return fmt.tprintf("Secondary: %s", view.secondary_name)
 }
 
 secondary_choice :: proc(state: ^State, view: View, weapon: Secondary) {
@@ -322,7 +331,7 @@ standard_lobby :: proc(state: ^State, view: View) {
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, layoutDirection = .TopToBottom, childGap = u16(4*s)}}) {
 					text(shorten(class.name, 30), 22, s)
 					text(shorten(class.weapon, 36), 16, s, MUTED)
-					text(fmt.tprintf("Secondary: %s", view.secondary_name), 16, s, MUTED)
+					text(secondary_summary(view), 16, s, MUTED)
 				}
 			}
 			if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52*s)}, childGap = u16(16*s)}}) {

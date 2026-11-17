@@ -200,6 +200,7 @@ config_apply_toml :: proc(config: ^Gameplay_Config, source: string) -> bool {
 		config_apply_i32(game_table, "score_limit", "game", 0, &config.game.score_limit)
 		config_apply_bool(game_table, "health_regen", "game", 0, &config.game.health_regen)
 		config_apply_bool(game_table, "kill_cams", "game", 0, &config.game.kill_cams)
+		config_apply_bool(game_table, "player_collision", "game", 0, &config.game.player_collision)
 		config_apply_f32(game_table, "objective_rotation_time", "game", 0, &config.game.objective_rotation_time)
 		config_apply_f32(game_table, "objective_score_rate", "game", 0, &config.game.objective_score_rate)
 		config_apply_f32(game_table, "regen_delay", "game", 0, &config.game.regen_delay)

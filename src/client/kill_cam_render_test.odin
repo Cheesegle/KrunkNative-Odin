@@ -176,7 +176,7 @@ when ODIN_TEST {
 		want := kill_cam_look_at(eye, point)
 		testing.expectf(t, abs(client.kill_cam.target.yaw - want.yaw) < 1e-3 && abs(client.kill_cam.target.pitch - want.pitch) < 1e-3,
 			"aimed at 2/3 of the killer's height: %v vs %v", client.kill_cam.target, want)
-		testing.expect(t, !client.mouse_state.locked, "death frees the cursor as before (menu shown)")
+		testing.expect(t, client.mouse_state.locked && client.death_screen.active, "Krunker keeps the pointer through the death screen (death_screen.odin)")
 		kill_cam_shot("2_kill_cam_start", pixels)
 
 		// A native snapshot moving the killer is ignored while the cam shows.
