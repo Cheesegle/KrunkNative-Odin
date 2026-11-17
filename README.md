@@ -92,6 +92,44 @@ Join problems are logged to `logs/krunker-network.log`. Supported packets are li
 
 Settings are saved to `client-settings.json` and `audio-settings.json` in the working directory.
 
+## Running a dedicated server
+
+Build it with `.\build.bat server` (Windows) or `make server` (Linux; no GLFW needed), then
+run it from the repository root:
+
+```bash
+./bin/krodin_server                                   # settings from assets/config/server.toml
+./bin/krodin_server --tick-rate 128 --max-players 8 --maps burg,sandstorm --rotation sequential
+```
+
+Players join by pasting `tcp://<host>:21015` into **Join**. Ctrl+C (or SIGINT/SIGTERM) stops
+the server cleanly. When a match ends the end screen counts down the intermission, then the next
+rotation map loads and players deploy again.
+
+Settings live in [`assets/config/server.toml`](assets/config/server.toml); each flag overrides it.
+Values outside their range are clamped with a warning. Match rules (game time, score limit,
+weapons) stay in `game.toml`.
+
+| Flag / key | Default | Range |
+| --- | --- | --- |
+| `--port` / `port` | 21015 | 0–65535 (0 picks a free port) |
+| `--bind` / `bind` | `0.0.0.0` | `127.0.0.1` for local only |
+| `--name` / `name` | `Krodin Server` | up to 32 bytes |
+| `--tick-rate` / `tick_rate` | 64 | 30–128 Hz |
+| `--max-players` / `max_players` | 8 | 1–16 (Krunker custom games: 10) |
+| `--team-size` / `team_size` | 4 | 1–4 |
+| `--mode` / `mode` | `hardpoint` | `hardpoint` |
+| `--maps` / `maps` | every client map | burg, sandstorm, subzero, undergrowth, industry, site, bureau, frontier |
+| `--rotation` / `rotation` | `shuffle` | `shuffle`, `sequential` |
+| `--intermission` / `intermission` | 25 s | 5–120 s |
+| `--stats-interval` / `stats_interval` | 10 s | 0 (off) – 3600 s |
+| `--admin-password` / `admin_password` | empty | stored for admin commands; never logged |
+| `--config <path>` | `assets/config/server.toml` | |
+| `--quit-after <s>`, `--seed <n>` | off | testing aids |
+
+Every `stats_interval` seconds the server logs its tick budget: average and maximum tick time,
+late ticks, ticks over budget and the player count.
+
 ## Controls
 
 These are the default bindings. Rebind them in **Settings → Key binds**: select a slot and press a key or mouse button (Escape cancels). To unbind a slot, click its **X**, right-click it, or focus it and press Delete or Backspace.
@@ -114,6 +152,7 @@ These are the default bindings. Rebind them in **Settings → Key binds**: selec
 
 - **Classes:** [`krunker-configs/class-configs.json`](krunker-configs/class-configs.json).
 - **Weapons and match rules:** [`assets/config/game.toml`](assets/config/game.toml).
+- **Dedicated server:** [`assets/config/server.toml`](assets/config/server.toml) (see above).
 - **Maps:** run `python download_maps.py` to refresh all 47 official maps.
 
 ## Testing

@@ -173,6 +173,14 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 					append(&client.game.impacts, impact)
 					client_hit_marker_native_impact(client, impact)
 				}
+			case .DISCONNECT:
+				// The server says why it is closing the connection (full, shutting
+				// down); the close itself follows and is handled below.
+				if reason, reason_ok := shared.packet_deserialize_disconnect(packet); reason_ok {
+					text := net_client_disconnect_text(reason)
+					fmt.printf("[Net Client] %s\n", text)
+					krunker_ws_set_status(client, text)
+				}
 			case .KILL_FEED:
 				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
 					shared.game_push_kill_event(&client.game, event)
@@ -191,6 +199,15 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 		fmt.printf("[Net Client] Connection error: %v\n", err)
 		nc.connected = false
 	}
+}
+
+net_client_disconnect_text :: proc(reason: shared.Disconnect_Reason) -> string {
+	switch reason {
+	case .SERVER_FULL: return "Server is full."
+	case .SHUTDOWN:    return "Server shut down."
+	case .NONE:
+	}
+	return "Disconnected by the server."
 }
 
 net_client_send_team :: proc(nc: ^Net_Client_State, team: i32) -> bool {

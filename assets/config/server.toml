@@ -1,0 +1,38 @@
+# Krodin dedicated server settings (krodin_server).
+#
+# Every key is optional; command line flags override this file
+# (run `krodin_server --help`). Out-of-range values are clamped with a warning.
+# Match rules (game time, score limit, weapons, classes) stay in game.toml.
+
+[server]
+name = "Krodin Server"     # up to 32 bytes
+port = 21015
+bind = "0.0.0.0"           # "127.0.0.1" accepts local connections only
+
+# Simulation tick rate in Hz, 30..128. Snapshots go out every 2nd tick.
+tick_rate = 64
+
+# Connection limit, 1..16. (Krunker custom games stop at 10.)
+max_players = 8
+
+# Players per team for team select, 1..4 (1v1 .. 4v4).
+team_size = 4
+
+# Game mode. Only "hardpoint" exists for now.
+mode = "hardpoint"
+
+# Map rotation, from the maps every client can load: burg, sandstorm, subzero,
+# undergrowth, industry, site, bureau, frontier. Leave empty to rotate through
+# all of them, e.g. maps = ["burg", "sandstorm", "site"]
+maps = []
+rotation = "shuffle"       # or "sequential"
+
+# Seconds on the end screen before the next map loads, 5..120.
+# Krunker public games wait 25 s (endTimer).
+intermission = 25
+
+# Seconds between tick budget log lines; 0 turns them off.
+stats_interval = 10
+
+# Stored for upcoming admin commands; not used yet and never logged.
+admin_password = ""

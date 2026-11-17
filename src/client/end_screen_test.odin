@@ -151,6 +151,29 @@ when ODIN_TEST {
 		testing.expectf(t, screen.result == .DEFEAT && screen.winner_team == 2, "got %v winner %d", screen.result, screen.winner_team)
 	}
 
+	// A Krodin dedicated server counts the intermission down in time_remaining.
+	@(test)
+	end_screen_native_server_intermission_countdown :: proc(t: ^testing.T) {
+		client := Client{}
+		defer delete(client.game.players)
+		player := shared.Player{uid = 1, team = 1, score = 50, is_you = true}
+		append(&client.game.players, &player)
+		client.net.connected = true
+		client.game.ready = true
+		client.game.match = {phase = .ENDED, time_remaining = 24.2, team_scores = {0, 250, 100}}
+		screen := client_end_screen(&client)
+		testing.expectf(t, screen.timer == "Next Round in 0:25", "timer %q", screen.timer)
+		client.game.match.time_remaining = 0
+		screen = client_end_screen(&client)
+		testing.expectf(t, screen.timer == "", "no countdown once the intermission is over, got %q", screen.timer)
+		client.net.connected = false
+		client.local_practice = true
+		client.game.match.time_remaining = 10
+		screen = client_end_screen(&client)
+		testing.expectf(t, screen.timer == "", "local practice has no server intermission, got %q", screen.timer)
+		testing.expect(t, net_client_disconnect_text(.SERVER_FULL) == "Server is full." && net_client_disconnect_text(.SHUTDOWN) == "Server shut down.")
+	}
+
 	@(test)
 	end_screen_resolves_native_winner :: proc(t: ^testing.T) {
 		match := shared.Match_State{team_scores = {0, 300, 120}}

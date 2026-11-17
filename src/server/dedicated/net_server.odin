@@ -1,8 +1,8 @@
-package server_main
+package dedicated
 
 import "core:fmt"
 import "core:net"
-import shared "../shared"
+import shared "../../shared"
 
 Net_Client :: struct {
 	id:         u32,
@@ -23,6 +23,11 @@ Net_Server :: struct {
 	listener: net.TCP_Socket,
 	clients:  [dynamic]^Net_Client,
 	next_id:  u32,
+	// Connections beyond this are refused before a player is created.
+	max_players:   int,
+	// Team select allows this many players per team (server team_size).
+	team_capacity: int,
+	rejected:      int, // connections refused because the server was full
 }
 
 net_server_flush :: proc(client: ^Net_Client) -> bool {
@@ -62,22 +67,52 @@ net_server_send :: proc(client: ^Net_Client, data: []byte) -> bool {
 	return net_server_flush(client)
 }
 
-net_server_init :: proc(port: int) -> (ns: Net_Server, ok: bool) {
+// net_server_init listens on bind:port (port 0 picks a free port; see
+// net_server_port). max_players and team_capacity come from the settings.
+net_server_init :: proc(bind: string, port: int, max_players: int, team_capacity: int) -> (ns: Net_Server, ok: bool) {
+	address := net.parse_address(bind)
+	if address == nil {
+		fmt.eprintf("Invalid bind address %q\n", bind)
+		return ns, false
+	}
 	endpoint := net.Endpoint {
-		address = net.IP4_Any,
+		address = address,
 		port    = port,
 	}
 
 	listener, err := net.listen_tcp(endpoint)
 	if err != nil {
-		fmt.eprintf("Failed to listen on port %d: %v\n", port, err)
+		fmt.eprintf("Failed to listen on %s:%d: %v\n", bind, port, err)
 		return ns, false
 	}
+	net.set_blocking(listener, false)
 
 	ns.listener = listener
 	ns.next_id = 1
-	fmt.printf("Odin TCP Socket Server listening on 0.0.0.0:%d\n", port)
+	ns.max_players = max(1, max_players)
+	ns.team_capacity = max(1, team_capacity)
 	return ns, true
+}
+
+net_server_port :: proc(ns: ^Net_Server) -> int {
+	endpoint, err := net.bound_endpoint(ns.listener)
+	return err == nil ? endpoint.port : 0
+}
+
+// net_server_has_room: every accepted connection holds a slot (a player is
+// created on accept), so the limit counts connections, joined or not.
+net_server_has_room :: proc(ns: ^Net_Server) -> bool {
+	return len(ns.clients) < ns.max_players
+}
+
+// net_server_refuse tells a connection why it is being closed and closes it.
+// One best-effort send is enough: the packet is 8 bytes on a fresh socket.
+net_server_refuse :: proc(socket: net.TCP_Socket, reason: shared.Disconnect_Reason) {
+	buf: [shared.PACKET_HEADER_SIZE + 1]byte
+	if size := shared.packet_serialize_disconnect(buf[:], reason); size > 0 {
+		net.send_tcp(socket, buf[:size])
+	}
+	net.close(socket)
 }
 
 // net_server_drop_client tears down a client that has left: the player is
@@ -99,9 +134,12 @@ net_server_drop_client :: proc(ns: ^Net_Server, game: ^shared.Game, client: ^Net
 
 net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	// Poll for new client connections (non-blocking accept check)
-	net.set_blocking(ns.listener, false)
 	client_socket, _, err := net.accept_tcp(ns.listener)
-	if err == nil {
+	if err == nil && !net_server_has_room(ns) {
+		ns.rejected += 1
+		fmt.printf("[Net Server] Refused a connection: server full (%d/%d)\n", len(ns.clients), ns.max_players)
+		net_server_refuse(client_socket, .SERVER_FULL)
+	} else if err == nil {
 		net.set_blocking(client_socket, false)
 		// Tiny per-player snapshots must not sit in the Nagle buffer while the
 		// peer's delayed ACK (40 ms on Windows) holds them back.
@@ -170,7 +208,7 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 						if team, valid := shared.packet_deserialize_team_request(packet); valid {
 							count := 0
 							for other in ns.clients { if other != client && other.active && other.player != nil && other.player.team == team { count += 1 } }
-							allowed := game.config.select_team && (team == 0 || count < int((game.config.max_players+1)/2))
+							allowed := game.config.select_team && (team == 0 || count < ns.team_capacity)
 							client.team_result = allowed ? 1 : 2
 							if allowed {
 								client.player.team = team
@@ -268,7 +306,7 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 			continue
 		}
 		client.initial_match_sent = true
-		lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = (game.config.max_players+1)/2, select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
+		lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = i32(ns.team_capacity), select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
 		for other in ns.clients {
 			if !other.active || other.player == nil || lobby.count >= shared.MAX_PLAYERS_PER_MATCH { continue }
 			lobby.players[lobby.count] = {id = other.id, team = other.player.team, class_id = other.joined ? other.player.class_index : -1}
@@ -361,9 +399,17 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	clear(&game.kill_events)
 }
 
-net_server_close :: proc(ns: ^Net_Server) {
+// net_server_close tells every client why (when a reason is given), closes
+// all sockets and frees the client records.
+net_server_close :: proc(ns: ^Net_Server, reason := shared.Disconnect_Reason.NONE) {
 	for client in ns.clients {
 		if client.active {
+			if reason != .NONE {
+				buf: [shared.PACKET_HEADER_SIZE + 1]byte
+				if size := shared.packet_serialize_disconnect(buf[:], reason); size > 0 {
+					net_server_send(client, buf[:size])
+				}
+			}
 			net.close(client.socket)
 		}
 		if !client.joined && client.player != nil {
