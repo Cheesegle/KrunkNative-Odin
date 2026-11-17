@@ -37,17 +37,33 @@ end_screen_reward :: proc(cell: string) -> string {
 
 // Live END rows keep the server's endSort order and the mode's endStats
 // columns (minus sid). Names and teams were resolved when END arrived.
-end_screen_board_from_entries :: proc(mode_index, local_sid, local_team: i32, entries: []kproto.Krunker_End_Entry) -> (Scoreboard, bool) {
+//
+// Ranked leaves out the "reward" (KR) column. Krodin's own choice, at
+// testers' request: Krunker's end table always shows it, ranked included
+// (krunkbox game.min.js `var L=Q.mode.endStats||Jb`; ranked doubles the
+// reward, `pe.isRanked&&(u.reward=Math.floor(2*u.reward))`).
+end_screen_board_from_entries :: proc(mode_index, local_sid, local_team: i32, entries: []kproto.Krunker_End_Entry, ranked := false) -> (Scoreboard, bool) {
 	board: Scoreboard
 	stats, known := kproto.krunker_mode_end_stats(mode_index)
 	if !known || len(entries) == 0 { return board, false }
-	scoreboard_set_columns(&board, stats[2:])
+	// Entry cells follow stats[2:]; source[c] is the cell shown in column c.
+	keys: [SCOREBOARD_MAX_COLUMNS]string
+	source: [SCOREBOARD_MAX_COLUMNS]int
+	count := 0
+	for key, i in stats[2:] {
+		if ranked && key == "reward" { continue }
+		if count == SCOREBOARD_MAX_COLUMNS { break }
+		keys[count], source[count] = key, i
+		count += 1
+	}
+	scoreboard_set_columns(&board, keys[:count])
 	rows := make([]Scoreboard_Row, len(entries), context.temp_allocator)
 	for entry, i in entries {
 		row := &rows[i]
 		row.name, row.order, row.is_you, row.team = entry.name, i32(i), entry.sid == local_sid, entry.team
 		for c in 0..<board.column_count {
-			row.cells[c] = stats[c+2] == "reward" ? end_screen_reward(entry.cells[c]) : entry.cells[c]
+			cell := entry.cells[source[c]]
+			row.cells[c] = keys[c] == "reward" ? end_screen_reward(cell) : cell
 		}
 	}
 	board.local_team = local_team
@@ -59,7 +75,7 @@ end_screen_board_from_entries :: proc(mode_index, local_sid, local_team: i32, en
 end_screen_board_from_world :: proc(world: ^kproto.Krunker_World_State) -> Scoreboard {
 	local_team: i32
 	for player in world.players { if player.sid == world.local_sid { local_team = player.team } }
-	board, ok := end_screen_board_from_entries(world.mode_index, world.local_sid, local_team, world.end_entries[:])
+	board, ok := end_screen_board_from_entries(world.mode_index, world.local_sid, local_team, world.end_entries[:], world.is_ranked)
 	return ok ? board : scoreboard_from_world(world)
 }
 
@@ -97,7 +113,7 @@ end_screen_finish :: proc(client: ^Client, screen: ^End_Screen, team_scores: [3]
 // The last END's results after INIT cleared the live end state.
 end_screen_from_final :: proc(client: ^Client, final: ^kproto.Krunker_End_Results) -> End_Screen {
 	screen: End_Screen
-	screen.board, _ = end_screen_board_from_entries(final.mode_index, final.local_sid, final.local_team, final.entries[:])
+	screen.board, _ = end_screen_board_from_entries(final.mode_index, final.local_sid, final.local_team, final.entries[:], final.ranked)
 	if !screen.board.teams && (final.local_team == 1 || final.local_team == 2) { screen.board.teams = true }
 	screen.board.local_team = final.local_team
 	screen.result = end_screen_result(final.result, false)

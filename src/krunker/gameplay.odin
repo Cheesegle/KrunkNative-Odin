@@ -276,6 +276,7 @@ krunker_world_keep_end_results :: proc(state: ^Krunker_World_State, packet: []Kr
 	final.received_at, final.next_init_at = state.received_at, 0
 	final.game_state = krunker_world_i32(packet[1], 0)
 	final.mode_index, final.local_sid, final.local_team = state.mode_index, state.local_sid, 0
+	final.ranked = state.is_ranked
 	for player in state.players { if player.sid == state.local_sid { final.local_team = player.team } }
 	final.result, final.winner_team, final.end_index = state.end_result, state.winner_team, state.end_index
 	final.team_scores = state.match.team_scores
