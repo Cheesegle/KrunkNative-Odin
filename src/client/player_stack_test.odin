@@ -143,11 +143,13 @@ when ODIN_TEST {
 	@(private = "file")
 	stack_shot :: proc(f: ^Stack_Fixture, camera: ^Camera, pixels: []u8, name: string) -> (top_half_covered: int) {
 		gl.ClearColor(0.75, 0.8, 0.85, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		camera_update_projection_matrix(camera, f32(STACK_SHOT_W) / f32(STACK_SHOT_H))
 		camera_update_world_inverse_matrix(camera)
 		scene_render(f.client.scene, camera, STACK_SHOT_W, STACK_SHOT_H)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, STACK_SHOT_W, STACK_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		// Rows are bottom-up: the top half is the second half of the buffer.
 		for i := STACK_SHOT_W * STACK_SHOT_H / 2; i < STACK_SHOT_W * STACK_SHOT_H; i += 1 {

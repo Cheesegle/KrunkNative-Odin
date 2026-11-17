@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compiles the world shaders to SPIR-V for the Vulkan backend (see
+# Compiles the world and interface shaders to SPIR-V for the Vulkan backend (see
 # tools/build-spirv.ps1, which does the same on Windows). Needs glslc.
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,4 +18,10 @@ build basic
 build basic_batched -DBATCHED
 build basic_shadow -DSHADOW_DEPTH_PASS
 build basic_shadow_batched -DBATCHED -DSHADOW_DEPTH_PASS
+# Other programs are one source pair each.
+for name in ui; do
+	for stage in vert frag; do
+		glslc --target-env=vulkan1.3 -O -o "$out/$name.$stage.spv" "$src/$name.$stage"
+	done
+done
 echo "SPIR-V written to $out"

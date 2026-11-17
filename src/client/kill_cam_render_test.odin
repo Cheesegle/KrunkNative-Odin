@@ -18,6 +18,7 @@ when ODIN_TEST {
 	@(private = "file")
 	kill_cam_shot :: proc(name: string, pixels: []u8) {
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		os.make_directory("bin/kill-cam")
 		stbi.write_png(fmt.ctprintf("bin/kill-cam/%s.png", name), KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, 3, &pixels[(KILL_CAM_SHOT_H - 1) * KILL_CAM_SHOT_W * 3], -KILL_CAM_SHOT_W * 3)

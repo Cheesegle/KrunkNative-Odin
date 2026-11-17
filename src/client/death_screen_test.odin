@@ -300,11 +300,13 @@ when ODIN_TEST {
 				client.death_screen = moment.state^
 				// A stand-in world: sky over ground, so overlays read clearly.
 				gl.ClearColor(0.38, 0.55, 0.72, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				ui_update(client.ui, f32(W), f32(H))
 				ui_fill_rect(client.ui, {0.35, 0.42, 0.28, 1}, 0, f32(H) * 0.55, f32(W), f32(H) * 0.45)
 				death_screen_render(client, moment.now)
 				frames[i] = make([]u8, int(W*H*3))
+				ui_flush()
 				gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(frames[i]))
 				path := fmt.ctprintf("bin/death-screen/%dx%d-%s.png", W, H, moment.name)
 				testing.expect(t, stbi.write_png(path, W, H, 3, &frames[i][(H-1)*W*3], -W*3) != 0)

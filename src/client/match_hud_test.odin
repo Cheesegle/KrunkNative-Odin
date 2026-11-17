@@ -10,9 +10,11 @@ import shared "../shared"
 
 when ODIN_TEST {
 	match_hud_snapshot :: proc(client: ^Client, pixels: []u8) {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 		overlay_render(client, 0)
+		ui_flush()
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 	match_hud_region_delta :: proc(client: ^Client, before, after: []u8, x1, y1, x2, y2: f32) -> int {
@@ -113,10 +115,12 @@ when ODIN_TEST {
 			client.hud_settings.hide_ping = true
 			match_hud_snapshot(&client, before)
 			fps_render(&client)
+			ui_flush()
 			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(before))
 			client.hud_settings.hide_ping = false
 			match_hud_snapshot(&client, after)
 			fps_render(&client)
+			ui_flush()
 			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(after))
 			fps_line := match_hud_region_delta(&client, before, after, 0, 0, client.ui.width/client.ui.scale*0.5-240, 60)
 			ping_line := match_hud_region_delta(&client, before, after, 0, 60, client.ui.width/client.ui.scale*0.5-240, 104)

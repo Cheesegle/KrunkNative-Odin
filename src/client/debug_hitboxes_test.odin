@@ -364,6 +364,7 @@ when ODIN_TEST {
 
 	debug_test_read :: proc(pixels: []u8) {
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 
@@ -449,6 +450,7 @@ when ODIN_TEST {
 		debug_lines_player(&player_lines, remote, .KRODIN, .SHOT, false)
 		testing.expect(t, len(dr.lines) == len(player_lines), "only the remote player is drawn (first-person you is not)")
 		gl.ClearColor(0, 0, 0, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		testing.expect(t, debug_render_lines(dr, view_projection, true) == len(player_lines))
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "wireframes must draw without OpenGL errors")
@@ -472,6 +474,7 @@ when ODIN_TEST {
 
 		// 2. Depth-tested lines hide behind nearer depth; x-ray shows through.
 		gl.ClearDepth(0)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		debug_render_lines(dr, view_projection, true)
 		debug_test_read(pixels)
@@ -502,6 +505,7 @@ when ODIN_TEST {
 				debug_lines_map(&dr.lines, &client.game, camera.position, DEBUG_MAP_RANGE)
 			}
 			gl.ClearColor(0.55, 0.62, 0.7, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 			scene_err := gl.GetError()
@@ -616,6 +620,7 @@ when ODIN_TEST {
 			player_update_meshes(remote, false)
 
 			gl.ClearColor(0.55, 0.62, 0.7, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 
@@ -756,6 +761,7 @@ when ODIN_TEST {
 			clear(&client.debug_render.lines)
 			debug_lines_player(&client.debug_render.lines, remote, .KRUNKER, .SHOT, false)
 			gl.ClearColor(0.55, 0.62, 0.7, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 			debug_render_lines(&client.debug_render, view_projection, false)

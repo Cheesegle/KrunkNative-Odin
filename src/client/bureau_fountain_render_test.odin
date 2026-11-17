@@ -21,6 +21,7 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, FT_W, FT_H)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, FT_W, FT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 

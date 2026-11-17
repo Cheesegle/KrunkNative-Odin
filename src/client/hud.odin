@@ -76,28 +76,6 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 
 menu_color :: proc(color: clay.Color) -> shared.Vec4 { return {color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255} }
 
-// glScissor rejects negative sizes (GL_INVALID_VALUE), and NaN converts to
-// INT_MIN; an empty or invalid clip becomes a zero-size scissor.
-menu_scissor :: proc(ui: ^UI, box: clay.BoundingBox) {
-	finite :: proc(value: f32) -> f32 { return math.is_nan(value) || math.is_inf(value) ? 0 : value }
-	x, y := finite(box.x), finite(ui.height - box.y - box.height)
-	width, height := max(finite(box.width), 0), max(finite(box.height), 0)
-	gl.Scissor(i32(clamp(x, -65536, 65536)), i32(clamp(y, -65536, 65536)), i32(min(width, 65536)), i32(min(height, 65536)))
-}
-
-// Clips later UI draws to `box` (UI pixels, top-left origin) until
-// ui_clip_clear. Not applied on Vulkan yet (port plan, Phase 2).
-ui_clip_set :: proc(ui: ^UI, box: clay.BoundingBox) {
-	when !KRODIN_VULKAN {
-		gl.Enable(gl.SCISSOR_TEST)
-		menu_scissor(ui, box)
-	}
-}
-
-ui_clip_clear :: proc(ui: ^UI) {
-	when !KRODIN_VULKAN { gl.Disable(gl.SCISSOR_TEST) }
-}
-
 menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderCommand)) {
 	clips: [32]clay.BoundingBox
 	clip_count := 0

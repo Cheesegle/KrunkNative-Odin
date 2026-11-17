@@ -317,9 +317,11 @@ when ODIN_TEST {
 				}
 				testing.expectf(t, found, "%q must be drawn (%s at %v)", want, scene, size)
 				gl.ClearColor(0.17, 0.17, 0.17, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				menu_render_commands(ui, commands)
 				gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+				ui_flush()
 				gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 				testing.expect(t, stbi.write_png(fmt.ctprintf("bin/remember-secondary/%s_%dx%d.png", scene, size[0], size[1]), size[0], size[1], 3, &pixels[(size[1]-1)*size[0]*3], -size[0]*3) != 0, "preview PNG written")
 			}

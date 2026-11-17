@@ -196,10 +196,12 @@ when ODIN_TEST {
 			for moment, i in moments {
 				client.round_countdown = {number = moment.number, started = 50, visible = true}
 				gl.ClearColor(0.38, 0.55, 0.72, 1) // a stand-in sky
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				ui_update(client.ui, f32(W), f32(H))
 				round_countdown_render(client, 50 + moment.t)
 				pixels := make([]u8, int(W*H*3)); defer delete(pixels)
+				ui_flush()
 				gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 				path := fmt.ctprintf("bin/round-countdown/%dx%d-%s.png", W, H, moment.name)
 				testing.expect(t, stbi.write_png(path, W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)

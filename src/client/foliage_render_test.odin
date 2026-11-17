@@ -61,6 +61,7 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, FOLIAGE_W, FOLIAGE_H)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, FOLIAGE_W, FOLIAGE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 
@@ -184,8 +185,10 @@ when ODIN_TEST {
 				clear_color: [4]f32
 				gl.GetFloatv(gl.COLOR_CLEAR_VALUE, &clear_color[0])
 				gl.ClearColor(1, 0, 1, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 				scene_render(client.scene, &client.camera, FOLIAGE_W, FOLIAGE_H, client.graphics_sampler)
+				ui_flush()
 				gl.ReadPixels(0, 0, FOLIAGE_W, FOLIAGE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(mask))
 				gl.ClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3])
 				for mesh in hidden { mesh.visible = true }

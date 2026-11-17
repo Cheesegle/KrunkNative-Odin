@@ -38,8 +38,8 @@ when ODIN_TEST {
 		built := build_stamp_built_sources()
 		names := make([dynamic]string, context.temp_allocator)
 		for source in built { append(&names, source.name) }
-		testing.expectf(t, len(built) >= 5, "the exe carries its shaders: %v", names[:])
-		for name in ([?]string{"basic.vert", "basic.frag", "quad.vert", "quad.frag", "text.frag"}) {
+		testing.expectf(t, len(built) >= 4, "the exe carries its shaders: %v", names[:])
+		for name in ([?]string{"basic.vert", "basic.frag", "ui.vert", "ui.frag"}) {
 			_, found := build_stamp_built_source(name)
 			testing.expectf(t, found, "%s is built in", name)
 		}
@@ -113,13 +113,13 @@ when ODIN_TEST {
 
 		// One file missing (an asset folder older than the exe) is a mismatch.
 		files := build_stamp_test_built_files()
-		delete_key(&files, "text.frag")
+		delete_key(&files, "ui.vert")
 		dir, ok := build_stamp_test_dir(t, files)
 		defer build_stamp_test_remove(dir)
 		if !ok { return }
 		partial := build_stamp_check(dir, built, 0)
 		defer build_stamp_check_destroy(&partial)
-		testing.expectf(t, partial.status == .MISMATCH && len(partial.missing) == 1 && partial.missing[0] == "text.frag" && len(partial.changed) == 0, "missing text.frag: %v", build_stamp_detail(partial))
+		testing.expectf(t, partial.status == .MISMATCH && len(partial.missing) == 1 && partial.missing[0] == "ui.vert" && len(partial.changed) == 0, "missing ui.vert: %v", build_stamp_detail(partial))
 	}
 
 	// The tester zip holds the files the asset sweep traced. The check reads
@@ -179,7 +179,7 @@ when ODIN_TEST {
 
 		files := build_stamp_test_built_files()
 		files["basic.frag"] = "#version 450 core\nout vec4 color;\nvoid main() { color = vec4(1.0) this is not glsl; }\n"
-		files["quad.frag"] = "#version 450 core\nvoid main() { broken }\n"
+		files["ui.frag"] = "#version 450 core\nvoid main() { broken }\n"
 		dir, ok := build_stamp_test_dir(t, files)
 		defer build_stamp_test_remove(dir)
 		if !ok { return }
@@ -190,18 +190,18 @@ when ODIN_TEST {
 		testing.expectf(t, len(g_build_status.shader_failures) == 1 && g_build_status.shader_failures[0] == "basic.frag", "the failure is recorded: %v", g_build_status.shader_failures[:])
 		testing.expect(t, shader_compile(vert, frag, defines) == 0 && len(g_build_status.shader_failures) == 1 && g_build_status.shader_failure_count == 2, "a file is listed once")
 
-		// The UI program falls back to the exe's own quad shader.
-		quad := shader_compile_ui(strings.concatenate({dir, "/"}, context.temp_allocator), "quad.vert", "quad.frag")
-		defer if quad != 0 { gl.DeleteProgram(quad) }
-		testing.expect(t, quad != 0, "the UI shader falls back to its built-in source")
-		testing.expectf(t, len(g_build_status.shader_failures) == 2 && g_build_status.shader_failures[1] == "quad.frag", "the asset copy's failure is still reported: %v", g_build_status.shader_failures[:])
+		// The UI program falls back to the exe's own ui shader.
+		ui_program := shader_compile_ui(strings.concatenate({dir, "/"}, context.temp_allocator), "ui.vert", "ui.frag")
+		defer if ui_program != 0 { gl.DeleteProgram(ui_program) }
+		testing.expect(t, ui_program != 0, "the UI shader falls back to its built-in source")
+		testing.expectf(t, len(g_build_status.shader_failures) == 2 && g_build_status.shader_failures[1] == "ui.frag", "the asset copy's failure is still reported: %v", g_build_status.shader_failures[:])
 
 		// The banner, over a black frame (what a failed world shader leaves).
 		client := new(Client)
 		defer free(client)
 		client.ui = ui_init()
 		defer { ui_fini(client.ui); resource_cache_fini() }
-		testing.expect(t, client.ui != nil && client.ui.material != nil)
+		testing.expect(t, client.ui != nil && g_ui_program != 0)
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
 		os.make_directory("bin/build_stamp")
@@ -219,10 +219,12 @@ when ODIN_TEST {
 		}
 		render :: proc(client: ^Client, pixels: []u8, w, h: int) -> bool {
 			gl.ClearColor(0, 0, 0, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT)
 			ui_update(client.ui, f32(w), f32(h))
 			drawn := build_status_banner_render(client.ui)
 			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+			ui_flush()
 			gl.ReadPixels(0, 0, i32(w), i32(h), gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			return drawn
 		}
@@ -233,7 +235,7 @@ when ODIN_TEST {
 		for y in top..=bottom { for x in 0..<W { i := ((H - 1 - y)*W + x)*3; if pixels[i] > 230 && pixels[i+1] > 230 && pixels[i+2] > 230 { bright += 1 } } }
 		testing.expectf(t, bright > 300, "its text is drawn (%d white pixels)", bright)
 		lines := build_status_banner_lines(&g_build_status)
-		testing.expectf(t, len(lines) == 1 && lines[0] == "Shader failed to compile; see logs/shaders.log (basic.frag, quad.frag).", "the message: %v", lines)
+		testing.expectf(t, len(lines) == 1 && lines[0] == "Shader failed to compile; see logs/shaders.log (basic.frag, ui.frag).", "the message: %v", lines)
 		stbi.write_png("bin/build_stamp/shader_error.png", W, i32(bottom + 12), 3, &pixels[(H - 1)*W*3], -W*3)
 
 		// Plus an out-of-date build: both lines, shader error first.

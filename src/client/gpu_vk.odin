@@ -37,10 +37,13 @@ when KRODIN_VULKAN {
 @(private = "file") SPIRV_SHADOW_FRAG :: #load("spirv/basic_shadow.frag.spv")
 @(private = "file") SPIRV_SHADOW_BATCHED_VERT :: #load("spirv/basic_shadow_batched.vert.spv")
 @(private = "file") SPIRV_SHADOW_BATCHED_FRAG :: #load("spirv/basic_shadow_batched.frag.spv")
+@(private = "file") SPIRV_UI_VERT :: #load("spirv/ui.vert.spv")
+@(private = "file") SPIRV_UI_FRAG :: #load("spirv/ui.frag.spv")
 
 VK_COLOR_FORMAT :: vk.Format.R8G8B8A8_UNORM
 VK_DEPTH_FORMAT :: vk.Format.D32_SFLOAT
 VK_UNIFORM_RING_PER_FRAME :: 16 << 20
+VK_TRANSIENT_RING_PER_FRAME :: 16 << 20 // gpu_transient_bind vertices and indices
 VK_FRAME_SETS :: 4096
 VK_TEXTURE_SETS :: 8192
 VK_MAX_LAYERS :: 4
@@ -152,7 +155,7 @@ Vk_Target :: struct {
 @(private = "file")
 Vk_Program :: struct {
 	vert, frag: vk.ShaderModule,
-	batched:    bool,
+	layout:     Gpu_Vertex_Layout,
 }
 
 @(private = "file")
@@ -240,6 +243,8 @@ Vk_State :: struct {
 
 	ring:             Vk_Buffer, // per-frame uniform regions
 	ring_cursor:      int,
+	transient:        Vk_Buffer, // per-frame vertex and index regions
+	transient_cursor: int,
 	ring_align:       int,
 	dummy_storage:    Vk_Buffer,
 	readback:         Vk_Buffer,
@@ -269,6 +274,11 @@ Vk_State :: struct {
 	objects:          Gpu_Buffer,
 	pass_offset:      u32,
 	draw_offset:      u32,
+	// gpu_transient_bind's data, in place of `input` while active.
+	transient_active: bool,
+	transient_offsets: [2]vk.DeviceSize, // vertices, indices
+	scissor_on:       bool,
+	scissor_rect:     [4]i32, // GL convention: x, y from the bottom row, width, height
 
 	// What the current command buffer has bound.
 	in_pass:          bool,
@@ -282,6 +292,8 @@ Vk_State :: struct {
 	bound_offsets:    [2]u32,
 	bound_set1:       vk.DescriptorSet,
 	bound_input:      Gpu_Vertex_Input,
+	bound_transient:  [2]vk.DeviceSize,
+	bound_scissor:    vk.Rect2D,
 	warned_no_target: bool,
 
 	present:          Vk_Swapchain,
@@ -482,6 +494,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	g_vk.ring_align = max(int(g_vk.props.limits.minUniformBufferOffsetAlignment), 16)
 	g_vk.ring = vk_buffer_make(VK_UNIFORM_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.UNIFORM_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.dummy_storage = vk_buffer_make(256, {.STORAGE_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
+	g_vk.transient = vk_buffer_make(VK_TRANSIENT_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.VERTEX_BUFFER, .INDEX_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.ready = true
 
 	far := transmute([4]u8)f32(1)
@@ -523,6 +536,7 @@ gpu_vk_fini :: proc() {
 	for _, sampler in g_vk.samplers { vk.DestroySampler(device, sampler, nil) }
 	vk_buffer_free(&g_vk.ring)
 	vk_buffer_free(&g_vk.dummy_storage)
+	vk_buffer_free(&g_vk.transient)
 	vk_buffer_free(&g_vk.readback)
 	for &frame in g_vk.frames {
 		vk.DestroyFence(device, frame.fence, nil)
@@ -687,6 +701,35 @@ gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gp
 
 gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 	g_vk.input = input
+	g_vk.transient_active = false
+}
+
+// Copies this frame's vertices and indices into the frame's region of the
+// transient ring and makes them the next draws' input (see gpu_gl.odin).
+gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
+	assert(layout == .UI)
+	if !g_vk.ready { return false }
+	vk_cmd() // the region belongs to the frame being recorded
+	vertex_bytes := (len(vertices) + 15) &~ 15
+	index_bytes := len(indices) * size_of(u32)
+	if g_vk.transient_cursor + vertex_bytes + index_bytes > VK_TRANSIENT_RING_PER_FRAME {
+		@(static) warned: bool
+		if !warned { fmt.eprintln("[Vulkan] transient ring full for this frame; draw skipped"); warned = true }
+		return false
+	}
+	base := g_vk.slot * VK_TRANSIENT_RING_PER_FRAME + g_vk.transient_cursor
+	mem.copy(g_vk.transient.mapped[base:], raw_data(vertices), len(vertices))
+	mem.copy(g_vk.transient.mapped[base + vertex_bytes:], raw_data(indices), index_bytes)
+	g_vk.transient_cursor += vertex_bytes + ((index_bytes + 15) &~ 15)
+	g_vk.transient_offsets = {vk.DeviceSize(base), vk.DeviceSize(base + vertex_bytes)}
+	g_vk.transient_active = true
+	return true
+}
+
+// Clips draws to `rect` (GL convention: x, y from the bottom row, which is
+// row 0 of a target here; see the orientation note at the top).
+gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
+	g_vk.scissor_on, g_vk.scissor_rect = enabled, rect
 }
 
 gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
@@ -1051,8 +1094,11 @@ vk_begin_recording :: proc(timed: bool) {
 	frame.timed = timed
 	g_vk.recording = true
 	g_vk.ring_cursor = 0
+	g_vk.transient_cursor = 0
+	g_vk.transient_active = false
 	// A fresh command buffer has nothing bound.
 	g_vk.bound_pipeline, g_vk.bound_set0, g_vk.bound_set1, g_vk.bound_input = 0, 0, 0, 0
+	g_vk.bound_transient = {max(vk.DeviceSize), max(vk.DeviceSize)}
 	g_vk.set0, g_vk.set0_dirty = 0, true
 	g_vk.in_pass = false
 }
@@ -1098,6 +1144,7 @@ gpu_frame_begin :: proc() {
 }
 
 gpu_frame_end :: proc() {
+	gpu_flush_deferred()
 	vk_submit()
 }
 
@@ -1162,7 +1209,13 @@ gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
 	case batched:                 vert, frag = SPIRV_BATCHED_VERT, SPIRV_BATCHED_FRAG
 	case:                         vert, frag = SPIRV_BASIC_VERT, SPIRV_BASIC_FRAG
 	}
-	program := Vk_Program{vert = vk_shader_module(vert), frag = vk_shader_module(frag), batched = batched}
+	program := Vk_Program{vert = vk_shader_module(vert), frag = vk_shader_module(frag), layout = batched ? .Batched : .Basic}
+	return Gpu_Program(vk_table_add(&g_vk.programs, program))
+}
+
+gpu_program_create_ui :: proc() -> Gpu_Program {
+	if !g_vk.ready { return 0 }
+	program := Vk_Program{vert = vk_shader_module(SPIRV_UI_VERT), frag = vk_shader_module(SPIRV_UI_FRAG), layout = .UI}
 	return Gpu_Program(vk_table_add(&g_vk.programs, program))
 }
 
@@ -1193,6 +1246,7 @@ gpu_draw_state_set :: proc(state: Gpu_Draw_State) {
 }
 
 gpu_draw_state_reset :: proc() {
+	gpu_flush_deferred()
 	g_vk.draw_state = GPU_DRAW_STATE_DEFAULT
 }
 
@@ -1206,22 +1260,30 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 		{sType = .PIPELINE_SHADER_STAGE_CREATE_INFO, stage = {.FRAGMENT}, module = p.frag, pName = "main"},
 	}
 	binding: vk.VertexInputBindingDescription
-	attributes: [4]vk.VertexInputAttributeDescription
+	attributes: [6]vk.VertexInputAttributeDescription
 	attribute_count: u32
-	if p.batched {
+	switch p.layout {
+	case .Batched:
 		binding = {binding = 0, stride = size_of(Batched_Vertex), inputRate = .VERTEX}
-		attributes = {
-			{location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = u32(offset_of(Batched_Vertex, position))},
-			{location = 1, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(Batched_Vertex, tex_coord))},
-			{location = 2, binding = 0, format = .R32_SFLOAT, offset = u32(offset_of(Batched_Vertex, face_idx))},
-			{location = 3, binding = 0, format = .R32_SFLOAT, offset = u32(offset_of(Batched_Vertex, object_index))},
-		}
+		attributes[0] = {location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = u32(offset_of(Batched_Vertex, position))}
+		attributes[1] = {location = 1, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(Batched_Vertex, tex_coord))}
+		attributes[2] = {location = 2, binding = 0, format = .R32_SFLOAT, offset = u32(offset_of(Batched_Vertex, face_idx))}
+		attributes[3] = {location = 3, binding = 0, format = .R32_SFLOAT, offset = u32(offset_of(Batched_Vertex, object_index))}
 		attribute_count = 4
-	} else {
+	case .Basic:
 		binding = {binding = 0, stride = size_of(Vertex), inputRate = .VERTEX}
 		attributes[0] = {location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = u32(offset_of(Vertex, position))}
 		attributes[1] = {location = 1, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(Vertex, tex_coord))}
 		attribute_count = 2
+	case .UI:
+		binding = {binding = 0, stride = size_of(UI_Vertex), inputRate = .VERTEX}
+		attributes[0] = {location = 0, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(UI_Vertex, position))}
+		attributes[1] = {location = 1, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(UI_Vertex, local))}
+		attributes[2] = {location = 2, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(UI_Vertex, uv))}
+		attributes[3] = {location = 3, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(UI_Vertex, color))}
+		attributes[4] = {location = 4, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(UI_Vertex, radii))}
+		attributes[5] = {location = 5, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(UI_Vertex, params))}
+		attribute_count = 6
 	}
 	vertex_input := vk.PipelineVertexInputStateCreateInfo{sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, vertexBindingDescriptionCount = 1, pVertexBindingDescriptions = &binding, vertexAttributeDescriptionCount = attribute_count, pVertexAttributeDescriptions = &attributes[0]}
 	assembly := vk.PipelineInputAssemblyStateCreateInfo{sType = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology = .TRIANGLE_LIST}
@@ -1234,7 +1296,10 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 		lineWidth = 1,
 	}
 	multisample := vk.PipelineMultisampleStateCreateInfo{sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples = {._1}}
-	depth := vk.PipelineDepthStencilStateCreateInfo{sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, depthTestEnable = true, depthWriteEnable = b32(key.state.depth_write), depthCompareOp = .LESS}
+	depth := vk.PipelineDepthStencilStateCreateInfo{
+		sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+		depthTestEnable = key.state.depth_test != .Off, depthWriteEnable = b32(key.state.depth_write), depthCompareOp = .LESS,
+	}
 	blend_attachment := vk.PipelineColorBlendAttachmentState{
 		blendEnable = b32(key.state.blend),
 		srcColorBlendFactor = .SRC_ALPHA, dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA, colorBlendOp = .ADD,
@@ -1311,6 +1376,7 @@ vk_pass_begin_color :: proc() -> bool {
 	vw := g_vk.viewport.x > 0 ? u32(g_vk.viewport.x) : t.width
 	vh := g_vk.viewport.y > 0 ? u32(g_vk.viewport.y) : t.height
 	vk_set_viewport(cmd, min(vw, t.width), min(vh, t.height))
+	g_vk.bound_scissor = {extent = {min(vw, t.width), min(vh, t.height)}}
 	g_vk.pending_color, g_vk.pending_depth = false, false
 	g_vk.in_pass, g_vk.pass_depth_only, g_vk.pass_cull_front = true, false, false
 	return true
@@ -1325,6 +1391,7 @@ vk_flush_pending_clear :: proc() {
 }
 
 gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
+	gpu_flush_deferred()
 	if target != g_vk.target {
 		if g_vk.recording {
 			vk_pass_end()
@@ -1340,6 +1407,7 @@ gpu_set_clear_color :: proc(color: [3]f32) {
 }
 
 gpu_clear :: proc(color, depth: bool) {
+	gpu_flush_deferred()
 	if g_vk.in_pass && !g_vk.pass_depth_only {
 		attachments: [2]vk.ClearAttachment
 		n: u32
@@ -1418,7 +1486,14 @@ gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, g_vk.pipeline_layout, 1, 1, &set1, 0, nil)
 		g_vk.bound_set1 = set1
 	}
-	if g_vk.input != g_vk.bound_input {
+	if g_vk.transient_active {
+		if g_vk.bound_input != 0 || g_vk.bound_transient != g_vk.transient_offsets {
+			vertex_offset := g_vk.transient_offsets[0]
+			vk.CmdBindVertexBuffers(cmd, 0, 1, &g_vk.transient.buffer, &vertex_offset)
+			vk.CmdBindIndexBuffer(cmd, g_vk.transient.buffer, g_vk.transient_offsets[1], .UINT32)
+			g_vk.bound_input, g_vk.bound_transient = 0, g_vk.transient_offsets
+		}
+	} else if g_vk.input != g_vk.bound_input || g_vk.bound_transient[0] != max(vk.DeviceSize) {
 		input := vk_table_get(&g_vk.inputs, u32(g_vk.input))
 		if input == nil { return }
 		vb := vk_table_get(&g_vk.buffers, u32(input.vertices))
@@ -1428,8 +1503,31 @@ gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 		vk.CmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset)
 		vk.CmdBindIndexBuffer(cmd, ib.buffer, 0, .UINT32)
 		g_vk.bound_input = g_vk.input
+		g_vk.bound_transient = {max(vk.DeviceSize), max(vk.DeviceSize)}
+	}
+	if !g_vk.pass_depth_only {
+		scissor := vk_scissor_rect()
+		if scissor != g_vk.bound_scissor {
+			vk.CmdSetScissor(cmd, 0, 1, &scissor)
+			g_vk.bound_scissor = scissor
+		}
 	}
 	vk.CmdDrawIndexed(cmd, u32(index_count), 1, first_index, 0, 0)
+}
+
+// The scissor for the next draw: the gpu_scissor rect clamped to the current
+// target, or the whole viewport while scissoring is off.
+@(private = "file")
+vk_scissor_rect :: proc() -> vk.Rect2D {
+	t := vk_table_get(&g_vk.targets, u32(g_vk.target))
+	if t == nil { return {} }
+	vw := g_vk.viewport.x > 0 ? min(u32(g_vk.viewport.x), t.width) : t.width
+	vh := g_vk.viewport.y > 0 ? min(u32(g_vk.viewport.y), t.height) : t.height
+	if !g_vk.scissor_on { return {extent = {vw, vh}} }
+	r := g_vk.scissor_rect
+	x0, y0 := clamp(r[0], 0, i32(vw)), clamp(r[1], 0, i32(vh))
+	x1, y1 := clamp(r[0] + max(r[2], 0), x0, i32(vw)), clamp(r[1] + max(r[3], 0), y0, i32(vh))
+	return {offset = {x0, y0}, extent = {u32(x1 - x0), u32(y1 - y0)}}
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,6 +1548,7 @@ vk_depth_pass_finish :: proc() {
 }
 
 gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
+	gpu_flush_deferred()
 	t := vk_table_get(&g_vk.targets, u32(target))
 	if t == nil || !t.depth_only { return }
 	tex := vk_table_get(&g_vk.textures, u32(t.texture))
@@ -1616,6 +1715,7 @@ vk_window_sync :: proc() {
 // presented (minimised, swapchain out of date) is still submitted by
 // gpu_frame_end.
 gpu_present :: proc(window: glfw.WindowHandle = nil) {
+	gpu_flush_deferred()
 	sc := &g_vk.present
 	if sc.window == nil || sc.swapchain == 0 || sc.dirty { return }
 	t := vk_table_get(&g_vk.targets, u32(sc.target))
@@ -1710,6 +1810,7 @@ vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: 
 // RGB8, rows bottom-up like GL (see the orientation note at the top).
 gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
 	if len(pixels) < int(width) * int(height) * 3 { return }
+	gpu_flush_deferred()
 	data, ok := vk_readback_copy(target, false, width, height)
 	if !ok { return }
 	for i in 0 ..< int(width) * int(height) {
@@ -1722,6 +1823,7 @@ gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels
 // f32 depth bits; compare only with other reads on this backend.
 gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
 	if len(depth) < int(width) * int(height) { return }
+	gpu_flush_deferred()
 	data, ok := vk_readback_copy(target, true, width, height)
 	if !ok { return }
 	mem.copy(raw_data(depth), data, int(width) * int(height) * 4)

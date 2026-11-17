@@ -97,9 +97,11 @@ when ODIN_TEST {
 			client.viewport_width, client.viewport_height = W, H
 			if !testing.expect(t, ranked_end_test_world(&client, ranked)) do return
 			testing.expect(t, client_end_screen_update(&client, 10, false), "the END packet shows the end screen")
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			ui_update(ui, W, H)
 			end_screen_render(&client, 10+END_SCREEN_PANEL_DELAY+0.1)
+			ui_flush()
 			gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			for row in 0 ..< H { copy(flipped[row*W*3:][:W*3], pixels[(H-1-row)*W*3:][:W*3]) }
 			testing.expect(t, stbi.write_png(fmt.ctprintf("bin/end-screen/%s.png", ranked ? "ranked" : "unranked"), W, H, 3, raw_data(flipped), W*3) != 0)

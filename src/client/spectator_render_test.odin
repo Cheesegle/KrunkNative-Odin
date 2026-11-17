@@ -45,6 +45,7 @@ when ODIN_TEST {
 		pixels := make([]u8, int(w*h*3))
 		defer delete(pixels)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		os.make_directory("bin/spectator")
 		path := fmt.ctprintf("bin/spectator/%s_%dx%d.png", name, w, h)

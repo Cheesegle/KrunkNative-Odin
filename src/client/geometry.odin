@@ -791,14 +791,5 @@ resource_cache_fini :: proc() {
 	g_map_batch_shader_layout_reason = ""
 	shadow_placeholders_fini()
 	gpu_uniforms_fini()
-	when !KRODIN_VULKAN {
-		if quad_shader_program != 0 {
-			gl.DeleteProgram(quad_shader_program)
-			quad_shader_program = 0
-		}
-		if text_shader_program != 0 {
-			gl.DeleteProgram(text_shader_program)
-			text_shader_program = 0
-		}
-	}
+	gpu_program_destroy(&g_ui_program)
 }

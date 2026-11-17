@@ -20,8 +20,7 @@ Gpu_Sampler :: distinct u32
 // Something a pass renders into: a colour+depth target (offscreen frames,
 // tests, the benchmark) or a depth-only one (shadow maps). 0 is the window.
 Gpu_Render_Target :: distinct u32
-// A compiled shader program variant (the world shaders; the UI still uses raw
-// GL programs).
+// A compiled shader program: a world shader variant or the interface shader.
 Gpu_Program :: distinct u32
 // GPU memory holding vertices, indices or shader-readable storage.
 Gpu_Buffer :: distinct u32
@@ -47,12 +46,18 @@ GPU_UNIT_COLOR         :: 0
 GPU_UNIT_SHADOW        :: 1
 GPU_UNIT_PLAYER_SHADOW :: 2
 
-// Fixed-function state of a world draw. Depth testing (less) is always on;
-// culling is a property of the pass (shadow passes cull front faces).
+Gpu_Depth_Test :: enum u8 {
+	Less, // the world's test (the zero value)
+	Off,  // flat overlays: the interface, nameplates
+}
+
+// Fixed-function state of a draw. Culling is a property of the pass (shadow
+// passes cull front faces).
 Gpu_Draw_State :: struct {
 	blend:       bool, // src alpha, one minus src alpha
 	depth_write: bool,
 	wireframe:   bool,
+	depth_test:  Gpu_Depth_Test,
 }
 GPU_DRAW_STATE_DEFAULT :: Gpu_Draw_State{depth_write = true}
 
@@ -64,6 +69,24 @@ GPU_FRAMES_IN_FLIGHT :: 2
 Gpu_Vertex_Layout :: enum u8 {
 	Basic,   // Vertex: position (0), tex_coord (1)
 	Batched, // Batched_Vertex: position (0), tex_coord (1), face_idx (2), object_index (3)
+	UI,      // UI_Vertex: position (0), local (1), uv (2), color (3), radii (4), params (5)
+}
+
+// Batched work a caller keeps on the CPU (the interface's draw list) is drawn
+// before anything else touches the GPU: each backend calls
+// gpu_flush_deferred first thing in its clears, target and pass changes,
+// readbacks, presents and other programs' draws. Code that draws or reads
+// behind this interface (raw GL in tests) calls ui_flush itself.
+g_gpu_deferred: struct {
+	flush: proc(),
+	busy:  bool, // inside flush: its own draws must not recurse
+}
+
+gpu_flush_deferred :: proc() {
+	if g_gpu_deferred.flush == nil || g_gpu_deferred.busy { return }
+	g_gpu_deferred.busy = true
+	g_gpu_deferred.flush()
+	g_gpu_deferred.busy = false
 }
 
 Gpu_Format :: enum u8 {

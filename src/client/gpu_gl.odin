@@ -7,6 +7,7 @@ package main
 import "core:math"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
+import shared "../shared"
 
 when !KRODIN_VULKAN {
 
@@ -193,6 +194,7 @@ when !KRODIN_VULKAN {
 	// on, blending off, depth cleared to 1. cull_front culls front faces (shadow
 	// acne); otherwise nothing is culled.
 	gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
+		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target))
 		gl.Viewport(0, 0, size, size)
 		gpu_draw_state_reset()
@@ -244,7 +246,8 @@ when !KRODIN_VULKAN {
 	}
 
 	gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
-		if vertices == 0 || indices == 0 { return 0 }
+		// .UI data is per frame: gpu_transient_bind.
+		if vertices == 0 || indices == 0 || layout == .UI { return 0 }
 		vao: u32
 		gl.CreateVertexArrays(1, &vao)
 		gl.VertexArrayElementBuffer(vao, u32(indices))
@@ -262,6 +265,7 @@ when !KRODIN_VULKAN {
 			gl.VertexArrayAttribFormat(vao, 2, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, face_idx)))
 			gl.VertexArrayAttribFormat(vao, 3, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, object_index)))
 			attribs = 4
+		case .UI:
 		}
 		for attrib in 0 ..< attribs {
 			gl.EnableVertexArrayAttrib(vao, attrib)
@@ -272,7 +276,13 @@ when !KRODIN_VULKAN {
 
 	gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 		gl.BindVertexArray(u32(input))
+		g_gl_index_base = 0
 	}
+
+	// Byte offset of index 0 in the bound element buffer: 0 for vertex inputs,
+	// the ring position after gpu_transient_bind.
+	@(private = "file")
+	g_gl_index_base: uintptr
 
 	// Destroys only the input; its buffers are destroyed separately.
 	gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
@@ -292,6 +302,8 @@ when !KRODIN_VULKAN {
 	GPU_UNIFORM_RING_SIZE :: 8 << 20
 	GPU_UNIFORM_RING_SEGMENTS :: 4
 	GPU_UNIFORM_SEGMENT_SIZE :: GPU_UNIFORM_RING_SIZE / GPU_UNIFORM_RING_SEGMENTS
+	// Per-frame vertices and indices (gpu_transient_bind), same scheme.
+	GPU_TRANSIENT_RING_SIZE :: 32 << 20
 
 	@(private = "file")
 	Gl_Uniform_Ring :: struct {
@@ -300,22 +312,32 @@ when !KRODIN_VULKAN {
 		offset:   int,
 		align:    int,
 		segment:  int,
+		segment_size: int,
 		fences:   [GPU_UNIFORM_RING_SEGMENTS]gl.sync_t,
 		context_: glfw.WindowHandle,
+		vao:      u32, // transient ring: the .UI vertex input reading it
 	}
 
 	@(private = "file")
 	g_uniform_ring: Gl_Uniform_Ring
 
 	@(private = "file")
-	gl_uniform_ring_init :: proc(ring: ^Gl_Uniform_Ring) {
+	g_transient_ring: Gl_Uniform_Ring
+
+	@(private = "file")
+	gl_uniform_ring_init :: proc(ring: ^Gl_Uniform_Ring, size: int = GPU_UNIFORM_RING_SIZE, align: int = 0) {
 		flags := u32(gl.MAP_WRITE_BIT | gl.MAP_PERSISTENT_BIT | gl.MAP_COHERENT_BIT)
 		gl.CreateBuffers(1, &ring.buffer)
-		gl.NamedBufferStorage(ring.buffer, GPU_UNIFORM_RING_SIZE, nil, flags)
-		ring.mapped = cast([^]u8)gl.MapNamedBufferRange(ring.buffer, 0, GPU_UNIFORM_RING_SIZE, flags)
-		align: i32
-		gl.GetIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align)
-		ring.align = max(int(align), 16)
+		gl.NamedBufferStorage(ring.buffer, size, nil, flags)
+		ring.mapped = cast([^]u8)gl.MapNamedBufferRange(ring.buffer, 0, size, flags)
+		ring.segment_size = size / GPU_UNIFORM_RING_SEGMENTS
+		if align > 0 {
+			ring.align = align
+		} else {
+			uniform_align: i32
+			gl.GetIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_align)
+			ring.align = max(int(uniform_align), 16)
+		}
 	}
 
 	// Leaves the current segment (fencing it) and waits until the next one is
@@ -324,7 +346,7 @@ when !KRODIN_VULKAN {
 	gl_uniform_ring_advance :: proc(ring: ^Gl_Uniform_Ring) {
 		ring.fences[ring.segment] = gl.FenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
 		ring.segment = (ring.segment + 1) % GPU_UNIFORM_RING_SEGMENTS
-		ring.offset = ring.segment * GPU_UNIFORM_SEGMENT_SIZE
+		ring.offset = ring.segment * ring.segment_size
 		if fence := ring.fences[ring.segment]; fence != nil {
 			for {
 				result := gl.ClientWaitSync(fence, gl.SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000)
@@ -347,21 +369,63 @@ when !KRODIN_VULKAN {
 		if ring.buffer == 0 { gl_uniform_ring_init(ring) }
 		size := len(data)
 		if size == 0 || size > GPU_UNIFORM_SEGMENT_SIZE || ring.mapped == nil { return }
-		if ring.offset + size > (ring.segment + 1) * GPU_UNIFORM_SEGMENT_SIZE { gl_uniform_ring_advance(ring) }
+		if ring.offset + size > (ring.segment + 1) * ring.segment_size { gl_uniform_ring_advance(ring) }
 		copy(ring.mapped[ring.offset:][:size], data)
 		gl.BindBufferRange(gl.UNIFORM_BUFFER, binding, ring.buffer, ring.offset, size)
 		ring.offset = (ring.offset + size + ring.align - 1) / ring.align * ring.align
 	}
 
-	// Frees the current context's uniform ring (resource_cache_fini).
+	// Frees the current context's uniform and transient rings
+	// (resource_cache_fini).
 	gpu_uniforms_fini :: proc() {
-		ring := &g_uniform_ring
-		if ring.buffer != 0 && ring.context_ == glfw.GetCurrentContext() {
-			for fence in ring.fences { if fence != nil { gl.DeleteSync(fence) } }
-			gl.UnmapNamedBuffer(ring.buffer)
-			gl.DeleteBuffers(1, &ring.buffer)
+		for ring in ([2]^Gl_Uniform_Ring{&g_uniform_ring, &g_transient_ring}) {
+			if ring.buffer != 0 && ring.context_ == glfw.GetCurrentContext() {
+				for fence in ring.fences { if fence != nil { gl.DeleteSync(fence) } }
+				if ring.vao != 0 { gl.DeleteVertexArrays(1, &ring.vao) }
+				gl.UnmapNamedBuffer(ring.buffer)
+				gl.DeleteBuffers(1, &ring.buffer)
+			}
+			ring^ = {}
 		}
-		ring^ = {}
+	}
+
+	// Copies this frame's vertices (laid out as `layout`) and indices into the
+	// transient ring and binds them for the following gpu_draw_indexed calls,
+	// whose first_index counts from the start of `indices`. Only .UI so far.
+	// False when the data does not fit (a quarter of the ring).
+	gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
+		assert(layout == .UI)
+		ring := &g_transient_ring
+		current := glfw.GetCurrentContext()
+		if ring.context_ != current { ring^ = {context_ = current} }
+		if ring.buffer == 0 { gl_uniform_ring_init(ring, GPU_TRANSIENT_RING_SIZE, 16) }
+		vertex_bytes := (len(vertices) + 15) &~ 15
+		index_bytes := len(indices) * size_of(u32)
+		size := vertex_bytes + index_bytes
+		if size == 0 || size > ring.segment_size || ring.mapped == nil { return false }
+		if ring.offset + size > (ring.segment + 1) * ring.segment_size { gl_uniform_ring_advance(ring) }
+		vertex_offset := ring.offset
+		index_offset := vertex_offset + vertex_bytes
+		copy(ring.mapped[vertex_offset:][:len(vertices)], vertices)
+		copy(ring.mapped[index_offset:][:index_bytes], ([^]u8)(raw_data(indices))[:index_bytes])
+		ring.offset = (index_offset + index_bytes + 15) &~ 15
+		if ring.vao == 0 {
+			gl.CreateVertexArrays(1, &ring.vao)
+			formats := [6]struct{size: i32, offset: uintptr}{
+				{2, offset_of(UI_Vertex, position)}, {2, offset_of(UI_Vertex, local)}, {2, offset_of(UI_Vertex, uv)},
+				{4, offset_of(UI_Vertex, color)}, {4, offset_of(UI_Vertex, radii)}, {4, offset_of(UI_Vertex, params)},
+			}
+			for f, attrib in formats {
+				gl.VertexArrayAttribFormat(ring.vao, u32(attrib), f.size, gl.FLOAT, false, u32(f.offset))
+				gl.EnableVertexArrayAttrib(ring.vao, u32(attrib))
+				gl.VertexArrayAttribBinding(ring.vao, u32(attrib), 0)
+			}
+			gl.VertexArrayElementBuffer(ring.vao, ring.buffer)
+		}
+		gl.VertexArrayVertexBuffer(ring.vao, 0, ring.buffer, vertex_offset, size_of(UI_Vertex))
+		gl.BindVertexArray(ring.vao)
+		g_gl_index_base = uintptr(index_offset)
+		return true
 	}
 
 	// ---------------------------------------------------------------------------
@@ -404,6 +468,9 @@ when !KRODIN_VULKAN {
 		if force || current.wireframe != state.wireframe {
 			gl.PolygonMode(gl.FRONT_AND_BACK, state.wireframe ? gl.LINE : gl.FILL)
 		}
+		if force || current.depth_test != state.depth_test {
+			if state.depth_test == .Off { gl.Disable(gl.DEPTH_TEST) } else { gl.Enable(gl.DEPTH_TEST); gl.DepthFunc(gl.LESS) }
+		}
 		g_gl_draw = {state = state, known = true}
 	}
 
@@ -415,13 +482,28 @@ when !KRODIN_VULKAN {
 	// whatever other code (HUD, tests) left behind. Also called after one, so
 	// world state never leaks into the HUD.
 	gpu_draw_state_reset :: proc() {
+		gpu_flush_deferred()
 		gl.Enable(gl.DEPTH_TEST)
 		gl.ActiveTexture(gl.TEXTURE0)
 		gl_apply_draw_state(GPU_DRAW_STATE_DEFAULT, true)
 	}
 
 	gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
-		gl.DrawElements(gl.TRIANGLES, index_count, gl.UNSIGNED_INT, rawptr(uintptr(first_index) * size_of(u32)))
+		gl.DrawElements(gl.TRIANGLES, index_count, gl.UNSIGNED_INT, rawptr(g_gl_index_base + uintptr(first_index) * size_of(u32)))
+	}
+
+	// Clips draws to `rect` (x, y, width, height in target pixels, y up from
+	// the bottom row: glScissor's convention) until disabled.
+	gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
+		if !enabled { gl.Disable(gl.SCISSOR_TEST); return }
+		gl.Enable(gl.SCISSOR_TEST)
+		gl.Scissor(rect[0], rect[1], max(rect[2], 0), max(rect[3], 0))
+	}
+
+	gpu_program_create_ui :: proc() -> Gpu_Program {
+		dir := shared.concat(shared.assets_path(), "shaders/")
+		defer delete(dir)
+		return Gpu_Program(shader_compile_ui(dir, "ui.vert", "ui.frag"))
 	}
 
 	// ---------------------------------------------------------------------------
@@ -452,6 +534,7 @@ when !KRODIN_VULKAN {
 
 	// Draws go to `target` (0: the window) over a width x height viewport.
 	gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
+		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target))
 		gl.Viewport(0, 0, width, height)
 	}
@@ -462,6 +545,7 @@ when !KRODIN_VULKAN {
 
 	// Clears the current target's colour (to gpu_set_clear_color's) and/or depth.
 	gpu_clear :: proc(color, depth: bool) {
+		gpu_flush_deferred()
 		mask: u32
 		if color { mask |= gl.COLOR_BUFFER_BIT }
 		if depth {
@@ -477,6 +561,7 @@ when !KRODIN_VULKAN {
 	// renders in the same orientation).
 	gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
 		if len(pixels) < int(width) * int(height) * 3 { return }
+		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.READ_FRAMEBUFFER, u32(target))
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
 		gl.ReadPixels(0, 0, width, height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
@@ -488,6 +573,7 @@ when !KRODIN_VULKAN {
 	// same backend is meaningful (GL: normalized u32; Vulkan: f32 bits).
 	gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
 		if len(depth) < int(width) * int(height) { return }
+		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.READ_FRAMEBUFFER, u32(target))
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 4)
 		gl.ReadPixels(0, 0, width, height, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, raw_data(depth))
@@ -540,6 +626,7 @@ when !KRODIN_VULKAN {
 	}
 
 	gpu_frame_end :: proc() {
+		gpu_flush_deferred()
 		frames := &g_gl_frames
 		gl.EndQuery(gl.TIME_ELAPSED)
 		frames.pending[frames.slot] = true
@@ -582,6 +669,7 @@ when !KRODIN_VULKAN {
 	}
 
 	gpu_present :: proc(window: glfw.WindowHandle) {
+		gpu_flush_deferred()
 		glfw.SwapBuffers(window)
 	}
 

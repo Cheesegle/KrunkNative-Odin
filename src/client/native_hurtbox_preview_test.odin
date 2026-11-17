@@ -87,6 +87,7 @@ when ODIN_TEST {
 		debug_render_build(&client, 0)
 		testing.expect(t, debug_hitbox_model(&client) == .KRODIN, "a native game draws the native server's boxes")
 		gl.ClearColor(0.55, 0.62, 0.7, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 		debug_render_lines(dr, view_projection, false)

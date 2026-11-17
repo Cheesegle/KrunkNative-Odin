@@ -103,11 +103,13 @@ when ODIN_TEST {
 		defer delete(flipped)
 		edge: [2][3]u8
 		for borders, i in ([2]bool{true, false}) {
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, W, H)
 			ui_update(ui, W, H)
 			overlay_scope_render(ui, borders)
 			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+			ui_flush()
 			gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			// The left edge, outside the square scope image, at mid height.
 			edge[i] = {pixels[(H/2*W)*3], pixels[(H/2*W)*3+1], pixels[(H/2*W)*3+2]}

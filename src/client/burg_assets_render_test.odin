@@ -84,9 +84,11 @@ when ODIN_TEST {
 					(cast(^Mesh)object.mesh).visible = pass == 1
 				}
 			}
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			pixels := before if pass == 0 else after
+			ui_flush()
 			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		}
 		changed := 0

@@ -52,26 +52,6 @@ Material :: struct {
 	program:     Gpu_Program,
 }
 
-Quad_Material :: struct {
-	using base: Material,
-	color: shared.Vec4,
-	aspect: f32,
-	border_bottom_left_radius: f32,
-	border_bottom_right_radius: f32,
-	border_top_left_radius: f32,
-	border_top_right_radius: f32,
-	r_clip: f32,
-	stroke_width: f32,
-	texture_viewport: [4]f32,
-	texture: Gpu_Texture,
-}
-
-Text_Material :: struct {
-	using base: Material,
-	color: shared.Vec4,
-	texture: Gpu_Texture,
-}
-
 Basic_Material :: struct {
 	using base: Material,
 	is_ramp: bool,
@@ -184,14 +164,9 @@ Camera :: struct {
 	world_inverse_matrix: shared.Mat4,
 }
 
+// Screen size and scale for the interface; what it draws is queued in
+// g_ui_batch (ui.odin).
 UI :: struct {
-	material:      ^Quad_Material,
-	text_material: ^Text_Material,
-	vao:           u32,
-	vbo:           u32,
-	// Dynamic vertices for ui_fill_polygon.
-	poly_vao:      u32,
-	poly_vbo:      u32,
 	width:         f32,
 	height:        f32,
 	scale:         f32,
@@ -199,7 +174,8 @@ UI :: struct {
 }
 
 Glyph_Cache_Entry :: struct {
-	texture:   Gpu_Texture,
+	atlas:     [2]i32, // top-left texel in the glyph atlas (ui.odin)
+	in_atlas:  bool,   // false for empty glyphs (space)
 	size:      shared.Vec2,
 	h_bearing: shared.Vec2,
 	v_bearing: shared.Vec2,

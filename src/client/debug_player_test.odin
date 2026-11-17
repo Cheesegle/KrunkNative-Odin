@@ -286,6 +286,7 @@ when ODIN_TEST && KRODIN_DEV {
 		for i in 0..<300 { perf_push(&client.perf, i % 50 == 0 ? 12 : 6.9, 2.5) }
 		client.mouse_state.locked = true
 		for _ in 0..<3 {
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT)
 			ui_update(client.ui, W, H)
 			debug_ui_update(client)
@@ -304,6 +305,7 @@ when ODIN_TEST && KRODIN_DEV {
 		pixels := make([]u8, w*h*3)
 		defer delete(pixels)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(i32(x0), i32(H - y0 - h), i32(w), i32(h), gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		lit := 0
 		for i := 0; i < len(pixels); i += 3 { if pixels[i] > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 { lit += 1 } }

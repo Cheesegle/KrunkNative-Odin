@@ -202,13 +202,6 @@ scene_remove_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loado
 }
 
 // Uniform locations of the UI programs.
-scene_uniforms :: proc(program: u32) -> ^Shader_Uniforms {
-	if program == quad_shader_program {
-		return &u_quad
-	}
-	return &u_text
-}
-
 // Local to a render pass: HUD draws, resource uploads, and other GL contexts
 // cannot leave this cache stale. The draw state starts at the default.
 Scene_Draw_State :: struct {

@@ -66,10 +66,12 @@ when ODIN_TEST {
 	@(private = "file")
 	colors_test_draw :: proc(client: ^Client, pixels: []u8) {
 		healthbar_test_settle(client)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, COLORS_W, COLORS_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 

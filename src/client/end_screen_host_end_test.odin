@@ -188,11 +188,15 @@ when ODIN_TEST {
 		blank := make([]u8, W*H*3)
 		defer { delete(pixels); delete(blank) }
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
+		ui_flush()
 		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(blank))
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		ui_update(client.ui, W, H)
 		end_screen_render(&client, 200.02+END_SCREEN_PANEL_DELAY+0.1)
+		ui_flush()
 		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		w, h := client.ui.width/client.ui.scale, client.ui.height/client.ui.scale
 		testing.expect(t, match_hud_region_delta(&client, blank, pixels, w*0.5-300, h*0.3, w*0.5+300, h*0.6) > 1000, "the final standings are drawn after the restart")

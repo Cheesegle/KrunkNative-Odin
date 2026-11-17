@@ -404,6 +404,7 @@ when ODIN_TEST {
 			client.mouse_state.locked = true // Display-only: no GLFW input is read.
 			counts: Debug_UI_Draw_Counts
 			for _ in 0..<3 {
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				ui_update(client.ui, f32(size[0]), f32(size[1]))
 				testing.expect(t, !debug_ui_update(client), "a locked cursor never feeds the window")
@@ -414,6 +415,7 @@ when ODIN_TEST {
 			testing.expectf(t, counts.min_x >= 0 && counts.min_y >= 0 && counts.max_x <= size[0] && counts.max_y <= size[1], "the window draws within %v: %v", size, counts)
 			testing.expect(t, !gl.IsEnabled(gl.SCISSOR_TEST), "scissor is restored after the window")
 			pixels := make([]u8, int(size[0]*size[1]*3), context.temp_allocator)
+			ui_flush()
 			gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			window_rect := mu.get_container(&client.debug_ui.ctx, DEBUG_WINDOW_TITLE).rect
 			changed, outside := 0, 0
@@ -440,6 +442,7 @@ when ODIN_TEST {
 		// Frame GPU times (gpu_frame_begin/end) arrive a few frames later.
 		for _ in 0..<12 {
 			gpu_frame_begin()
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT)
 			gpu_frame_end()
 			gl.Finish()

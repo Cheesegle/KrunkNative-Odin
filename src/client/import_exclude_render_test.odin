@@ -100,9 +100,11 @@ when ODIN_TEST {
 					import_exclude_texts_inside(t, commands, {longest}, clay.GetElementData(clay.ID("SettingsFooter")).boundingBox, size)
 				}
 				gl.ClearColor(0.17, 0.17, 0.17, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				menu_render_commands(ui, commands)
 				gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+				ui_flush()
 				gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 				name := scene == 0 ? "import_popup" : "import_message"
 				testing.expect(t, stbi.write_png(fmt.ctprintf("bin/import-filter/%s_%dx%d.png", name, size[0], size[1]), size[0], size[1], 3, &pixels[(size[1]-1)*size[0]*3], -size[0]*3) != 0, "preview PNG written")

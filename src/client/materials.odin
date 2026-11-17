@@ -9,52 +9,10 @@ import shared "../shared"
 basic_shader_program: Gpu_Program
 // Static map batches (map_batch.odin): same shader source with BATCHED defined.
 basic_batched_shader_program: Gpu_Program
-quad_shader_program: u32
-text_shader_program: u32
 
 // Active map environment. It is updated when a map is loaded and consumed by
 // the basic world material for every draw.
 g_lighting_config: shared.Lighting_Config = shared.DEFAULT_LIGHTING_CONFIG
-
-// Cached uniform locations of the UI programs (quad, text), which still use
-// loose uniforms. glGetUniformLocation is a driver-side string lookup, so it
-// runs once per program, not per draw.
-Shader_Uniforms :: struct {
-	color:                      i32,
-	tex:                        i32,
-	aspect:                     i32,
-	r_clip:                     i32,
-	stroke_width:               i32,
-	border_bottom_left_radius:  i32,
-	border_bottom_right_radius: i32,
-	border_top_left_radius:     i32,
-	border_top_right_radius:    i32,
-	tex_viewport:               i32,
-	offset:                     i32,
-	scale:                      i32,
-	depth:                      i32,
-}
-
-u_quad:  Shader_Uniforms
-u_text:  Shader_Uniforms
-
-cache_uniforms :: proc(program: u32) -> Shader_Uniforms {
-	u := Shader_Uniforms{}
-	u.color = gl.GetUniformLocation(program, "color")
-	u.tex = gl.GetUniformLocation(program, "tex")
-	u.aspect = gl.GetUniformLocation(program, "aspect")
-	u.r_clip = gl.GetUniformLocation(program, "r_clip")
-	u.stroke_width = gl.GetUniformLocation(program, "stroke_width")
-	u.border_bottom_left_radius = gl.GetUniformLocation(program, "border_bottom_left_radius")
-	u.border_bottom_right_radius = gl.GetUniformLocation(program, "border_bottom_right_radius")
-	u.border_top_left_radius = gl.GetUniformLocation(program, "border_top_left_radius")
-	u.border_top_right_radius = gl.GetUniformLocation(program, "border_top_right_radius")
-	u.tex_viewport = gl.GetUniformLocation(program, "tex_viewport")
-	u.offset = gl.GetUniformLocation(program, "offset")
-	u.scale = gl.GetUniformLocation(program, "scale")
-	u.depth = gl.GetUniformLocation(program, "depth")
-	return u
-}
 
 // std140 layout of the `Pass` uniform block in basic.vert and basic.frag
 // (GPU_BINDING_PASS): everything shared by the draws of one pass. Field order
@@ -234,92 +192,6 @@ basic_material_init :: proc() -> ^Basic_Material {
 	}
 
 	material.base.program = basic_shader_program
-	return material
-}
-
-quad_material_update_uniforms :: proc(mat: rawptr) {
-	material := cast(^Quad_Material)mat
-
-	color := u_quad.color
-	aspect := u_quad.aspect
-	r_clip := u_quad.r_clip
-
-	border_bottom_left_radius := u_quad.border_bottom_left_radius
-	border_bottom_right_radius := u_quad.border_bottom_right_radius
-	border_top_left_radius := u_quad.border_top_left_radius
-	border_top_right_radius := u_quad.border_top_right_radius
-
-	texture := u_quad.tex
-	texture_viewport := u_quad.tex_viewport
-
-	gl.Uniform4f(color, material.color.x, material.color.y, material.color.z, material.color.w)
-	gl.Uniform1f(aspect, material.aspect)
-	gl.Uniform1f(r_clip, material.r_clip)
-	gl.Uniform1f(u_quad.stroke_width, material.stroke_width)
-
-	gl.Uniform1f(border_bottom_left_radius, material.border_bottom_left_radius)
-	gl.Uniform1f(border_bottom_right_radius, material.border_bottom_right_radius)
-	gl.Uniform1f(border_top_left_radius, material.border_top_left_radius)
-	gl.Uniform1f(border_top_right_radius, material.border_top_right_radius)
-
-	gl.Uniform1fv(texture_viewport, 4, &material.texture_viewport[0])
-	gl.Uniform1i(texture, 0)
-	gpu_bind_color_texture(material.texture)
-}
-
-quad_material_vtable := Material_VTable{update_uniforms = quad_material_update_uniforms}
-
-quad_material_init :: proc() -> ^Quad_Material {
-	material := new(Quad_Material)
-	material.base.vtable = &quad_material_vtable
-
-	if quad_shader_program == 0 {
-		dir := shared.concat(shared.assets_path(), "shaders/")
-		quad_shader_program = shader_compile_ui(dir, "quad.vert", "quad.frag")
-		u_quad = cache_uniforms(quad_shader_program)
-		delete(dir)
-	}
-
-	if quad_shader_program == 0 {
-		free(material)
-		return nil
-	}
-
-	material.base.program = Gpu_Program(quad_shader_program)
-	return material
-}
-
-text_material_update_uniforms :: proc(mat: rawptr) {
-	material := cast(^Text_Material)mat
-
-	color := u_text.color
-	texture := u_text.tex
-
-	gl.Uniform4f(color, material.color.x, material.color.y, material.color.z, material.color.w)
-
-	gl.Uniform1i(texture, 0)
-	gpu_bind_color_texture(material.texture)
-}
-
-text_material_vtable := Material_VTable{update_uniforms = text_material_update_uniforms}
-
-text_material_init :: proc() -> ^Text_Material {
-	material := new(Text_Material)
-	material.base.vtable = &text_material_vtable
-
-	if text_shader_program == 0 {
-		dir := shared.concat(shared.assets_path(), "shaders/")
-		text_shader_program = shader_compile_ui(dir, "quad.vert", "text.frag")
-		u_text = cache_uniforms(text_shader_program)
-		delete(dir)
-	}
-
-	if text_shader_program == 0 {
-		free(material)
-		return nil
-	}
-
-	material.base.program = Gpu_Program(text_shader_program)
 	return material
 }
 

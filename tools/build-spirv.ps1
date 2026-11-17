@@ -1,6 +1,7 @@
-# Compiles the world shaders (assets/shaders/basic.vert, basic.frag) to SPIR-V
-# for the Vulkan backend: one module pair per variant, written next to the
-# backend in src/client/spirv/ (gpu_vk.odin embeds them with #load).
+# Compiles the shaders to SPIR-V for the Vulkan backend: the world shaders
+# (assets/shaders/basic.vert, basic.frag) once per variant, and the other
+# programs (ui) once each. The modules are written next to the backend in
+# src/client/spirv/ (gpu_vk.odin embeds them with #load).
 #
 # The Batch_Object layout defines come from src/client/spirv/basic_defines.glsl,
 # which basic_spirv_defines_match_layout (src/client) checks against the Odin
@@ -33,6 +34,13 @@ foreach ($name in $variants.Keys) {
     foreach ($stage in @('vert', 'frag')) {
         $target = Join-Path $out "$name.$stage.spv"
         & $glslc.Source --target-env=vulkan1.3 -O @defines @($variants[$name]) -o $target (Join-Path $source "basic.$stage")
+        if ($LASTEXITCODE -ne 0) { Write-Error "glslc failed for $name.$stage"; exit 1 }
+    }
+}
+foreach ($name in @('ui')) {
+    foreach ($stage in @('vert', 'frag')) {
+        $target = Join-Path $out "$name.$stage.spv"
+        & $glslc.Source --target-env=vulkan1.3 -O -o $target (Join-Path $source "$name.$stage")
         if ($LASTEXITCODE -ne 0) { Write-Error "glslc failed for $name.$stage"; exit 1 }
     }
 }

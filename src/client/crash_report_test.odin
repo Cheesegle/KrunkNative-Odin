@@ -215,9 +215,11 @@ when ODIN_TEST {
 			start := time.tick_now()
 			FRAMES :: 60
 			for _ in 0 ..< FRAMES {
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 				scene_render(client.scene, &camera, f32(w), f32(h), 0)
 			}
+			ui_flush()
 			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(result.pixels))
 			result.ms = time.duration_milliseconds(time.tick_since(start)) / FRAMES
 			result.status = u32(gl.GetGraphicsResetStatus())
