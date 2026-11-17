@@ -10,6 +10,7 @@ import mu "vendor:microui"
 import glfw "vendor:glfw"
 import stbi "vendor:stb/image"
 import shared "../shared"
+import kproto "../krunker"
 
 when ODIN_TEST {
 	HITBOX_SHOT_W :: 640
@@ -324,5 +325,121 @@ when ODIN_TEST {
 			debug_test_read(pixels)
 			debug_test_save(pixels, shots[i])
 		}
+	}
+
+	// A live remote seen side-on, mid-stride. Its stride phase now comes from
+	// the server's stepVal (k record value 6), so the drawn complexHitboxes
+	// (Krunker's server boxes) and the model's legs follow the server's swing
+	// instead of a locally re-derived phase. Writes before/after previews to
+	// bin/debug_hitboxes/krunker_remote_stride_*.png.
+	@(test)
+	krunker_remote_stride_render_follows_server_step :: proc(t: ^testing.T) {
+		logger := context.logger
+		context = runtime.default_context()
+		context.logger = logger
+		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
+		defer glfw.Terminate()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Remote stride", nil, nil)
+		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
+		defer glfw.DestroyWindow(window)
+		glfw.MakeContextCurrent(window)
+		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+
+		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
+		g_client = &client
+		defer { g_client = nil }
+		config := shared.config_load_gameplay()
+		defer shared.config_destroy_gameplay(config)
+		map_inst := shared.Map{death_y = -1000}
+		maps := []^shared.Map{&map_inst}
+		shared.game_configure(&client.game, &config.game, maps, nil, config.weapons, config.classes)
+		shared.game_init(&client.game, 0, 0, false)
+		defer {
+			debug_render_fini(&client.debug_render)
+			client_clear_players(&client)
+			shared.game_destroy(&client.game)
+			kproto.krunker_world_reset(&client.krunker_world)
+			scene_fini(client.fps_scene)
+			scene_fini(client.scene)
+			resource_cache_fini()
+		}
+		me := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, me)
+		shared.player_spawn(me, 0)
+		me.uid, me.active, me.is_you, me.position = 1, true, true, {0, 0, 0}
+		client.me = me
+		client.krunker_world.local_sid = 1
+		remote := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, remote)
+		shared.player_spawn(remote, 0)
+		remote.uid, remote.active, remote.swap_timer = 2, true, 0
+		player_generate_meshes(remote, false)
+		scene_add_player_mesh(client.scene, cast(^Player_Mesh)remote.mesh, int(remote.loadout_size))
+
+		camera := camera_init(math.PI / 2)
+		camera.position = {0, 6, 0}
+		camera_update_projection_matrix(&camera, f32(HITBOX_SHOT_W) / f32(HITBOX_SHOT_H))
+		camera_update_world_inverse_matrix(&camera)
+		client.camera = camera
+		view_projection := camera.projection_matrix * camera.world_inverse_matrix
+		pixels := make([]u8, HITBOX_SHOT_W * HITBOX_SHOT_H * 3)
+		defer delete(pixels)
+		is_red :: proc(r, g, b: u8) -> bool { return r > 200 && g < 120 && b < 120 }
+
+		// Two k packets 0.1 s apart, side-on (yaw 90 degrees), with the
+		// server's stepVal; the remote is drawn half way between them.
+		leg_corner: [2][2]int
+		names := [2]cstring{"bin/debug_hitboxes/krunker_remote_stride_step0.png", "bin/debug_hitboxes/krunker_remote_stride_server_step.png"}
+		for step, i in ([2]f64{0, 1.2}) {
+			kproto.krunker_world_reset(&client.krunker_world)
+			client.krunker_world.local_sid = 1
+			record := []kproto.Krunker_Msgpack_Value{i64(2), i64(0), i64(0), i64(-24), i64(90), i64(0), f64(step), true, i64(0), i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(20)}
+			packet := []kproto.Krunker_Msgpack_Value{"k", record, i64(10), i64(1000)}
+			client.krunker_world.received_at = 1
+			kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+			packet[3], client.krunker_world.received_at = i64(1100), 1.1
+			kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+			krunker_client_interpolate_remotes(&client, 1.15, 0)
+			testing.expectf(t, abs(remote.step_val-f32(step)) < 1e-5, "the remote takes the server's stepVal %v, got %v", step, remote.step_val)
+			remote.step_chase = remote.step_val
+			player_update_meshes(remote, false)
+
+			boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+			count := shared.krunker_player_hurtboxes(shared.krunker_hurtbox_pose(remote, false), &boxes)
+			// The lowest corner of the first leg box: the foot, which the swing moves.
+			lowest := shared.Vec3{0, 1e9, 0}
+			for box in boxes[:count] {
+				if box.part != .LEG { continue }
+				for corner in 0 ..< 8 {
+					local := shared.Vec4{corner & 1 == 0 ? -0.5 : 0.5, corner & 2 == 0 ? -0.5 : 0.5, corner & 4 == 0 ? -0.5 : 0.5, 1}
+					world := box.transform * local
+					if world.y < lowest.y { lowest = world.xyz }
+				}
+				break
+			}
+			pixel, visible := debug_test_project(view_projection, lowest)
+			testing.expect(t, visible, "the stride is in view")
+			leg_corner[i] = pixel
+
+			clear(&client.debug_render.lines)
+			debug_lines_player(&client.debug_render.lines, remote, .KRUNKER, .SHOT, false)
+			gl.ClearColor(0.55, 0.62, 0.7, 1)
+			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
+			debug_render_lines(&client.debug_render, view_projection, false)
+			err := gl.GetError()
+			testing.expectf(t, err == gl.NO_ERROR, "stride preview must draw without OpenGL errors (0x%x)", err)
+			debug_test_read(pixels)
+			testing.expectf(t, debug_test_pixel_near(pixels, pixel, 2, is_red), "the leg hurtbox is drawn at its projected foot %v", pixel)
+			debug_test_save(pixels, names[i])
+		}
+		moved := leg_corner[1] - leg_corner[0]
+		testing.expectf(t, abs(moved.x) + abs(moved.y) >= 6, "the server's stride swings the drawn leg box (moved %v px)", moved)
 	}
 }

@@ -107,6 +107,48 @@ when ODIN_TEST {
 			"native predicted shots still stop at Krodin's player boxes")
 	}
 
+	// k record value 6 is the server's stepVal. The browser interpolates it
+	// like the position (stepVal = m.s + (g.s - m.s) * p) and plays a remote
+	// footstep whenever its sign changes (posStep). Deriving it locally from
+	// the displacement put the stride, and the drawn complexHitboxes, out of
+	// phase with the server's.
+	@(test)
+	krunker_remote_stride_follows_server_step :: proc(t: ^testing.T) {
+		client: Client
+		map_inst: shared.Map
+		krunker_presentation_fixture(&client, &map_inst)
+		defer krunker_presentation_cleanup(&client)
+		client.game.presentation_enabled = true
+		peer := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, peer)
+		shared.player_spawn(peer, 2)
+		peer.uid = 8
+		record := []kproto.Krunker_Msgpack_Value{i64(8), i64(0), i64(0), i64(-100), i64(0), i64(0), f64(-0.2), true, i64(0), i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(20)}
+		packet := []kproto.Krunker_Msgpack_Value{"k", record, i64(10), i64(1000)}
+		client.krunker_world.received_at = 1
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		record[1], record[6], packet[3], client.krunker_world.received_at = i64(4), f64(0.6), i64(1100), 1.1
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		steps :: proc(game: ^shared.Game) -> (n: int) {
+			for event in game.presentation_events { if event.kind == .STEP && event.uid == 8 { n += 1 } }
+			return
+		}
+		krunker_client_interpolate_remotes(&client, 1.15, 0.007)
+		testing.expectf(t, abs(peer.step_val-0.2) < 1e-5 && abs(peer.position.x-2) < 1e-4, "stepVal -0.2 -> 0.6 at p = 0.5 is 0.2, got %v", peer.step_val)
+		testing.expect(t, steps(&client.game) == 1, "crossing zero upward plays one footstep")
+		pose := shared.krunker_hurtbox_pose(peer, true)
+		testing.expect(t, abs(pose.step_val-0.2) < 1e-5, "the drawn hurtboxes use the server's stride phase")
+		krunker_client_interpolate_remotes(&client, 1.16, 0.007)
+		testing.expect(t, abs(peer.step_val-0.28) < 1e-5 && steps(&client.game) == 1, "no footstep without a sign change")
+		// Standing still: the server pulls stepVal back toward zero, which a
+		// displacement-driven stride never did.
+		record[6], packet[3], client.krunker_world.received_at = f64(-0.5), i64(1200), 1.2
+		kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+		krunker_client_interpolate_remotes(&client, 1.29, 0.007)
+		testing.expectf(t, abs(peer.step_val-(-0.39)) < 1e-5 && abs(peer.position.x-4) < 1e-4, "0.6 -> -0.5 at p = 0.9, got %v", peer.step_val)
+		testing.expect(t, steps(&client.game) == 2, "crossing zero downward plays the next footstep")
+	}
+
 	@(test)
 	krunker_uzi_uses_spread_for_each_predicted_round :: proc(t: ^testing.T) {
 		client: Client
