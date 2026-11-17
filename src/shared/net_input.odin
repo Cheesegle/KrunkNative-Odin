@@ -212,6 +212,7 @@ input_command_sanitize :: proc(command: ^Input) -> Input_Command_Error {
 	command.view_frac = clamp(command.view_frac, 0, 1)
 	command.predicted_weapon_impulse = {}
 	command.predicted_ramp_fix, command.predicted_has_ramp_fix = 0, false
+	command.predicted_slot, command.predicted_ammo = 0, 0
 	command.krunker_shot_timed, command.krunker_shot_time, command.krunker_shot_progress = false, 0, 0
 	return .NONE
 }

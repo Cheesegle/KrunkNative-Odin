@@ -155,10 +155,16 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				}
 			case .BULLET_IMPACT:
 				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
-					if len(client.game.impacts) >= 256 {
-						ordered_remove(&client.game.impacts, 0)
+					// The local player's own shots already drew their tracers and
+					// holes when they were predicted; the server's copy only
+					// confirms a hit.
+					own := client.me != nil && impact.shooter_uid == client.me.uid && client.me.active && native_client_predicts(client, client.me)
+					if !own {
+						if len(client.game.impacts) >= 256 {
+							ordered_remove(&client.game.impacts, 0)
+						}
+						append(&client.game.impacts, impact)
 					}
-					append(&client.game.impacts, impact)
 					client_hit_marker_native_impact(client, impact)
 				}
 			case .DISCONNECT:

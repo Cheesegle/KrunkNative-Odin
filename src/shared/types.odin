@@ -251,6 +251,10 @@ Input :: struct {
 	// so reconciliation restores it from the acknowledged command.
 	predicted_ramp_fix: f32,
 	predicted_has_ramp_fix: bool,
+	// Native client: active weapon slot and its ammo after this command, so a
+	// snapshot's ammo is compared with what was predicted for the same command.
+	predicted_slot: i32,
+	predicted_ammo: u32,
 	// Live Krunker lag compensation metadata, captured when a shot actually
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,

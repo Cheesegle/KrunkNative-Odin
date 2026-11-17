@@ -766,6 +766,8 @@ client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, s
 	for input in client.predicted_inputs {
 		if input.seq > state.ack_seq { break }
 		ramp_fix, has_ramp_fix = input.predicted_ramp_fix, input.predicted_has_ramp_fix
+		commands := &client.net.commands
+		commands.acked_slot, commands.acked_ammo, commands.has_acked_ammo = input.predicted_slot, input.predicted_ammo, true
 	}
 	client_discard_acked_inputs(client, state.ack_seq)
 	player.interpolate = false
@@ -776,6 +778,9 @@ client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, s
 
 	if !was_active {
 		player.direction = {state.x_dir, state.y_dir}
+		// A fresh life: no predicted reload, burst or cooldown carries over.
+		player.reload_timer, player.did_shoot, player.burst_count = 0, false, 0
+		for &cooldown in player.reloads { cooldown = 0 }
 		native_client_reset_prediction(client)
 		return
 	}
@@ -790,7 +795,15 @@ client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, s
 	}
 	// Replay leaves the last command's aim; the view keeps the live mouse look.
 	player.direction = predicted_direction
-	native_client_apply_correction(client, player.position - predicted_position, state.ack_seq)
+	correction := player.position - predicted_position
+	native_client_apply_correction(client, correction, state.ack_seq)
+	when KRODIN_DEV {
+		// One line per snapshot in dev builds, for diagnosing prediction in the field.
+		offset := client.net.commands.visual_offset
+		kproto.network_log("native", fmt.tprintf("ack=%d replayed=%d next_seq=%d correction=%.4f %v offset=%.4f ammo=%d reload=%.3f",
+			state.ack_seq, len(client.predicted_inputs), client.net.commands.next_seq, math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z), correction,
+			math.sqrt(offset.x*offset.x + offset.y*offset.y + offset.z*offset.z), state.active_ammo, player.reload_timer))
+	}
 }
 
 client_apply_match_state :: proc(client: ^Client, state: ^shared.Packet_Match_State) {
@@ -952,61 +965,9 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	}
 	player.is_you = state.is_you
 	player.render_you = state.is_you
-	weapon_found := false
-	for weapon_id, loadout_index in player.loadout {
-		if weapon_id == i32(state.weapon_id) {
-			weapon_found = true
-			weapon := client.game.weapons[weapon_id]
-			if state.active_ammo > weapon.ammo {
-				fmt.eprintf("[Net Client] Rejected invalid ammo %d for player %d weapon %d\n", state.active_ammo, state.player_id, state.weapon_id)
-				return
-			}
-			if player.loadout_index != i32(loadout_index) {
-				shared.player_swap_weapon(player, i32(loadout_index), true, true, true)
-			}
-			player.ammo[loadout_index] = state.active_ammo
-			break
-		}
-	}
-	if !weapon_found {
-		fmt.eprintf("[Net Client] Rejected weapon %d outside player %d loadout\n", state.weapon_id, state.player_id)
+	if !client_apply_weapon_state(client, player, state, was_active, previous_shot_seq) {
 		return
 	}
-	shared.player_update_spread(player, 0, 0, 0)
-	new_shots: u32
-	if was_active && state.active && state.shot_seq > previous_shot_seq {
-		// Cap a pathological jump while still preserving the authoritative
-		// sequence value, so a malformed snapshot cannot create an unbounded loop.
-		new_shots = min(state.shot_seq - previous_shot_seq, u32(16))
-	}
-	player.shot_seq = state.shot_seq
-	for shot_index in 0 ..< int(new_shots) {
-		// Several rounds in one snapshot played their sounds as one loud stack;
-		// space them by the weapon's fire interval as they were actually fired.
-		count := len(client.game.presentation_events)
-		shared.player_emit_presentation(player, .FIRE)
-		if shot_index > 0 && len(client.game.presentation_events) > count {
-			interval := player.weapon.burst ? player.weapon.burst_rate : player.weapon.rate * client.game.config.fire_rate
-			client.game.presentation_events[count].delay = f32(shot_index) * interval
-		}
-		if player.weapon.melee {
-			is_throw := player.can_throw && player.aim_val >= 1 && player.game.config.throwable_melees
-			shared.player_start_melee_animation(player, is_throw ? 3 : player.can_throw ? 1 : 2)
-			if is_throw {
-				player.can_throw = player.unlimited_ammo
-			}
-		} else {
-			shared.player_apply_recoil(player)
-			shared.player_start_view_kick(player)
-			if player.weapon.projectile && (!player.weapon.projectile_disable || player.game.config.bullet_drop) {
-				remaining := new_shots - u32(shot_index) - 1
-				player.projectile_shot_seq = state.projectile_shot_seq >= remaining ? state.projectile_shot_seq - remaining : 0
-				shared.projectile_spawn(player, shared.player_projectile_angles(player))
-			}
-		}
-	}
-
-	player.projectile_shot_seq = state.projectile_shot_seq
 
 	if state.active && (!was_active || player.mesh == nil) {
 		if player.mesh == nil {
@@ -1035,6 +996,80 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	if player.mesh != nil && player.active {
 		player_update_meshes(player, false)
 	}
+}
+
+// The weapon, ammo and shot part of a GAME_STATE snapshot. False rejects the
+// snapshot (ammo over the magazine, or a weapon outside the loadout).
+client_apply_weapon_state :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool, previous_shot_seq: u32) -> bool {
+	// The local player predicts its own shots, ammo and weapon (combat runs in
+	// native_client_predict_frame). A snapshot is RTT old: keep the predicted
+	// weapon while a swap is unacked, correct ammo only by how far the server
+	// differs from the prediction for the acked command, and do not replay its
+	// shots a second time.
+	predicting := state.active && was_active && native_client_predicts(client, player)
+	weapon_found := false
+	for weapon_id, loadout_index in player.loadout {
+		if weapon_id == i32(state.weapon_id) {
+			weapon_found = true
+			weapon := client.game.weapons[weapon_id]
+			if state.active_ammo > weapon.ammo {
+				fmt.eprintf("[Net Client] Rejected invalid ammo %d for player %d weapon %d\n", state.active_ammo, state.player_id, state.weapon_id)
+				return false
+			}
+			if predicting && native_client_unacked_swap(client) {
+				break
+			}
+			if player.loadout_index != i32(loadout_index) {
+				shared.player_swap_weapon(player, i32(loadout_index), true, true, true)
+			}
+			if predicting {
+				player.ammo[loadout_index] = native_client_reconcile_ammo(client, player, i32(loadout_index), state.active_ammo, weapon.ammo)
+			} else {
+				player.ammo[loadout_index] = state.active_ammo
+			}
+			break
+		}
+	}
+	if !weapon_found {
+		fmt.eprintf("[Net Client] Rejected weapon %d outside player %d loadout\n", state.weapon_id, state.player_id)
+		return false
+	}
+	shared.player_update_spread(player, 0, 0, 0)
+	new_shots: u32
+	if !predicting && was_active && state.active && state.shot_seq > previous_shot_seq {
+		// Cap a pathological jump while still preserving the authoritative
+		// sequence value, so a malformed snapshot cannot create an unbounded loop.
+		new_shots = min(state.shot_seq - previous_shot_seq, u32(16))
+	}
+	if !predicting { player.shot_seq = state.shot_seq }
+	for shot_index in 0 ..< int(new_shots) {
+		// Several rounds in one snapshot played their sounds as one loud stack;
+		// space them by the weapon's fire interval as they were actually fired.
+		count := len(client.game.presentation_events)
+		shared.player_emit_presentation(player, .FIRE)
+		if shot_index > 0 && len(client.game.presentation_events) > count {
+			interval := player.weapon.burst ? player.weapon.burst_rate : player.weapon.rate * client.game.config.fire_rate
+			client.game.presentation_events[count].delay = f32(shot_index) * interval
+		}
+		if player.weapon.melee {
+			is_throw := player.can_throw && player.aim_val >= 1 && player.game.config.throwable_melees
+			shared.player_start_melee_animation(player, is_throw ? 3 : player.can_throw ? 1 : 2)
+			if is_throw {
+				player.can_throw = player.unlimited_ammo
+			}
+		} else {
+			shared.player_apply_recoil(player)
+			shared.player_start_view_kick(player)
+			if player.weapon.projectile && (!player.weapon.projectile_disable || player.game.config.bullet_drop) {
+				remaining := new_shots - u32(shot_index) - 1
+				player.projectile_shot_seq = state.projectile_shot_seq >= remaining ? state.projectile_shot_seq - remaining : 0
+				shared.projectile_spawn(player, shared.player_projectile_angles(player))
+			}
+		}
+	}
+
+	if !predicting { player.projectile_shot_seq = state.projectile_shot_seq }
+	return true
 }
 
 set_window_icon :: proc(client: ^Client) {
