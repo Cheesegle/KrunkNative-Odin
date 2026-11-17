@@ -13,7 +13,7 @@
 set -euo pipefail
 
 BOTS=6 MIN_LATENCY=20 MAX_LATENCY=60 JITTER=2 TICK_RATE=64 PORT=21015
-HOST=127.0.0.1 SEED="" DURATION=0 BUILD=0 NO_SERVER=0 DIFFICULTY=easy
+HOST=127.0.0.1 SEED="" DURATION=0 BUILD=0 NO_SERVER=0 DIFFICULTY=easy BOT_RATE=64
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
 Options:
@@ -29,6 +29,7 @@ Options:
   --build           rebuild bin/krodin_server and bin/krodin_netbot first
   --no-server       only start bots, against a server already at --host
   --difficulty D    how well the bots aim: easy (default), normal or hard
+  --bot-rate HZ     input commands per second per bot, 1-360 (default 64)
 EOF
 }
 
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
         --build) BUILD=1; shift ;;
         --no-server) NO_SERVER=1; shift ;;
         --difficulty) DIFFICULTY=$2; shift 2 ;;
+        --bot-rate) BOT_RATE=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
     esac
@@ -106,11 +108,11 @@ if [ "$NO_SERVER" = 0 ]; then
 fi
 
 echo
-echo "Bots ($DIFFICULTY, simulated round-trip latency):"
+echo "Bots ($DIFFICULTY, $BOT_RATE Hz commands, simulated round-trip latency):"
 for i in $(seq "$BOTS"); do
     latency=$((MIN_LATENCY + RANDOM % (MAX_LATENCY - MIN_LATENCY + 1)))
     "$BOT" --host "$HOST" --port "$PORT" --latency "$latency" --jitter "$JITTER" \
-        --seed $((RANDOM * 32768 + RANDOM + 1)) --name "bot$i" --report 10 --difficulty "$DIFFICULTY" >"$LOG_DIR/bot$i.log" 2>&1 &
+        --seed $((RANDOM * 32768 + RANDOM + 1)) --name "bot$i" --report 10 --difficulty "$DIFFICULTY" --rate "$BOT_RATE" >"$LOG_DIR/bot$i.log" 2>&1 &
     PIDS+=("$!")
     echo "  bot$i: $latency ms"
     sleep 0.15

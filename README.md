@@ -130,6 +130,32 @@ weapons) stay in `game.toml`.
 Every `stats_interval` seconds the server logs its tick budget: average and maximum tick time,
 late ticks, ticks over budget and the player count.
 
+### Input model
+
+Movement follows Krunker's input stream rather than the server tick:
+
+- The client samples one input command every 1/netRate s (**Settings → Gameplay → Net rate**,
+  Krunker's `netRate`: 30, 60, 120, 144, 240 or 360 Hz, default 144). Each command carries a
+  sequence number, its duration in whole milliseconds (the fraction is carried to the next
+  command), pitch and yaw in milliradians, the move direction, the buttons and a weapon swap.
+- A press that starts and ends between two commands (a click, a jump, a swap, a Scroll press)
+  still reaches the next command.
+- Every frame the client sends the new commands, plus the last two unacknowledged ones, in one
+  `PLAYER_INPUT` batch (protocol 11).
+- The server queues each client's commands, drops copies it has already seen, and simulates
+  each one in order as one movement step with its own duration, clamped to 1–33 ms like Krunker.
+  This happens before the world update, so a shot is fired inside the command that pressed it,
+  with that command's aim. Projectiles, timers, regeneration and the objective stay on the tick.
+- Each snapshot acknowledges the last command the server handled. The client resets to that
+  state, drops acknowledged commands and replays the rest with the same durations, so a correct
+  prediction is never corrected. Small corrections are blended out of the camera over ~50 ms;
+  large ones (over 4 units) snap.
+- A client that sends nothing does not move (as in Krunker).
+- *Krodin's own:* command time may not run more than 250 ms ahead of real time (a time bank that
+  real time refills and command durations drain). Commands beyond it are dropped and logged at
+  most every 5 s per client. Commands with a non-finite angle, a move direction outside -1..7 or
+  a bad swap are dropped; batches carry 1–64 commands and a client's queue holds at most 256.
+
 ### Testing with bots
 
 `tools/server-bot-test.ps1` (Windows) and `tools/server-bot-test.sh` (Linux) start a server plus
@@ -137,12 +163,13 @@ headless bots (`bin/krodin_netbot`, built with `build.bat bots`). Each bot plays
 simulated latency: every packet in each direction is held for half its round trip, 20–60 ms by
 default, plus ±2 ms jitter. The bots wander, close in on the nearest enemy, and shoot when they
 have line of sight. `-Difficulty easy|normal|hard` (`--difficulty` on Linux) sets how well they
-aim; easy is the default. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
+aim; easy is the default. `-BotRate` (`--bot-rate`) sets how many input commands per second each
+bot sends, 64 by default. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
 `logs/bot-test/`.
 
 ```powershell
 .\tools\server-bot-test.ps1                                  # 6 bots, 20-60 ms, 64 tick
-.\tools\server-bot-test.ps1 -Bots 7 -TickRate 128 -MinLatency 30 -MaxLatency 80
+.\tools\server-bot-test.ps1 -Bots 7 -TickRate 128 -MinLatency 30 -MaxLatency 80 -BotRate 128
 ```
 
 ```bash

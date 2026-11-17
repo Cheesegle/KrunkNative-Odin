@@ -1,7 +1,8 @@
 // krodin_netbot: a headless test bot for Krodin's dedicated server.
 //
-// It connects like a real client (same TCP protocol, CONNECT + PLAYER_INPUT
-// at 64 Hz), wanders, aims at the nearest enemy and shoots, and holds every
+// It connects like a real client (same TCP protocol, CONNECT + batches of
+// fixed-duration input commands at --rate Hz, 64 by default), wanders, aims
+// at the nearest enemy and shoots, and holds every
 // packet in each direction for half of a simulated round trip, so the server
 // sees a player at roughly --latency ms ping. tools/server-bot-test.ps1 starts
 // a server plus several bots with random latencies.
@@ -19,7 +20,9 @@ import "core:strconv"
 import "core:time"
 import shared "../../src/shared"
 
-INPUT_RATE :: 64.0 // inputs per second, like a 64 FPS client
+DEFAULT_RATE :: 64 // input commands per second (--rate)
+SEND_INTERVAL :: 1.0 / 60.0 // a batch at most this often, like a 60 FPS client
+REDUNDANT_COMMANDS :: 2 // already-sent commands repeated in each batch
 EYE_HEIGHT :: 9.0  // shooter's eye above its position (playerHeight 11 minus crouch room)
 AIM_HEIGHT :: 6.0  // aim at the target's chest
 DEPLOY_AFTER :: 8.0 // seconds down before the bot deploys itself again
@@ -54,6 +57,7 @@ Options :: struct {
 	report:     f64, // seconds between status lines, 0 = off
 	debug:      int, // print this many of the bot's own impacts
 	difficulty: Difficulty,
+	rate:       f64, // input commands per second
 }
 
 Delayed :: struct {
@@ -109,6 +113,10 @@ Bot :: struct {
 	have_me:     bool,
 	others:      [dynamic]Seen_Player,
 	seq:         i32,
+	remainder_ms: f64, // fractional ms carried into the next command
+	pending:     [dynamic]shared.Input, // built, not yet sent
+	recent:      [REDUNDANT_COMMANDS]shared.Input, // last commands sent
+	recent_count: int,
 	yaw, pitch:  f32,
 	move_dir:    i32,
 	next_move:   f64,
@@ -141,12 +149,13 @@ usage :: proc() {
 	fmt.println("  --name <text>      label used in this bot's log lines")
 	fmt.println("  --class <id>       class id (default random)")
 	fmt.println("  --difficulty <d>   easy (default), normal or hard")
+	fmt.println("  --rate <hz>        input commands per second, 1-360 (default 64)")
 	fmt.println("  --debug <n>        print the first n impacts of this bot's own shots")
 	fmt.println("  --report <s>       seconds between status lines (default 10, 0 = off)")
 }
 
 parse_options :: proc(args: []string) -> (opts: Options, ok: bool) {
-	opts = Options{host = "127.0.0.1", port = 21015, latency_ms = 40, jitter_ms = 2, seed = u64(time.now()._nsec), name = "bot", class_id = -1, report = 10}
+	opts = Options{host = "127.0.0.1", port = 21015, latency_ms = 40, jitter_ms = 2, seed = u64(time.now()._nsec), name = "bot", class_id = -1, report = 10, rate = DEFAULT_RATE}
 	for i := 0; i < len(args); i += 1 {
 		arg := args[i]
 		if arg == "--help" || arg == "-h" { return opts, false }
@@ -163,6 +172,7 @@ parse_options :: proc(args: []string) -> (opts: Options, ok: bool) {
 		case "--seed":     n, k := strconv.parse_u64(value); opts.seed, valid = n, k
 		case "--duration": f, k := strconv.parse_f64(value); opts.duration, valid = f, k && f >= 0
 		case "--report":   f, k := strconv.parse_f64(value); opts.report, valid = f, k && f >= 0
+		case "--rate":     f, k := strconv.parse_f64(value); opts.rate, valid = f, k && f >= 1 && f <= 360
 		case "--difficulty":
 			switch value {
 			case "easy":   opts.difficulty = .Easy
@@ -319,7 +329,8 @@ bot_target :: proc(bot: ^Bot) -> (target: Seen_Player, visible, found: bool) {
 }
 
 bot_input :: proc(bot: ^Bot, now: f64) {
-	input := shared.Input{move_dir = -1, delta = f32(1.0 / INPUT_RATE)}
+	step := 1.0 / bot.opts.rate
+	input := shared.Input{move_dir = -1}
 
 	target, visible, has_target := bot_target(bot)
 	distance := f32(0)
@@ -360,7 +371,7 @@ bot_input :: proc(bot: ^Bot, now: f64) {
 	// Reaction time: a target has to stay in view this long before the bot
 	// starts shooting, and losing sight of it resets the timer.
 	if visible && target.id == bot.seen_id {
-		bot.seen_for += 1.0 / INPUT_RATE
+		bot.seen_for += step
 	} else {
 		bot.seen_id, bot.seen_for = visible ? target.id : 0, 0
 	}
@@ -376,7 +387,7 @@ bot_input :: proc(bot: ^Bot, now: f64) {
 		// The shot direction is (-sin(yaw)cos(pitch), sin(pitch), -cos(yaw)cos(pitch)).
 		aim_yaw := math.atan2(-d.x, -d.z) + bot.wobble.x
 		aim_pitch := math.atan2(d.y, distance) + bot.wobble.y
-		turn := skill.turn_speed / INPUT_RATE
+		turn := skill.turn_speed * f32(step)
 		bot.yaw += clamp(shared.normalize_angle(aim_yaw - bot.yaw), -turn, turn)
 		bot.pitch += clamp(aim_pitch - bot.pitch, -turn, turn)
 		on_target := abs(shared.normalize_angle(aim_yaw - bot.yaw)) < 0.08
@@ -384,7 +395,7 @@ bot_input :: proc(bot: ^Bot, now: f64) {
 		input.scope = visible && in_range && rand.float32() < skill.scope_chance
 		input.shoot = visible && on_target && in_range && bot.seen_for >= skill.reaction && !input.reload && rand.float32() < skill.fire_chance
 	} else {
-		bot.yaw += 0.6 / INPUT_RATE
+		bot.yaw += 0.6 * f32(step)
 		bot.pitch *= 0.9
 	}
 	bot.yaw = shared.normalize_angle(bot.yaw)
@@ -392,10 +403,35 @@ bot_input :: proc(bot: ^Bot, now: f64) {
 	input.x_dir, input.y_dir = bot.pitch, bot.yaw
 	if input.shoot { bot.shots += 1 }
 
-	bot.seq += 1
 	input.seq = bot.seq
-	buf: [32]byte
-	bot_send(bot, now, buf[:shared.packet_serialize_input(buf[:], &input)])
+	bot.seq += 1
+	input.delta = shared.input_command_duration_ms(bot.opts.rate, 1, &bot.remainder_ms) / 1000
+	shared.input_command_quantize(&input)
+	append(&bot.pending, input)
+}
+
+// Sends the commands built since the last batch, after a short redundant
+// tail of already-sent ones (the server drops those as duplicates).
+bot_send_commands :: proc(bot: ^Bot, now: f64) {
+	if len(bot.pending) == 0 { return }
+	batch: [shared.INPUT_BATCH_MAX_COMMANDS]shared.Input
+	count := 0
+	for i in 0 ..< bot.recent_count { batch[count] = bot.recent[i]; count += 1 }
+	buf: [shared.INPUT_BATCH_MAX_PACKET]byte
+	for command in bot.pending {
+		if count == len(batch) {
+			bot_send(bot, now, buf[:shared.packet_serialize_input_batch(buf[:], batch[:count])])
+			count = 0
+		}
+		batch[count] = command
+		count += 1
+	}
+	bot_send(bot, now, buf[:shared.packet_serialize_input_batch(buf[:], batch[:count])])
+	// Keep the newest REDUNDANT_COMMANDS for the next batch's tail.
+	keep := min(count, REDUNDANT_COMMANDS)
+	for i in 0 ..< keep { bot.recent[i] = batch[count - keep + i] }
+	bot.recent_count = keep
+	clear(&bot.pending)
 }
 
 main :: proc() {
@@ -413,11 +449,11 @@ main :: proc() {
 	net.set_blocking(socket, false)
 	net.set_option(socket, .TCP_Nodelay, true)
 	bot := Bot{opts = opts, socket = socket, connected = true, dead_since = -1}
-	fmt.printf("[%s] connected to %s:%d, simulated latency %.0f ms (+-%.0f jitter), difficulty %v\n", opts.name, opts.host, opts.port, opts.latency_ms, opts.jitter_ms, opts.difficulty)
+	fmt.printf("[%s] connected to %s:%d, simulated latency %.0f ms (+-%.0f jitter), difficulty %v, %.0f Hz commands\n", opts.name, opts.host, opts.port, opts.latency_ms, opts.jitter_ms, opts.difficulty, opts.rate)
 
 	start := time.tick_now()
 	clock :: proc(start: time.Tick) -> f64 { return time.duration_seconds(time.tick_since(start)) }
-	next_input, next_report := 0.0, opts.report
+	next_input, next_send, next_report := 0.0, 0.0, opts.report
 	bot_spawn(&bot, 0)
 
 	for bot.connected {
@@ -446,8 +482,12 @@ main :: proc() {
 		}
 		for now >= next_input {
 			if bot.have_me && bot.me.active { bot_input(&bot, now) }
-			next_input += 1.0 / INPUT_RATE
+			next_input += 1.0 / opts.rate
 			if now - next_input > 0.25 { next_input = now } // don't burst after a stall
+		}
+		if now >= next_send {
+			bot_send_commands(&bot, now)
+			next_send = now + SEND_INTERVAL
 		}
 		bot_flush(&bot, now)
 

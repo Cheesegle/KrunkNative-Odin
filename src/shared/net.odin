@@ -4,8 +4,8 @@ import "core:encoding/endian"
 
 PACKET_MAGIC :: 0x4B52554E // 'KRUN'
 PACKET_HEADER_SIZE :: 7
-PROTOCOL_VERSION :: 10 // 10: wall-jump count appended to player state
-PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 110
+PROTOCOL_VERSION :: 11 // 11: PLAYER_INPUT carries a batch of fixed-duration commands (net_input.odin)
+PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 122 // 11: + can_slide_timer and the cylinder push velocity
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
 // victim, killer, weapon (i32 each) + flags. Older clients skip the unknown
 // packet type by its payload length, so this needs no PROTOCOL_VERSION bump.
@@ -68,7 +68,7 @@ net_send_queue_consume :: proc(queue: ^Net_Send_Queue, count: int) {
 Packet_Type :: enum u8 {
 	CONNECT      = 1,
 	DISCONNECT   = 2,
-	PLAYER_INPUT = 3,
+	PLAYER_INPUT = 3, // a batch of input commands, see net_input.odin
 	GAME_STATE   = 4,
 	PING         = 5,
 	CHAT         = 6,
@@ -83,18 +83,6 @@ Packet_Header :: struct {
 	magic:       u32,
 	packet_type: Packet_Type,
 	payload_len: u16,
-}
-
-// Matches the C Input struct field layout for player inputs.
-Packet_Player_Input :: struct {
-	seq:      i32,
-	move_dir: i32,
-
-	delta:    f32,
-	x_dir:    f32,
-	y_dir:    f32,
-
-	flags:    u8,
 }
 
 packet_serialize_connect :: proc(buf: []byte, class_id: i32, secondary_id: i32 = 2) -> int {
@@ -149,6 +137,11 @@ Packet_Player_State :: struct {
 	can_slide: bool,
 	on_wall: u8,
 	wall_jump_count: u8, // wall jumps since landing, so prediction honours the class limit
+	// Read by the next movement step but not derivable from the rest, so a
+	// replay from this snapshot must start from them (Krunker's l sync sends
+	// the same values).
+	can_slide_timer: f32,
+	cylinder_velocity: Vec2, // x_vel_cylinder, z_vel_cylinder
 	crouch_val: f32,
 	aim_val: f32,
 	slide_timer: f32,
@@ -219,102 +212,6 @@ Packet_Match_State :: struct {
 	send_rate:           f32,
 	player_count:        i32,
 	player_ids:          [MAX_PLAYERS_PER_MATCH]u32,
-}
-
-packet_serialize_input :: proc(buf: []byte, input: ^Input) -> int {
-	header_size := PACKET_HEADER_SIZE
-	payload_size := 5 * 4 + 1 // seq + move_dir + delta + x_dir + y_dir + flags
-
-	if len(buf) < header_size + payload_size {
-		return 0
-	}
-
-	header := Packet_Header {
-		magic       = PACKET_MAGIC,
-		packet_type = .PLAYER_INPUT,
-		payload_len = u16(payload_size),
-	}
-
-	endian.put_u32(buf[0:4], .Little, header.magic)
-	buf[4] = u8(header.packet_type)
-	endian.put_u16(buf[5:7], .Little, header.payload_len)
-
-	offset := header_size
-
-	endian.put_i32(buf[offset:offset + 4], .Little, input.seq)
-	offset += 4
-
-	endian.put_i32(buf[offset:offset + 4], .Little, input.move_dir)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.delta)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.x_dir)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.y_dir)
-	offset += 4
-
-	flags: u8 = 0
-	if input.shoot {
-		flags |= 1
-	}
-	if input.scope {
-		flags |= 2
-	}
-	if input.jump {
-		flags |= 4
-	}
-	if input.crouch {
-		flags |= 8
-	}
-	if input.reload {
-		flags |= 16
-	}
-	flags |= u8((input.swap & 0x3) << 5)
-
-	buf[offset] = flags
-	offset += 1
-
-	return offset
-}
-
-packet_deserialize_input :: proc(buf: []byte) -> (input: Input, ok: bool) {
-	header_size := PACKET_HEADER_SIZE
-	payload_size := 5 * 4 + 1
-
-	if len(buf) < header_size + payload_size {
-		return {}, false
-	}
-
-	offset := header_size
-
-	input.seq, _ = endian.get_i32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.move_dir, _ = endian.get_i32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.delta, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.x_dir, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.y_dir, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	flags := buf[offset]
-
-	input.shoot = (flags & 1) != 0
-	input.scope = (flags & 2) != 0
-	input.jump = (flags & 4) != 0
-	input.crouch = (flags & 8) != 0
-	input.reload = (flags & 16) != 0
-	input.swap = u8((flags >> 5) & 0x3)
-
-	return input, true
 }
 
 packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int {
@@ -412,6 +309,10 @@ packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int 
 	offset += 12
 	buf[offset] = state.wall_jump_count
 	offset += 1
+	endian.put_f32(buf[offset:offset + 4], .Little, state.can_slide_timer)
+	endian.put_f32(buf[offset + 4:offset + 8], .Little, state.cylinder_velocity.x)
+	endian.put_f32(buf[offset + 8:offset + 12], .Little, state.cylinder_velocity.y)
+	offset += 12
 
 	return offset
 }
@@ -499,6 +400,10 @@ packet_deserialize_state :: proc(buf: []byte) -> (state: Packet_Player_State, ok
 	state.kills, _ = endian.get_u32(buf[offset + 4:offset + 8], .Little)
 	state.deaths, _ = endian.get_u32(buf[offset + 8:offset + 12], .Little)
 	state.wall_jump_count = buf[offset + 12]
+	offset += 13
+	state.can_slide_timer, _ = endian.get_f32(buf[offset:offset + 4], .Little)
+	state.cylinder_velocity.x, _ = endian.get_f32(buf[offset + 4:offset + 8], .Little)
+	state.cylinder_velocity.y, _ = endian.get_f32(buf[offset + 8:offset + 12], .Little)
 
 	return state, true
 }

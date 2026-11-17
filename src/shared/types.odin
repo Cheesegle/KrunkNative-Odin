@@ -254,10 +254,20 @@ Input :: struct {
 	// so reconciliation restores it from the acknowledged command.
 	predicted_ramp_fix: f32,
 	predicted_has_ramp_fix: bool,
+	// Native client: active weapon slot and its ammo after this command, so a
+	// snapshot's ammo is compared with what was predicted for the same command.
+	predicted_slot: i32,
+	predicted_ammo: u32,
 	// Live Krunker lag compensation metadata, captured when a shot actually
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,
 	krunker_shot_time, krunker_shot_progress: f64,
+	// Native protocol: the server tick the client was viewing (and 0..1
+	// progress to the next) when this command was sampled. Carried on the wire
+	// for lag compensation; nothing sets it yet.
+	view_stamped: bool,
+	view_tick: u32,
+	view_frac: f32,
 }
 
 Player_Skins :: struct {

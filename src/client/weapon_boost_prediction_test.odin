@@ -62,10 +62,11 @@ when ODIN_TEST {
 	@(test)
 	weapon_boost_metadata_is_not_network_input :: proc(t: ^testing.T) {
 		input := shared.Input{seq = 13, move_dir = -1, delta = 0.007, shoot = true, predicted_weapon_impulse = {1, 2, 3}}
-		buffer: [128]u8
-		size := shared.packet_serialize_input(buffer[:], &input)
-		decoded, ok := shared.packet_deserialize_input(buffer[:size])
-		testing.expect(t, ok && decoded.shoot && decoded.predicted_weapon_impulse == (shared.Vec3{}),
+		buffer: [shared.INPUT_BATCH_MAX_PACKET]u8
+		size := shared.packet_serialize_input_batch(buffer[:], []shared.Input{input})
+		decoded: [1]shared.Input
+		count, ok := shared.packet_deserialize_input_batch(buffer[:size], decoded[:])
+		testing.expect(t, ok && count == 1 && decoded[0].shoot && decoded[0].seq == 13 && decoded[0].predicted_weapon_impulse == (shared.Vec3{}),
 			"clients must send controls only; the server computes its own boost")
 	}
 }

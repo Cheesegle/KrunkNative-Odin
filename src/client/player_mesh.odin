@@ -538,6 +538,10 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	if g_client != nil && g_client.krunker.connected && g_client.me == player && !is_preview {
 		sample := krunker_client_render_sample(g_client)
 		view_aim, view_position = sample.aim, sample.position
+	} else if g_client != nil && g_client.net.connected && g_client.me == player && !is_preview {
+		// The camera blends between predicted commands; the gun and arms must
+		// use the same position, or they jump against it once per command.
+		view_position = native_client_render_position(g_client)
 	}
 	aim_val_mlt: f32 = animate_aim && player.is_you ? view_aim : 0.0
 	// Keep the calibrated sight pose fixed at full first-person ADS. Residual
