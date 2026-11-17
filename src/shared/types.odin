@@ -692,6 +692,10 @@ Game :: struct {
 	now:          f32,
 	move_lock:    bool,
 	is_local:     bool,
+	// Live Krunker lobby: only Krunker's server ray-tests players (against its
+	// rewound complexHitboxes). The browser's own shot ray never hits players,
+	// so predicted shots must pass through them here too.
+	server_hits_players: bool,
 	ready:        bool,
 	end_timer:    f32,
 	nuke_timer:   f32,
