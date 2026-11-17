@@ -122,7 +122,11 @@ client_chat_submit :: proc(client: ^Client, now: f64) {
 		krunker_ws_queue_chat(&client.krunker, text, team)
 		if !krunker_ws_flush_chat(&client.krunker) { client.krunker.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed.") }
 	case client.net.connected:
-		chat_system(chat, client.hud_settings.chat, "Chat isn't available on Krodin servers yet.")
+		// Krodin's native server checks length, rate and team itself and echoes
+		// the message back to us with everyone else's.
+		clean := kproto.krunker_chat_clean_outgoing(text)
+		if !shared.net_chat_text_valid(clean) { return }
+		if !net_client_send_chat(&client.net, clean, team) { client.net.connected = false }
 	case:
 		client_chat_local(client, text, team)
 	}
@@ -149,6 +153,18 @@ client_chat_local :: proc(client: ^Client, text: string, team: bool) {
 		return
 	}
 	chat_add(chat, settings, {kind = .PLAYER, tab = team ? 1 : 0, name = "You", text = text}, client_chat_teams(client))
+}
+
+// A CHAT line from Krodin's native server. Names follow the scoreboard: "You",
+// otherwise "Player <uid>"; the server's own lines are system text.
+client_chat_receive_native :: proc(client: ^Client, sender: i32, team: bool, text: string) {
+	if sender == shared.NET_CHAT_SYSTEM {
+		chat_system(&client.chat, client.hud_settings.chat, text)
+		return
+	}
+	name := fmt.tprintf("Player %d", sender)
+	if player := client_find_player(client, sender); player != nil && player.is_you { name = "You" }
+	chat_add(&client.chat, client.hud_settings.chat, {kind = .PLAYER, tab = team ? 1 : 0, name = name, text = text}, client_chat_teams(client))
 }
 
 // ADD_CHAT from a live lobby. Chat text is never written to the network log.

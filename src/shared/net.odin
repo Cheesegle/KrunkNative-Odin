@@ -733,3 +733,71 @@ packet_deserialize_kill_feed :: proc(buf: []byte) -> (event: Kill_Event, ok: boo
 	}
 	return event, true
 }
+
+// CHAT (Krodin's native protocol; Krunker's equivalents are "ct" and "ch").
+// Client -> server: [team u8][length u8][text]. team 1 asks for team-only chat.
+// Server -> client: [sender i32][team u8][length u8][text]. sender is the
+// player uid, or NET_CHAT_SYSTEM for the server's own lines; team 1 marks a
+// team-only message. Text is printable ASCII, 1..NET_CHAT_MAX_LENGTH bytes
+// (Krunker's #chatInput maxlength). Older peers skip the packet type.
+NET_CHAT_MAX_LENGTH :: 70
+NET_CHAT_SYSTEM :: i32(-1)
+NET_CHAT_REQUEST_MAX_SIZE :: PACKET_HEADER_SIZE + 2 + NET_CHAT_MAX_LENGTH
+NET_CHAT_MAX_SIZE :: PACKET_HEADER_SIZE + 6 + NET_CHAT_MAX_LENGTH
+
+net_chat_text_valid :: proc(text: string) -> bool {
+	if len(text) == 0 || len(text) > NET_CHAT_MAX_LENGTH { return false }
+	blank := true
+	for i in 0..<len(text) {
+		c := text[i]
+		if c < 32 || c >= 127 { return false }
+		if c != ' ' { blank = false }
+	}
+	return !blank
+}
+
+packet_serialize_chat_request :: proc(buf: []byte, text: string, team: bool) -> int {
+	if !net_chat_text_valid(text) || len(buf) < PACKET_HEADER_SIZE + 2 + len(text) { return 0 }
+	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
+	buf[4] = u8(Packet_Type.CHAT)
+	endian.put_u16(buf[5:7], .Little, u16(2 + len(text)))
+	buf[PACKET_HEADER_SIZE] = team ? 1 : 0
+	buf[PACKET_HEADER_SIZE + 1] = u8(len(text))
+	copy(buf[PACKET_HEADER_SIZE + 2:], text)
+	return PACKET_HEADER_SIZE + 2 + len(text)
+}
+
+// The text points into `buf`. Invalid text (control characters, blank, too
+// long or a length that disagrees with the payload) fails.
+packet_deserialize_chat_request :: proc(buf: []byte) -> (text: string, team: bool, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .CHAT || header.payload_len < 2 || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) { return }
+	length := int(buf[PACKET_HEADER_SIZE + 1])
+	if buf[PACKET_HEADER_SIZE] > 1 || int(header.payload_len) != 2 + length { return }
+	text = string(buf[PACKET_HEADER_SIZE + 2:])
+	if !net_chat_text_valid(text) { return "", false, false }
+	return text, buf[PACKET_HEADER_SIZE] == 1, true
+}
+
+packet_serialize_chat :: proc(buf: []byte, sender: i32, team: bool, text: string) -> int {
+	if !net_chat_text_valid(text) || len(buf) < PACKET_HEADER_SIZE + 6 + len(text) { return 0 }
+	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
+	buf[4] = u8(Packet_Type.CHAT)
+	endian.put_u16(buf[5:7], .Little, u16(6 + len(text)))
+	endian.put_u32(buf[PACKET_HEADER_SIZE:PACKET_HEADER_SIZE + 4], .Little, transmute(u32)sender)
+	buf[PACKET_HEADER_SIZE + 4] = team ? 1 : 0
+	buf[PACKET_HEADER_SIZE + 5] = u8(len(text))
+	copy(buf[PACKET_HEADER_SIZE + 6:], text)
+	return PACKET_HEADER_SIZE + 6 + len(text)
+}
+
+packet_deserialize_chat :: proc(buf: []byte) -> (sender: i32, team: bool, text: string, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .CHAT || header.payload_len < 6 || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) { return }
+	length := int(buf[PACKET_HEADER_SIZE + 5])
+	if buf[PACKET_HEADER_SIZE + 4] > 1 || int(header.payload_len) != 6 + length { return }
+	raw, _ := endian.get_u32(buf[PACKET_HEADER_SIZE:PACKET_HEADER_SIZE + 4], .Little)
+	text = string(buf[PACKET_HEADER_SIZE + 6:])
+	if !net_chat_text_valid(text) { return 0, false, "", false }
+	return transmute(i32)raw, buf[PACKET_HEADER_SIZE + 4] == 1, text, true
+}
