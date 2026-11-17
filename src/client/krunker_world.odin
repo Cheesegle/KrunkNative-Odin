@@ -151,7 +151,7 @@ krunker_client_sync_world :: proc(client: ^Client) {
 				client.spawn_pending = false
 				client.lobby_team = source.team
 				client.team_pending = false
-				if client.menu.page == .HOME {
+				if client.menu.page == .HOME && cursor_focus_may_capture(&client.cursor_focus) {
 					glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 					client.mouse_state.locked = true
 					x, y := glfw.GetCursorPos(client.window)
