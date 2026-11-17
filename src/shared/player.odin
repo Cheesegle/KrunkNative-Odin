@@ -260,6 +260,49 @@ player_reset_step :: proc(player: ^Player, recon: bool) {
 	player.velocity.z *= slide_mlt
 }
 
+// Krunker's collidesP: an interpolated player is tested at its newest pose
+// (x2, y2, z2), anyone else where they stand.
+player_collides_player :: proc(player, other: ^Player) -> bool {
+	o := other.interpolate ? other.interp_pos_end : other.position
+	return player.position.x - player.scale < o.x + other.scale && player.position.x + player.scale > o.x - other.scale &&
+		player.position.z - player.scale < o.z + other.scale && player.position.z + player.scale > o.z - other.scale &&
+		player.position.y <= o.y + other.height && player.position.y + player.height >= o.y
+}
+
+// Krunker's playerCollision, run before the map collisions when the lobby
+// has Player Collision (pColl) on: a player who was above another lands on
+// their head (y = other.y.round(1) + other.height), otherwise both stop on
+// the axis they came in from. Without it the prediction let you sink into a
+// player the server holds you on top of, with your camera inside their head.
+player_collide_players :: proc(player: ^Player, recon: bool) {
+	if player.game == nil || !player.game.config.player_collision || !player.active { return }
+	round1 :: proc(v: f32) -> f32 { return math.round(v * 10) / 10 }
+	for other in player.game.players {
+		if other == nil || other == player || !other.active || !player_collides_player(player, other) { continue }
+		o := Vec3{round1(other.position.x), round1(other.position.y), round1(other.position.z)}
+		width := other.scale + player.scale
+		if player.last_position.y >= o.y + other.height {
+			player.position.y = o.y + other.height
+			player_reset_step(player, recon)
+			player.velocity.y = 0
+			player.on_ground = true
+			player.on_terrain = false
+		} else if player.last_position.x - player.scale >= o.x + other.scale - 1e-5 {
+			player.position.x = o.x + width
+			player.velocity.x, other.velocity.x = 0, 0
+		} else if player.last_position.x + player.scale <= o.x - other.scale + 1e-5 {
+			player.position.x = o.x - width
+			player.velocity.x, other.velocity.x = 0, 0
+		} else if player.last_position.z - player.scale >= o.z + other.scale - 1e-5 {
+			player.position.z = o.z + width
+			player.velocity.z, other.velocity.z = 0, 0
+		} else if player.last_position.z + player.scale <= o.z - other.scale + 1e-5 {
+			player.position.z = o.z - width
+			player.velocity.z, other.velocity.z = 0, 0
+		}
+	}
+}
+
 player_collides :: proc(player: ^Player, object: ^Object, pad: f32) -> bool {
 	switch object.collision_type {
 	case .NONE:
@@ -1029,6 +1072,7 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		player.on_wall = 0
 		player.on_ramp = false
 
+		player_collide_players(player, recon && !predict_effects)
 		if !player.noclip {
 			// Collision's recon flag suppresses landing effects only; physics is
 			// identical for fresh prediction and reconciliation replay.
