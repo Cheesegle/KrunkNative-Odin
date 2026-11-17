@@ -376,7 +376,9 @@ krunker_world_apply_update_players :: proc(state: ^Krunker_World_State, packet: 
 	if len(packet) > 3 {
 		if stamp, valid := krunker_world_number(packet[3]); valid && !math.is_nan(stamp) && !math.is_inf(stamp) && stamp >= 0 {
 			state.previous_sync_received_at = state.sync_received_at
-			state.has_previous_sync = state.has_server_time && state.received_at > state.sync_received_at
+			// The browser's lastSync is truthy from the second k on, even when
+			// both arrive at the same time.
+			state.has_previous_sync = state.has_server_time
 			state.sync_received_at = state.received_at
 			state.server_time, state.has_server_time = stamp, true
 		}
