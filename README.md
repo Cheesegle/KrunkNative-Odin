@@ -136,7 +136,8 @@ late ticks, ticks over budget and the player count.
 headless bots (`bin/krodin_netbot`, built with `build.bat bots`). Each bot plays with a random
 simulated latency: every packet in each direction is held for half its round trip, 20–60 ms by
 default, plus ±2 ms jitter. The bots wander, close in on the nearest enemy, and shoot when they
-have line of sight. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
+have line of sight. `-Difficulty easy|normal|hard` (`--difficulty` on Linux) sets how well they
+aim; easy is the default. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
 `logs/bot-test/`.
 
 ```powershell

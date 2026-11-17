@@ -24,6 +24,24 @@ EYE_HEIGHT :: 9.0  // shooter's eye above its position (playerHeight 11 minus cr
 AIM_HEIGHT :: 6.0  // aim at the target's chest
 DEPLOY_AFTER :: 8.0 // seconds down before the bot deploys itself again
 
+Difficulty :: enum { Easy, Normal, Hard }
+
+Skill :: struct {
+	turn_speed:   f32, // radians per second the crosshair can move
+	aim_error:    f32, // radians of drifting aim offset (yaw; pitch gets 60%)
+	reaction:     f64, // seconds a target must be in view before firing
+	fire_chance:  f32, // chance per input to hold the trigger while on target
+	scope_chance: f32, // chance per input to aim down sights
+	range:        f32, // furthest distance it engages at
+}
+
+// Easy and Normal are tuned to be beatable; Hard is the original aim.
+SKILLS := [Difficulty]Skill{
+	.Easy   = {turn_speed = 2.5, aim_error = 0.10, reaction = 0.70, fire_chance = 0.30, scope_chance = 0.2, range = 70},
+	.Normal = {turn_speed = 4.5, aim_error = 0.05, reaction = 0.40, fire_chance = 0.45, scope_chance = 0.5, range = 95},
+	.Hard   = {turn_speed = 8.0, aim_error = 0.01, reaction = 0.10, fire_chance = 0.70, scope_chance = 1.0, range = 120},
+}
+
 Options :: struct {
 	host:       string,
 	port:       int,
@@ -35,6 +53,7 @@ Options :: struct {
 	class_id:   i32, // -1 = random rotation class
 	report:     f64, // seconds between status lines, 0 = off
 	debug:      int, // print this many of the bot's own impacts
+	difficulty: Difficulty,
 }
 
 Delayed :: struct {
@@ -105,6 +124,10 @@ Bot :: struct {
 	map_slot:    i32,
 	stuck_check: f64,
 	stuck_from:  shared.Vec3,
+	seen_id:     u32, // target currently in view, for the reaction time
+	seen_for:    f64,
+	wobble:      [2]f32, // current aim error (yaw, pitch)
+	next_wobble: f64,
 }
 
 usage :: proc() {
@@ -117,6 +140,7 @@ usage :: proc() {
 	fmt.println("  --duration <s>     quit after this many seconds (default 0 = run until the server closes)")
 	fmt.println("  --name <text>      label used in this bot's log lines")
 	fmt.println("  --class <id>       class id (default random)")
+	fmt.println("  --difficulty <d>   easy (default), normal or hard")
 	fmt.println("  --debug <n>        print the first n impacts of this bot's own shots")
 	fmt.println("  --report <s>       seconds between status lines (default 10, 0 = off)")
 }
@@ -139,6 +163,13 @@ parse_options :: proc(args: []string) -> (opts: Options, ok: bool) {
 		case "--seed":     n, k := strconv.parse_u64(value); opts.seed, valid = n, k
 		case "--duration": f, k := strconv.parse_f64(value); opts.duration, valid = f, k && f >= 0
 		case "--report":   f, k := strconv.parse_f64(value); opts.report, valid = f, k && f >= 0
+		case "--difficulty":
+			switch value {
+			case "easy":   opts.difficulty = .Easy
+			case "normal": opts.difficulty = .Normal
+			case "hard":   opts.difficulty = .Hard
+			case:          valid = false
+			}
 		case "--debug":    n, k := strconv.parse_int(value); opts.debug, valid = n, k && n >= 0
 		case "--class":    n, k := strconv.parse_int(value); opts.class_id, valid = i32(n), k
 		case:
@@ -325,18 +356,33 @@ bot_input :: proc(bot: ^Bot, now: f64) {
 	input.crouch = rand.float32() < 0.005
 	input.reload = bot.me.ammo == 0
 
+	skill := SKILLS[bot.opts.difficulty]
+	// Reaction time: a target has to stay in view this long before the bot
+	// starts shooting, and losing sight of it resets the timer.
+	if visible && target.id == bot.seen_id {
+		bot.seen_for += 1.0 / INPUT_RATE
+	} else {
+		bot.seen_id, bot.seen_for = visible ? target.id : 0, 0
+	}
+	// Aim error drifts instead of being perfect: a fresh random offset every
+	// so often, so the bot sprays around the target rather than through it.
+	if now >= bot.next_wobble {
+		bot.wobble = {(rand.float32() * 2 - 1) * skill.aim_error, (rand.float32() * 2 - 1) * skill.aim_error * 0.6}
+		bot.next_wobble = now + 0.25 + rand.float64() * 0.35
+	}
+
 	if has_target {
 		d := bot_aim_point(target) - bot_eye(bot)
 		// The shot direction is (-sin(yaw)cos(pitch), sin(pitch), -cos(yaw)cos(pitch)).
-		aim_yaw := math.atan2(-d.x, -d.z)
-		aim_pitch := math.atan2(d.y, distance)
-		// Turn at a human-ish speed with a small aim error.
-		turn := f32(8.0 / INPUT_RATE)
-		bot.yaw += clamp(shared.normalize_angle(aim_yaw - bot.yaw), -turn, turn) + (rand.float32() - 0.5) * 0.01
+		aim_yaw := math.atan2(-d.x, -d.z) + bot.wobble.x
+		aim_pitch := math.atan2(d.y, distance) + bot.wobble.y
+		turn := skill.turn_speed / INPUT_RATE
+		bot.yaw += clamp(shared.normalize_angle(aim_yaw - bot.yaw), -turn, turn)
 		bot.pitch += clamp(aim_pitch - bot.pitch, -turn, turn)
 		on_target := abs(shared.normalize_angle(aim_yaw - bot.yaw)) < 0.08
-		input.scope = visible && distance < 120
-		input.shoot = visible && on_target && distance < 120 && !input.reload && rand.float32() < 0.7
+		in_range := distance < skill.range
+		input.scope = visible && in_range && rand.float32() < skill.scope_chance
+		input.shoot = visible && on_target && in_range && bot.seen_for >= skill.reaction && !input.reload && rand.float32() < skill.fire_chance
 	} else {
 		bot.yaw += 0.6 / INPUT_RATE
 		bot.pitch *= 0.9
@@ -367,7 +413,7 @@ main :: proc() {
 	net.set_blocking(socket, false)
 	net.set_option(socket, .TCP_Nodelay, true)
 	bot := Bot{opts = opts, socket = socket, connected = true, dead_since = -1}
-	fmt.printf("[%s] connected to %s:%d, simulated latency %.0f ms (+-%.0f jitter)\n", opts.name, opts.host, opts.port, opts.latency_ms, opts.jitter_ms)
+	fmt.printf("[%s] connected to %s:%d, simulated latency %.0f ms (+-%.0f jitter), difficulty %v\n", opts.name, opts.host, opts.port, opts.latency_ms, opts.jitter_ms, opts.difficulty)
 
 	start := time.tick_now()
 	clock :: proc(start: time.Tick) -> f64 { return time.duration_seconds(time.tick_since(start)) }
