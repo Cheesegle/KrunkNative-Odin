@@ -176,6 +176,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 		// A stale ACK (an id this life never sent) acknowledges nothing: replay
 		// every prediction from the server position instead.
 		acked := krunker_ws_accept_ack(state, source.ack_seq)
+		if fresh_sync { krunker_ws_ghost_note_sync(state, source.ack_seq, acked, glfw.GetTime()) }
 		// l omits rampFix, the snap target that ramp contact leaves for the next
 		// tick. Replaying with the newest prediction's value instead snaps a
 		// player who has just left a ramp back onto it and grounds them, so a
