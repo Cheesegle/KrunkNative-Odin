@@ -34,11 +34,13 @@ client_mouse_rotation :: proc(client: ^Client, delta: shared.Vec2) -> shared.Vec
 client_binding_key :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i32) {
 	context = runtime.default_context()
 	if g_client != nil && g_client.menu.binding_capture != 0 && action == glfw.PRESS && g_client.binding_event == 0 { g_client.binding_event = key }
+	if g_client != nil { client_chat_key(g_client, key, action) }
 }
 
 client_binding_mouse :: proc "c" (window: glfw.WindowHandle, button, action, mods: i32) {
 	context = runtime.default_context()
 	if g_client != nil && g_client.menu.binding_capture != 0 && action == glfw.PRESS && g_client.binding_event == 0 { g_client.binding_event = -button-1 }
+	if g_client != nil { client_chat_mouse(g_client, button, action) }
 }
 
 // Krunker throttles wheel presses: a notch presses key 20000 only when more
@@ -88,6 +90,8 @@ client_binding_down :: proc(window: glfw.WindowHandle, code: i32) -> bool {
 // scroll = false reads only keys and buttons; it gives the state a command
 // sees after the one that consumed a Scroll press.
 client_action_down :: proc(client: ^Client, action: menuui.Binding_Action, read: proc(glfw.WindowHandle, i32) -> bool = client_binding_down, scroll := true) -> bool {
+	// Typing in chat: like Krunker's focused #chatInput, keys never reach binds.
+	if client.chat.open { return false }
 	for code in client.bindings[action] {
 		if code == 0 { continue } // Unbound slots never fire, whatever the reader reports.
 		if code == menuui.BINDING_SCROLL {

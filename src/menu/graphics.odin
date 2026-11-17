@@ -223,6 +223,9 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .KILL_FEED_SIZE: return kill_feed_size(state.settings_active ? values.hud : view.hud)
 	case .GAME_FPS_LIMIT: return f32(game_fps_limit_validate(state.settings_active ? values.game_fps_limit : view.game_fps_limit))
 	case .NAMETAG_SIZE: return nametag_scale(state.settings_active ? values.hud : view.hud)
+	case .CHAT_VALUE:
+		if action.index < 0 || action.index >= i32(len(Chat_Control)) { return 0 }
+		return chat_control_value(chat_settings_validate(state.settings_active ? values.hud.chat : view.hud.chat), Chat_Control(action.index))
 	}
 	return values.sensitivity
 }

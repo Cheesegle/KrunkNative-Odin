@@ -61,6 +61,8 @@ krunker_world_apply_player_gone :: proc(state: ^Krunker_World_State, packet: []K
 				if len(packet) > 3 {
 					if killer, ok := krunker_world_bounded_number(packet[3], 0, 2147483647); ok { state.local_killer_sid = i32(killer) }
 				}
+				state.local_death = {}
+				if len(packet) > 4 { state.local_death = krunker_world_death_info(packet[4]) }
 				state.local_death_revision += 1
 			}
 			krunker_world_record_kill(state, sid, packet)
@@ -112,3 +114,73 @@ krunker_world_record_kill :: proc(state: ^Krunker_World_State, victim_sid: i32, 
 	if len(state.kills) >= KRUNKER_WORLD_MAX_KILLS { ordered_remove(&state.kills, 0) }
 	append(&state.kills, kill)
 }
+
+// One value of KILL_PLAYER's death-screen data. The browser prints numbers
+// and strings as they come and "Unknown" for a missing stat.
+Krunker_Death_Value :: struct {
+	known: bool,
+	number: f64,
+	is_text: bool,
+	text: [24]u8,
+	text_len: int,
+}
+
+// KILL_PLAYER(3)'s fourth argument, read by the browser's death UI builder
+// (krunkbox game.deob.js line ~227456, `iìÏïîíì`):
+//   [0] the weapon id that killed you ("death-row-weapon-text"/-img)
+//   [1] the killer's class XP: lvl = max(1, floor(0.03*sqrt(xp)) + 1)
+//   [2] [value, index] of one killer career stat, index into SPK, Kills,
+//       Deaths, KDR, KPG, Games Played, Wins, W/L, Nukes
+//   [3] Time Survived (ms), Shots Fired, Accuracy, Kills, Score
+Krunker_Death_Info :: struct {
+	weapon_id: i32,
+	killer_xp: Krunker_Death_Value,
+	stat: Krunker_Death_Value,
+	stat_index: i32,
+	stats: [5]Krunker_Death_Value,
+	has_stats: bool,
+}
+
+KRUNKER_DEATH_STAT_NAMES := [?]string{"SPK", "Kills", "Deaths", "KDR", "KPG", "Games Played", "Wins", "W/L", "Nukes"}
+
+krunker_world_death_value :: proc(value: Krunker_Msgpack_Value) -> (result: Krunker_Death_Value) {
+	#partial switch typed in value {
+	case string:
+		result.known, result.is_text = true, true
+		result.text_len = copy(result.text[:], typed)
+		// Never split a UTF-8 code point.
+		for result.text_len > 0 && result.text_len < len(typed) && typed[result.text_len] & 0xc0 == 0x80 { result.text_len -= 1 }
+	case:
+		if number, ok := krunker_world_number(value); ok && !math.is_nan(number) && !math.is_inf(number) {
+			result.known, result.number = true, number
+		}
+	}
+	return
+}
+
+krunker_world_death_info :: proc(value: Krunker_Msgpack_Value) -> (info: Krunker_Death_Info) {
+	info.weapon_id, info.stat_index = -1, -1
+	items, ok := value.([]Krunker_Msgpack_Value)
+	if !ok { return }
+	if len(items) > 0 {
+		if id, valid := krunker_world_bounded_number(items[0], 0, f64(len(shared.WEAPONS_LIST)-1)); valid && shared.WEAPONS_LIST[int(id)] != nil { info.weapon_id = i32(id) }
+	}
+	if len(items) > 1 { info.killer_xp = krunker_world_death_value(items[1]) }
+	if len(items) > 2 {
+		if pair, is_pair := items[2].([]Krunker_Msgpack_Value); is_pair && len(pair) > 1 {
+			if index, valid := krunker_world_bounded_number(pair[1], 0, f64(len(KRUNKER_DEATH_STAT_NAMES)-1)); valid {
+				info.stat_index = i32(index)
+				info.stat = krunker_world_death_value(pair[0])
+			}
+		}
+	}
+	if len(items) > 3 {
+		if stats, is_list := items[3].([]Krunker_Msgpack_Value); is_list {
+			info.has_stats = true
+			for i in 0..<min(len(stats), len(info.stats)) { info.stats[i] = krunker_world_death_value(stats[i]) }
+		}
+	}
+	return
+}
+
+krunker_death_value_text :: proc(value: ^Krunker_Death_Value) -> string { return string(value.text[:value.text_len]) }

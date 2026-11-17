@@ -23,7 +23,9 @@ overlay_scope_active :: proc(client: ^Client) -> bool {
 	return player_scope_visible(player, aim)
 }
 
-overlay_scope_render :: proc(ui: ^UI) {
+// borders false is Krunker's scopeBorders off: the scope image alone, with
+// no black fill around it (krunkbox game.min.js `x.scopeBorders.display&&`).
+overlay_scope_render :: proc(ui: ^UI, borders := true) {
 	if scope_icon == 0 {
 		path := shared.concat(shared.assets_path(), "textures/scopes/scope_0.png")
 		scope_icon = load_texture(path)
@@ -33,10 +35,12 @@ overlay_scope_render :: proc(ui: ^UI) {
 	size := min(ui.width, ui.height)
 	x, y := (ui.width - size) * 0.5, (ui.height - size) * 0.5
 	black := shared.Vec4{0, 0, 0, 1}
-	ui_fill_rect(ui, black, 0, 0, x, ui.height)
-	ui_fill_rect(ui, black, x + size, 0, x, ui.height)
-	ui_fill_rect(ui, black, x, 0, size, y)
-	ui_fill_rect(ui, black, x, y + size, size, y)
+	if borders {
+		ui_fill_rect(ui, black, 0, 0, x, ui.height)
+		ui_fill_rect(ui, black, x + size, 0, x, ui.height)
+		ui_fill_rect(ui, black, x, 0, size, y)
+		ui_fill_rect(ui, black, x, y + size, size, y)
+	}
 	if scope_icon != 0 {
 		ui_draw_image(ui, scope_icon, x, y, size, size)
 	} else {
@@ -236,7 +240,7 @@ overlay_ammo_render :: proc(client: ^Client) {
 
 overlay_render :: proc(client: ^Client, delta: f32) {
 	scoped := overlay_scope_active(client)
-	if scoped { overlay_scope_render(client.ui) }
+	if scoped { overlay_scope_render(client.ui, !client.hud_settings.hide_scope_borders) }
 	// Under the HUD, as Krunker draws its blood overlay and hit indicators.
 	client_damage_render(client, delta)
 	white := shared.Vec4{1.0, 1.0, 1.0, 1.0}

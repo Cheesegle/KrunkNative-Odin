@@ -48,13 +48,24 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 		player.crouch_val = a.crouch + (b.crouch-a.crouch)*alpha
 		player.aim_val = a.aim + (b.aim-a.aim)*alpha
 		player.on_ground = alpha < 0.5 ? a.on_ground : b.on_ground
+		// The browser interpolates the server's stepVal (stepVal = m.s +
+		// (g.s - m.s) * p) instead of re-deriving it from the displacement, so
+		// the stride, and the server hitboxes built from it, stay in phase.
+		// A footstep plays when its sign changes (posStep, playerStep(.., !0)).
+		player.step_val = a.step + (b.step-a.step)*alpha
+		if !source.step_positive && player.step_val > 0 {
+			source.step_positive = true
+			shared.player_emit_presentation(player, .STEP)
+		} else if source.step_positive && player.step_val < 0 {
+			source.step_positive = false
+			shared.player_emit_presentation(player, .STEP)
+		}
 		shared.player_update_height(player)
 		displacement := player.position - previous
 		distance := math.sqrt(displacement.x*displacement.x + displacement.z*displacement.z)
-		if player.on_ground && distance < 64 { shared.player_step(player, distance) }
 		if distance < 64 {
 			if was_grounded && !player.on_ground && displacement.y > 0 { shared.player_emit_presentation(player, .JUMP) }
-			if !was_grounded && player.on_ground { shared.player_emit_presentation(player, .LAND) }
+			if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 		}
 		player.step_chase += (player.step_val-player.step_chase)*min(1, delta*20)
 		for &cooldown in player.reloads { cooldown = max(0, cooldown-delta) }

@@ -9,10 +9,10 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, RANKED }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE, REMEMBER_SECONDARY, CHAT_MODE, CHAT_VALUE, CHAT_TOGGLE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, NET_RATE, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, NET_RATE, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION, CHAT_MODE }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
@@ -30,6 +30,60 @@ HUD_Settings :: struct {
 	nametag_scale: f32, // See nametag_scale; 0 (a file without the key) is 100%.
 	nametag_colors: Nametag_Colors,
 	kill_feed_size: f32,
+	// Inverts Krunker's scopeBorders ("Scope borders", mods category, default
+	// on): the black fill around the sniper scope image.
+	hide_scope_borders: bool,
+	chat: Chat_Settings,
+}
+// Krunker's Settings > Chat (krunkbox current.analysis.js near line 252040,
+// cat:"chat"), stored with Krunker's own defaults: client_settings_defaults
+// fills them, and a settings file without "chat" keeps them.
+//   mode            shwChat "Show Chat Box": 0 Always, 1 While Focused, 2 Off
+//   hide_messages   !showMessages "Show Player Messages" (default on)
+//   filter          chatFilter "Profanity Filter" (default off)
+//   opacity         chatOp "Chat Opacity" 0..1, step 0.1, default 1
+//   background      chatBGOp "Chat BG Opacity" 0..1, step 0.1, default 0.2
+//   text_outline    chatTextOutline "Chat Text Outline" (default off)
+//   height          chatHeight "Chat Height" 0..5, step 0.1, default 2.5 (x100 px)
+//   timer           chatTimer "Chat Timer (s)" 0..10, step 0.5, default 0 (no timer)
+Chat_Settings :: struct {
+	mode: i32,
+	hide_messages, filter, text_outline: bool,
+	opacity, background, height, timer: f32,
+}
+Chat_Mode :: enum i32 { ALWAYS, WHILE_FOCUSED, OFF }
+CHAT_MODE_LABELS := [Chat_Mode]string{.ALWAYS = "Always", .WHILE_FOCUSED = "While Focused", .OFF = "Off"}
+Chat_Control :: enum { OPACITY, BACKGROUND, HEIGHT, TIMER }
+Chat_Toggle :: enum { SHOW_MESSAGES, FILTER, TEXT_OUTLINE }
+DEFAULT_CHAT_SETTINGS :: Chat_Settings{opacity = 1, background = 0.2, height = 2.5}
+CHAT_LIMITS := [Chat_Control][3]f32{.OPACITY = {0, 1, 0.1}, .BACKGROUND = {0, 1, 0.1}, .HEIGHT = {0, 5, 0.1}, .TIMER = {0, 10, 0.5}}
+chat_settings_validate :: proc(settings: Chat_Settings) -> Chat_Settings {
+	result := settings
+	result.mode = clamp(result.mode, 0, 2)
+	values := [Chat_Control]^f32{.OPACITY = &result.opacity, .BACKGROUND = &result.background, .HEIGHT = &result.height, .TIMER = &result.timer}
+	for value, control in values {
+		limits := CHAT_LIMITS[control]
+		if value^ != value^ { value^ = chat_control_value(DEFAULT_CHAT_SETTINGS, control) } // NaN.
+		value^ = clamp(value^, limits[0], limits[1])
+	}
+	return result
+}
+chat_control_value :: proc(settings: Chat_Settings, control: Chat_Control) -> f32 {
+	switch control {
+	case .OPACITY: return settings.opacity
+	case .BACKGROUND: return settings.background
+	case .HEIGHT: return settings.height
+	case .TIMER: return settings.timer
+	}
+	return 0
+}
+chat_toggle_value :: proc(settings: Chat_Settings, toggle: Chat_Toggle) -> bool {
+	switch toggle {
+	case .SHOW_MESSAGES: return !settings.hide_messages
+	case .FILTER: return settings.filter
+	case .TEXT_OUTLINE: return settings.text_outline
+	}
+	return false
 }
 // Nameplate healthbar fills, Krunker's healthColE ("Nametag Health Color E")
 // and healthColT ("Nametag Health Color Team"). A zero value predates these
@@ -106,10 +160,27 @@ Settings_Values :: struct {
 	crosshair: Crosshair_Settings,
 	hitmarker: Hitmarker_Settings,
 	damage: Damage_Settings,
+	// Krodin's own (Krunker always reuses one global secondaryInd): reuse the
+	// secondary last picked for a class and skip the loadout prompt.
+	remember_secondary: bool,
 }
 Class :: struct { id: i32, name, weapon: string, health: i32, speed: f32, wall_jump, available: bool, reason: string, used, limit: int, portrait, weapon_icon: rawptr }
 Secondary :: struct { id: i32, name: string, icon: rawptr }
 Player :: struct { name, class_name: string, team: i32, is_you: bool }
+
+// Krunker's competitive lobby list (krunkbox game.min.js ZW, `compPlListL`):
+// with l = your own team (`e.t||0`), a player on any other team
+// (`E=n&&l!=n.t`) shows "???" instead of the class name and no weapon icon.
+// Teammates and you keep theirs. Without a team (spectating) every player is
+// another team's, so all classes are hidden.
+COMPETITIVE_HIDDEN_CLASS :: "???"
+competitive_roster_hide_enemy_classes :: proc(players: []Player, fallback_team: i32) {
+	team := fallback_team
+	for player in players { if player.is_you { team = player.team; break } }
+	for &player in players {
+		if !player.is_you && player.team != team { player.class_name = COMPETITIVE_HIDDEN_CLASS }
+	}
+}
 Team :: struct { id: i32, name: string, capacity: int, available: bool, reason: string, score: u32 }
 View :: struct {
 	presentation: Lobby_Presentation,
@@ -168,6 +239,7 @@ View :: struct {
 	// Channels the output device offers (0 when unknown); Surround needs more than 2.
 	surround_channels: i32,
 	show_fps: bool,
+	remember_secondary: bool,
 	// What Reset restores: the client's defaults for a missing settings file
 	// (client_settings_defaults through client_settings_validate, plus the
 	// audio defaults). Reset stays disabled while this is the zero value.
@@ -274,7 +346,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, spatial_audio = view.spatial_audio, distance_falloff = view.distance_falloff, levelling = view.levelling, levelling_strength = view.levelling_strength, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
 			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), game_fps_limit = game_fps_limit_validate(view.game_fps_limit), net_rate = shared.net_rate_validate(view.net_rate), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
-			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage)}
+			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage), remember_secondary = view.remember_secondary}
 		state.settings_active = true
 	}
 	state.settings_resolution_count = i32(len(view.resolution_options))
@@ -514,6 +586,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .MENU_FPS_LIMIT: index = menu_fps_limit_index(state.settings_draft.menu_fps_limit)
 		case .NET_RATE: index = net_rate_index(state.settings_draft.net_rate)
 		case .RANKED_REGION: index = clamp(state.ranked_region, 0, RANKED_ALL_REGIONS_CHOICE)
+		case .CHAT_MODE: index = clamp(state.settings_draft.hud.chat.mode, 0, 2)
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
 		return {}
@@ -614,6 +687,32 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .KILL_FEED_LIMIT:
 			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_limit = i32(clamp(value + 0.5, 1, KILL_FEED_MAX_LIMIT)) } // Skips NaN.
 			return {}
+		case .CHAT_MODE: state.settings_draft.hud.chat.mode = clamp(control.action.index, 0, 2); return {}
+		case .CHAT_VALUE:
+			if control.action.index >= 0 && control.action.index < i32(len(Chat_Control)) {
+				if value := control.action.value; value == value { // Skips NaN.
+					chat := &state.settings_draft.hud.chat
+					// Krunker's slider steps, so typed and dragged values land on them.
+					limits := CHAT_LIMITS[Chat_Control(control.action.index)]
+					stepped := f32(i32(clamp(value, limits[0], limits[1])/limits[2] + 0.5))*limits[2]
+					switch Chat_Control(control.action.index) {
+					case .OPACITY: chat.opacity = stepped
+					case .BACKGROUND: chat.background = stepped
+					case .HEIGHT: chat.height = stepped
+					case .TIMER: chat.timer = stepped
+					}
+					chat^ = chat_settings_validate(chat^)
+				}
+			}
+			return {}
+		case .CHAT_TOGGLE:
+			chat := &state.settings_draft.hud.chat
+			switch control.action.index {
+			case 0: chat.hide_messages = !chat.hide_messages
+			case 1: chat.filter = !chat.filter
+			case 2: chat.text_outline = !chat.text_outline
+			}
+			return {}
 		case .KILL_FEED_SIZE:
 			// Tenths, so typed and dragged values land on the same steps.
 			if value := control.action.value; value == value { state.settings_draft.hud.kill_feed_size = f32(i32(clamp(value, KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE)*10 + 0.5))/10 } // Skips NaN.
@@ -653,6 +752,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			state.settings_resolution_selected = true
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
+		case .REMEMBER_SECONDARY: state.settings_draft.remember_secondary = !state.settings_draft.remember_secondary; return {}
 		case .MENU_FPS_LIMIT: state.settings_draft.menu_fps_limit = MENU_FPS_LIMITS[clamp(control.action.index, 0, len(MENU_FPS_LIMITS)-1)]; return {}
 		case .NET_RATE: state.settings_draft.net_rate = shared.NET_RATES[clamp(control.action.index, 0, len(shared.NET_RATES)-1)]; return {}
 		case .GAME_FPS_LIMIT: state.settings_draft.game_fps_limit = game_fps_limit_from_value(control.action.value); return {}
@@ -666,6 +766,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
 			case 7: state.settings_draft.hud.healthbar_border = !state.settings_draft.hud.healthbar_border
+			case 8: state.settings_draft.hud.hide_scope_borders = !state.settings_draft.hud.hide_scope_borders
 			}
 			return {}
 		case .RESOLUTION:
@@ -781,8 +882,8 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .HOME { container = "ClassStrip" }
 		if page == .CLASSES { container = "ClassPicker" }
 	}
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .NET_RATE || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION { container = "SettingsOptions" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .REMEMBER_SECONDARY || control.action.kind == .CHAT_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .NET_RATE || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION || control.action.kind == .CHAT_MODE { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))

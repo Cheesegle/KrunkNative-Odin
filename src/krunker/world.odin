@@ -46,6 +46,15 @@ Krunker_World_Player :: struct {
 	cylinder_velocity: shared.Vec2,
 	crouch_val: f32,
 	aim_val:    f32,
+	// k record value 6, the server's stepVal (walk-cycle phase). The browser
+	// interpolates it for remote players: it drives their stride and the
+	// server's complexHitboxes (bounce, sway, leg swing) use the same value.
+	step_val:   f32,
+	// The browser's posStep: whether the interpolated stepVal was last > 0.
+	// A remote footstep plays each time its sign changes.
+	step_positive: bool,
+	// headMlt: roster record value 38, then BIG_HEAD (bh) updates. 0 = 1.
+	head_mlt:   f32,
 	weapon_slot: i32,
 	ping:       i32,
 	active:     bool,
@@ -88,6 +97,7 @@ Krunker_End_Results :: struct {
 	// END's first value: 2 when the server skips its end flow.
 	game_state: i32,
 	mode_index, local_sid, local_team: i32,
+	ranked: bool, // the lobby was ranked; INIT for the next lobby may change is_ranked
 	result, winner_team, end_index: i32,
 	team_scores: [3]u32,
 	entries: [dynamic]Krunker_End_Entry,
@@ -137,6 +147,9 @@ Krunker_World_State :: struct {
 	// camLookAt runs before that check.
 	local_killer_sid: i32,
 	local_death_revision: u64,
+	// That KILL_PLAYER's death-screen data (weapon, killer level and stat,
+	// life stats) for the death UI.
+	local_death: Krunker_Death_Info,
 	has_leaders: bool,
 	leader_stat_count: int,
 	match: shared.Match_State,
@@ -147,6 +160,10 @@ Krunker_World_State :: struct {
 	timer_received_at, objective_received_at, lockout_received_at: f64,
 	countdown: Krunker_Countdown,
 	countdown_remaining: f32,
+	// gmsg's countdown number (the big centre number and its cntd_N sound)
+	// and a counter that changes with every one received.
+	countdown_number: i32,
+	countdown_number_revision: u64,
 	countdown_received_at: f64,
 	respawn_available_at: f64,
 	final_round_counted: bool,
@@ -353,6 +370,8 @@ krunker_world_apply_add_players :: proc(state: ^Krunker_World_State, packet: []K
 		player.secondary_id = krunker_world_i32(records[offset + 15], 2)
 		player.secondary_revision += 1
 		player.direction.y = krunker_world_f32(records[offset + 18], player.direction.y)
+		// players.add(..., e[t+38]) assigns it as headMlt.
+		player.head_mlt = max(krunker_world_f32(records[offset + 38], 1), 0)
 		player.active = true
 		player.life_ended = false
 		player.revision += 1
@@ -376,7 +395,9 @@ krunker_world_apply_update_players :: proc(state: ^Krunker_World_State, packet: 
 	if len(packet) > 3 {
 		if stamp, valid := krunker_world_number(packet[3]); valid && !math.is_nan(stamp) && !math.is_inf(stamp) && stamp >= 0 {
 			state.previous_sync_received_at = state.sync_received_at
-			state.has_previous_sync = state.has_server_time && state.received_at > state.sync_received_at
+			// The browser's lastSync is truthy from the second k on, even when
+			// both arrive at the same time.
+			state.has_previous_sync = state.has_server_time
 			state.sync_received_at = state.received_at
 			state.server_time, state.has_server_time = stamp, true
 		}
@@ -391,6 +412,7 @@ krunker_world_apply_update_players :: proc(state: ^Krunker_World_State, packet: 
 		// The browser calls yaw xDire and pitch yDire; Vec2 is pitch/yaw.
 		if pitch, ok := krunker_world_number(records[offset + 5]); ok { player.direction.x = f32(pitch) * math.PI / 180 }
 		if yaw, ok := krunker_world_number(records[offset + 4]); ok { player.direction.y = f32(yaw) * math.PI / 180 }
+		player.step_val = krunker_world_f32(records[offset + 6], player.step_val)
 		player.on_ground = krunker_world_bool(records[offset + 7])
 		player.crouch_val = krunker_world_f32(records[offset + 8])
 		player.weapon_slot = krunker_world_i32(records[offset + 9], player.weapon_slot)

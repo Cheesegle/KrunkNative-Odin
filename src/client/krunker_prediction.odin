@@ -93,7 +93,10 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		client.me.direction = state.command_direction
 		shot_seq := client.me.shot_seq
 		shared.player_proc_input(client.me, &command, true, client.krunker_world.move_lock, true, true)
-		if client.me.shot_seq != shot_seq { kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time) }
+		if client.me.shot_seq != shot_seq {
+			kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time)
+			when KRODIN_DEV { krunker_shot_diagnostic_log(client, &command, shot_time) }
+		}
 		command.predicted_ramp_fix, command.predicted_has_ramp_fix = client.me.ramp_fix, client.me.has_ramp_fix
 		append(&state.input_commands, command)
 		// Keep client-only impulse metadata produced by prediction for replay.
@@ -132,6 +135,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 			player.position, player.direction = source.position, source.direction
 			player.crouch_val, player.aim_val = source.crouch_val, source.aim_val
 			player.on_ground = source.on_ground
+			player.step_val = source.step_val // forcePos takes stepVal directly too.
 			shared.player_update_height(player)
 		}
 		player.interpolate = false
@@ -169,22 +173,28 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	shared.player_update_height(player)
 	if is_you && source.has_ack {
 		state.local_sync_revision = source.sync_revision
+		// A stale ACK (an id this life never sent) acknowledges nothing: replay
+		// every prediction from the server position instead.
+		acked := krunker_ws_accept_ack(state, source.ack_seq)
 		// l omits rampFix, the snap target that ramp contact leaves for the next
 		// tick. Replaying with the newest prediction's value instead snaps a
 		// player who has just left a ramp back onto it and grounds them, so a
 		// held jump fires early and the next correction undoes it in Y. Use the
 		// value predicted after the acknowledged command.
-		for input in client.predicted_inputs {
-			if input.seq > source.ack_seq { break }
-			state.acked_ramp_fix, state.acked_has_ramp_fix = input.predicted_ramp_fix, input.predicted_has_ramp_fix
+		if acked {
+			for input in client.predicted_inputs {
+				if input.seq > source.ack_seq { break }
+				state.acked_ramp_fix, state.acked_has_ramp_fix = input.predicted_ramp_fix, input.predicted_has_ramp_fix
+			}
+			client_discard_acked_inputs(client, source.ack_seq)
 		}
 		player.ramp_fix, player.has_ramp_fix = state.acked_ramp_fix, state.acked_has_ramp_fix
-		client_discard_acked_inputs(client, source.ack_seq)
 		for &input in client.predicted_inputs {
 			shared.player_proc_input(player, &input, true, client.krunker_world.move_lock)
 			input.predicted_ramp_fix, input.predicted_has_ramp_fix = player.ramp_fix, player.has_ramp_fix
 		}
-		state.input_sequence = max(state.input_sequence, source.ack_seq + 1)
+		// krunker_ws_accept_ack only accepts ack < input_sequence, so an ACK
+		// never moves the sequence past commands still queued for q.
 	}
 	if !is_you { return }
 	if !respawned {

@@ -187,6 +187,20 @@ client_tick_kill_feed :: proc(client: ^Client, delta: f32) {
 	clear(&client.krunker_world.kills)
 }
 
+KILL_FEED_ICON_FISTS    :: "textures/weapons/icon_0.png"
+KILL_FEED_ICON_WALLBANG :: "img/wallbang_0.png"
+KILL_FEED_ICON_HEADSHOT :: "img/headshot_0.png"
+// Headshot / wallbang badge size in px at scale 1 (Krunker's CSS: 28).
+KILL_FEED_BADGE_SIZE :: 20
+
+// Loads every icon the feed can show, for the asset sweep: these only load
+// on a fists, wallbang or headshot kill, so the packager would miss them.
+kill_feed_sweep_icons :: proc() {
+	kill_feed_load_icon(&kill_feed_icon_fists, KILL_FEED_ICON_FISTS)
+	kill_feed_load_icon(&kill_feed_icon_wallbang, KILL_FEED_ICON_WALLBANG)
+	kill_feed_load_icon(&kill_feed_icon_headshot, KILL_FEED_ICON_HEADSHOT)
+}
+
 kill_feed_load_icon :: proc(icon: ^u32, relative: string) -> u32 {
 	if icon^ == 0 {
 		path := shared.concat(shared.assets_path(), relative)
@@ -223,7 +237,7 @@ kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, 
 		icon: u32
 		melee := false
 		if entry.fists {
-			icon = kill_feed_load_icon(&kill_feed_icon_fists, "textures/weapons/icon_0.png")
+			icon = kill_feed_load_icon(&kill_feed_icon_fists, KILL_FEED_ICON_FISTS)
 		} else if entry.weapon_id >= 0 {
 			weapon: ^shared.Weapon
 			icon, weapon = overlay_weapon_icon(client, entry.weapon_id)
@@ -236,12 +250,16 @@ kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, 
 		} else {
 			x += 10 * s
 		}
-		// .headShotChatIcon: 28x28, -5px left and 8px right margins.
+		// Krunker's .headShotChatIcon is 28x28 (-5px left, 8px right margins);
+		// Krodin draws it smaller because 28px looked oversized next to the
+		// names. The badge stays centred where the 28px one was (baseline - 10).
+		badge := KILL_FEED_BADGE_SIZE * s
+		badge_top := baseline - 10 * s - badge / 2
 		if entry.wallbang {
-			image(ui, &x, kill_feed_load_icon(&kill_feed_icon_wallbang, "img/wallbang_0.png"), -5 * s, 28 * s, 28 * s, 8 * s, baseline - 24 * s, {1, 1, 1, 1}, false, draw)
+			image(ui, &x, kill_feed_load_icon(&kill_feed_icon_wallbang, KILL_FEED_ICON_WALLBANG), -3 * s, badge, badge, 6 * s, badge_top, {1, 1, 1, 1}, false, draw)
 		}
 		if entry.headshot {
-			image(ui, &x, kill_feed_load_icon(&kill_feed_icon_headshot, "img/headshot_0.png"), -5 * s, 28 * s, 28 * s, 8 * s, baseline - 24 * s, {1, 1, 1, 1}, false, draw)
+			image(ui, &x, kill_feed_load_icon(&kill_feed_icon_headshot, KILL_FEED_ICON_HEADSHOT), -3 * s, badge, badge, 6 * s, badge_top, {1, 1, 1, 1}, false, draw)
 		}
 		text(ui, &x, kill_feed_name_text(&entry.victim), entry.victim.color, baseline, text_size, draw)
 	}
