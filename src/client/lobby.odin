@@ -310,7 +310,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings,
-		remember_secondary = client.remember_secondary,
+		remember_secondary = client.remember_secondary, spectator = client.spectator_settings,
 		settings_defaults = client_settings_default_values(fullscreen_sizes, client.max_anisotropy),
 		audio_volumes = {client.audio_settings.master, client.audio_settings.effects, client.audio_settings.footsteps, client.audio_settings.ui, client.audio_settings.weapons},
 		spatial_audio = i32(client.audio_settings.spatial), distance_falloff = i32(client.audio_settings.falloff),
@@ -322,7 +322,8 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		ranked_queue = ranked_view(client, client.menu.page == .RANKED),
 	}
 	if !online && !client.local_practice { view.ready = false }
-	if team_selection && client.lobby_team == 0 && !(client.team_pending && client.requested_team > 0) { view.play_reason = "Choose a team to enter game" }
+	if client_spectating(client) { view.active = true }
+	if !KRODIN_SPECTATOR && team_selection && client.lobby_team == 0 && !(client.team_pending && client.requested_team > 0) { view.play_reason = "Choose a team to enter game" }
 	if client.team_pending && client.requested_team == 0 { view.play_reason = "Leaving team..." }
 	if reason := krunker_client_match_reason(client); len(reason) > 0 { view.play_reason, view.match_status = reason, reason }
 	else if countdown := krunker_client_countdown_label(client, glfw.GetTime()); len(countdown) > 0 {
@@ -388,6 +389,7 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.hitmarker_settings = menuui.hitmarker_settings_validate(values.hitmarker)
 	client.damage_settings = menuui.damage_settings_validate(values.damage)
 	client.remember_secondary = values.remember_secondary
+	client.spectator_settings = menuui.spectator_settings_validate(values.spectator)
 	client.aim_toggled = false
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
@@ -416,7 +418,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .REMEMBER_SECONDARY, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .REMEMBER_SECONDARY, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE, .SPECTATOR_SMOOTHING, .SPECTATOR_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)

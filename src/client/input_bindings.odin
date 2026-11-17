@@ -69,6 +69,7 @@ client_scroll_event :: proc(client: ^Client, x, y: f64, now: f64) {
 	// J(null, 20000) presses the wheel key, at most once per 50 ms. Repeated
 	// notches before the next command collapse into one press, as keys[] is
 	// a boolean there too.
+	when KRODIN_SPECTATOR { client.spectator.scroll += f32(y) }
 	if y != 0 && now - client.scroll_press_time > SCROLL_PRESS_INTERVAL {
 		client.scroll_press, client.scroll_press_time = true, now
 	}

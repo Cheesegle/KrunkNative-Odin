@@ -23,6 +23,7 @@ class_selectable :: proc(view: View, class: Class) -> bool {
 
 play_label :: proc(view: View) -> string {
 	if !view.active && view.respawn_remaining > 0 { return fmt.tprintf("Respawn in %d", int(view.respawn_remaining+0.999)) }
+	if KRODIN_SPECTATOR { return view.active ? "Resume" : "Spectate" }
 	return view.active ? "Resume" : view.has_life ? "Respawn" : "Enter Game"
 }
 
@@ -33,6 +34,7 @@ play_reason :: proc(view: View) -> string {
 	if !view.ready { return "Waiting for lobby data..." }
 	if view.spawn_pending { return "Waiting for server spawn confirmation..." }
 	if view.team_pending { return "Waiting for team confirmation..." }
+	if KRODIN_SPECTATOR { return "" } // Any class: the server ignores it for spectators.
 	for class in view.classes {
 		if class.id != view.selected_class { continue }
 		if !class.available { return len(class.reason)>0 ? class.reason : "Choose an available class" }

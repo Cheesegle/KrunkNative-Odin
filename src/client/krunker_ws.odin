@@ -83,6 +83,12 @@ Krunker_WS_State :: struct {
 	auth_rejected: bool,
 	// Chat messages waiting for the socket, sent in order after control packets.
 	chat_outbox: [dynamic]Krunker_Chat_Outgoing,
+	// Spectator build: ENTER_GAME carries Krunker's spectate flag (en[6],
+	// the browser's `Dc?1:0` from window.setSpect), and this socket never
+	// sends gameplay input (q). spectate_target is the sid sent with fpSp,
+	// -1 for free cam (fpSp with null).
+	spectate: bool,
+	spectate_target: i32,
 }
 
 Krunker_Chat_Outgoing :: struct { text: string, team: bool }
@@ -303,7 +309,7 @@ krunker_ws_finish_packet :: proc(payload: [dynamic]byte, opcode: string, ah_num:
 	return out
 }
 
-krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 = 0, class_index: i32 = 0, secondary_index: i32 = 2) -> [dynamic]byte {
+krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 = 0, class_index: i32 = 0, secondary_index: i32 = 2, spectate: bool = false, spectate_target: i32 = -1) -> [dynamic]byte {
 	message: [dynamic]byte
 	switch opcode {
 	case "load":
@@ -323,6 +329,8 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 		krunker_ws_pack_array(&message, 2); krunker_ws_pack_int(&message, -1); krunker_ws_pack_int(&message, -1)
 		values := [?]i32{-1, -1, 2, 0, 0, 1, -1, -1, 1, 0, -1, -1, -1, -1, -1, -1, 0, -1, -1, 1, 1, 1, -1, -1, -1, 0}
 		values[2] = secondary_index >= 0 ? secondary_index : 2
+		// en[6]: the browser's spectate switch (`parseInt(i0),Dc?1:0,`).
+		values[3] = spectate ? 1 : 0
 		for value in values { krunker_ws_pack_int(&message, value) }
 		krunker_ws_pack_array(&message, 2); krunker_ws_pack_nil(&message); krunker_ws_pack_int(&message, -1)
 		krunker_ws_pack_int(&message, -1); krunker_ws_pack_int(&message, -1); krunker_ws_pack_int(&message, -1); krunker_ws_pack_int(&message, 1)
@@ -330,6 +338,10 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 		krunker_ws_pack_int(&message, 16); krunker_ws_pack_int(&message, 18)
 		for _ in 0 ..< 6 { append(&message, 0xC2) }
 		krunker_ws_pack_nil(&message); append(&message, 0xC2); append(&message, 0xC2)
+	case "fpSp":
+		// Krunker's spectate target: aa.send(Da.fpSp, a ? a.sid : null).
+		krunker_ws_pack_array(&message, 2); krunker_ws_pack_string(&message, "fpSp")
+		if spectate_target < 0 { krunker_ws_pack_nil(&message) } else { krunker_ws_pack_int(&message, spectate_target) }
 	case "team":
 		krunker_ws_pack_array(&message, 3); krunker_ws_pack_string(&message, "cd"); krunker_ws_pack_string(&message, "t"); krunker_ws_pack_int(&message, team)
 	case "class":
@@ -354,10 +366,13 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 
 krunker_ws_send_internal :: proc(state: ^Krunker_WS_State, opcode: string, queue_on_again: bool) -> bool {
 	state.send_blocked = false
+	// A spectator never plays: Krunker's browser sends q only for an active
+	// local player (`ht && ht.active`), so the spectator build refuses it.
+	if state.spectate && opcode == "q" { return true }
 	// Advance the shared counter only after a complete successful send.
 	// Retrying an unsent packet must reuse its counter, including across wrap.
 	next_counter := state.ah_num
-	packet := krunker_ws_message(opcode, &next_counter, state.q_index, state.team, state.class_index, state.secondary_index)
+	packet := krunker_ws_message(opcode, &next_counter, state.q_index, state.team, state.class_index, state.secondary_index, state.spectate, state.spectate_target)
 	defer delete(packet)
 	sent: c.size_t
 	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
@@ -692,6 +707,7 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8)
 
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
+	if state.spectate || client.krunker_world.spectating do return
 	if !state.connected || !state.spawned || !state.bootstrapped do return
 	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
@@ -934,6 +950,8 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	state.team = 0
 	state.class_index = client.selected_class
 	state.secondary_index = client_secondary_request(client, client.selected_class)
+	// The spectator build joins every lobby as a spectator (en[6] = 1).
+	state.spectate, state.spectate_target = KRODIN_SPECTATOR, -1
 	krunker_ws_set_status(client, "Krunker WebSocket connected; waiting for server load…")
 	return true
 }

@@ -9,10 +9,14 @@ Krunker_World_Pose :: struct {
 	crouch, aim: f32,
 	on_ground: bool,
 	step: f32,
+	// The k packet's server stamp (seconds since the match started; value 3,
+	// `M - this.startTime` in ms on the wire), for the spectator view filter.
+	server_time: f64,
+	has_server_time: bool,
 }
 
 krunker_world_buffer_pose :: proc(player: ^Krunker_World_Player, received_at: f64) {
-	pose := Krunker_World_Pose{received_at, player.position, player.direction, player.crouch_val, player.aim_val, player.on_ground, player.step_val}
+	pose := Krunker_World_Pose{time = received_at, position = player.position, direction = player.direction, crouch = player.crouch_val, aim = player.aim_val, on_ground = player.on_ground, step = player.step_val}
 	if player.pose_count > 0 {
 		previous := player.poses[player.pose_count-1]
 		distance := pose.position - previous.position

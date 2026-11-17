@@ -121,6 +121,9 @@ Client :: struct {
 	// the secondary last picked per class index (0 = none yet).
 	remember_secondary: bool,
 	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
+	spectator_settings: menuui.Spectator_Settings,
+	// The spectator build's state (spectator.odin); idle in other builds.
+	spectator: Spectator,
 	local_practice: bool,
 	has_life: bool,
 	lobby_team: i32,
@@ -1211,6 +1214,16 @@ client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: 
 }
 
 client_enter_game :: proc(client: ^Client) {
+	// Spectator build: already watching, so entering only resumes the view.
+	if client_spectating(client) {
+		if client.window != nil && cursor_focus_may_capture(&client.cursor_focus) {
+			glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+			client.mouse_state.locked = true
+			x, y := glfw.GetCursorPos(client.window)
+			client.mouse_state.last_pos = {f32(x), f32(y)}
+		}
+		return
+	}
 	if krunker_client_respawn_remaining(client, glfw.GetTime()) > 0 { return }
 	if (!client.game.ready && !(client.krunker.connected && client.krunker_world.ready)) || (client.me != nil && client.me.active) || client.spawn_pending {
 		return
@@ -1451,6 +1464,14 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.freecam_enabled = false
 	}
 	client_scroll_frame_end(client, scroll_pending)
+	// Spectator build: the mouse turns the chase/free camera, never a player.
+	spectator_input: Spectator_Input
+	when KRODIN_SPECTATOR {
+		if client.mouse_state.locked && (client.me == nil || !client.me.active) {
+			look := client_mouse_delta({f32(x) - client.mouse_state.last_pos.x, f32(y) - client.mouse_state.last_pos.y})
+			spectator_input = spectator_read_input(client, client_mouse_rotation(client, look))
+		}
+	}
 
 	client.mouse_state.last_pos.x = f32(x)
 	client.mouse_state.last_pos.y = f32(y)
@@ -1477,6 +1498,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			}
 		}
 		shared.game_tick_projectiles(&client.game, delta * client.game.config.delta_mlt)
+		when KRODIN_SPECTATOR { spectator_update(client, spectator_input, glfw.GetTime(), delta) }
 	}
 	client_update_inspect(client, inspect_down, client.mouse_state.locked && !client.freecam_enabled, inspect_cancel, delta)
 	client_update_objective_visuals(client)
@@ -1540,6 +1562,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		end_screen_render(client, glfw.GetTime())
 	} else if !client.mouse_state.locked {
 		hud_render(client, delta, debug_pointer)
+	} else if client_spectating(client) {
+		spectator_hud_render(client, delta)
+		chat_render(client)
 	} else {
 		if !client_death_screen_hides_hud(client) { overlay_render(client, delta) }
 		else if client.scoreboard_open {
@@ -1664,6 +1689,7 @@ main :: proc() {
 	client.damage_settings = preferences.damage
 	client.ranked_prefs = preferences.ranked
 	client.remember_secondary, client.secondary_picks = preferences.remember_secondary, preferences.secondary_picks
+	client.spectator_settings = preferences.spectator
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
@@ -1690,7 +1716,7 @@ main :: proc() {
 		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
 	}
 
-	client.window, g_diag.gl_robust_requested = client_create_window(1280, 720, "Krodin", g_gl_robustness_wanted)
+	client.window, g_diag.gl_robust_requested = client_create_window(1280, 720, KRODIN_SPECTATOR ? "Krodin Spectator" : "Krodin", g_gl_robustness_wanted)
 	if client.window == nil {
 		fmt.eprintln("Failed to create window")
 		return

@@ -55,7 +55,7 @@ spatial_audio_label :: proc(mode: i32, surround_channels: i32) -> string {
 
 // Sliders shown as percentages.
 settings_percent_action :: proc(kind: Action_Kind) -> bool {
-	return kind == .AUDIO_VOLUME || kind == .LEVELLING_STRENGTH || kind == .NAMETAG_SIZE
+	return kind == .AUDIO_VOLUME || kind == .LEVELLING_STRENGTH || kind == .NAMETAG_SIZE || kind == .SPECTATOR_SMOOTHING
 }
 Lighting_Quality :: enum i32 { LOW, NORMAL, HIGH, PHYSICAL }
 DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Lighting_Quality.NORMAL), shadow_quality = i32(Shadow_Quality.KRUNKER), self_shadow = true}
@@ -208,10 +208,11 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 		values.hitmarker = hitmarker_settings_validate(view.hitmarker)
 		values.damage = damage_settings_validate(view.damage)
 	}
-	if !state.settings_active { values.levelling_strength = view.levelling_strength }
+	if !state.settings_active { values.levelling_strength, values.spectator = view.levelling_strength, spectator_settings_validate(view.spectator) }
 	#partial switch action.kind {
 	case .AUDIO_VOLUME: return values.audio_volumes[action.index]
 	case .LEVELLING_STRENGTH: return values.levelling_strength
+	case .SPECTATOR_SMOOTHING: return values.spectator.smoothing
 	case .FOV: return values.fov
 	case .VIEWMODEL_VALUE: return values.viewmodel.values[Viewmodel_Control(action.index)]
 	case .CROSSHAIR_VALUE: return values.crosshair.values[Crosshair_Control(action.index)]
