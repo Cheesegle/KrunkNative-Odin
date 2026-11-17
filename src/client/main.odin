@@ -1416,6 +1416,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.net_input_seq += 1
 		if client.krunker.connected {
 			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
+			krunker_ws_ghost_watchdog(client, glfw.GetTime())
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
