@@ -130,6 +130,26 @@ weapons) stay in `game.toml`.
 Every `stats_interval` seconds the server logs its tick budget: average and maximum tick time,
 late ticks, ticks over budget and the player count.
 
+### Testing with bots
+
+`tools/server-bot-test.ps1` (Windows) and `tools/server-bot-test.sh` (Linux) start a server plus
+headless bots (`bin/krodin_netbot`, built with `build.bat bots`). Each bot plays with a random
+simulated latency: every packet in each direction is held for half its round trip, 20–60 ms by
+default, plus ±2 ms jitter. The bots wander, close in on the nearest enemy, and shoot when they
+have line of sight. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
+`logs/bot-test/`.
+
+```powershell
+.\tools\server-bot-test.ps1                                  # 6 bots, 20-60 ms, 64 tick
+.\tools\server-bot-test.ps1 -Bots 7 -TickRate 128 -MinLatency 30 -MaxLatency 80
+```
+
+```bash
+./tools/server-bot-test.sh --bots 7 --tick-rate 128
+```
+
+The bots are a Krodin-only test tool, with no Krunker equivalent.
+
 ## Controls
 
 These are the default bindings. Rebind them in **Settings → Key binds**: select a slot and press a key or mouse button (Escape cancels). To unbind a slot, click its **X**, right-click it, or focus it and press Delete or Backspace.
