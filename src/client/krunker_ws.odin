@@ -800,6 +800,7 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	state.connected = true
 	client_clear_players(client)
 	client.game.is_local = false
+	client.game.server_hits_players = true
 	state.team = 0
 	state.class_index = client.selected_class
 	state.secondary_index = client_secondary_request(client, client.selected_class)

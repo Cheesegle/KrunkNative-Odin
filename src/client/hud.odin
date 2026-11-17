@@ -64,6 +64,7 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 	net_client_disconnect(&client.net)
 	client_clear_players(client)
 	client.game.is_local = false
+	client.game.server_hits_players = false
 	new_net, connected := net_client_connect(parsed.host, int(port))
 	client.net = new_net
 	if connected {

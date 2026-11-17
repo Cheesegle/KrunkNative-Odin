@@ -93,7 +93,10 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		client.me.direction = state.command_direction
 		shot_seq := client.me.shot_seq
 		shared.player_proc_input(client.me, &command, true, client.krunker_world.move_lock, true, true)
-		if client.me.shot_seq != shot_seq { kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time) }
+		if client.me.shot_seq != shot_seq {
+			kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time)
+			when KRODIN_DEV { krunker_shot_diagnostic_log(client, &command, shot_time) }
+		}
 		command.predicted_ramp_fix, command.predicted_has_ramp_fix = client.me.ramp_fix, client.me.has_ramp_fix
 		append(&state.input_commands, command)
 		// Keep client-only impulse metadata produced by prediction for replay.

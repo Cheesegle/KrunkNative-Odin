@@ -12,6 +12,7 @@ when ODIN_TEST {
 		map_inst^ = {death_y = -1000, config = {speed = {1, 1, 1}, air_accel = 1}}
 		shared.game_configure(&client.game, nil, []^shared.Map{map_inst}, nil, nil, nil)
 		shared.game_init(&client.game, 0, 0, false)
+		client.game.server_hits_players = true // As krunker_client_load_world_map sets it.
 		client.me = shared.player_init(&client.game)
 		shared.game_players_add(&client.game, client.me)
 		shared.player_spawn(client.me, 2)
@@ -42,7 +43,7 @@ when ODIN_TEST {
 		frame := shared.Input{delta = 0.007, move_dir = -1, shoot = true}
 		krunker_client_predict_input(&client, &frame)
 		testing.expect(t, client.me.ammo[0] == 23 && client.me.shot_seq == 1, "live firing must consume a round immediately")
-		if !testing.expect(t, len(client.game.impacts) == 1 && client.game.impacts[0].kind == .Player, "local fire must generate a resolved tracer path") { return }
+		if !testing.expect(t, len(client.game.impacts) == 1 && client.game.impacts[0].kind == .Miss, "local fire must generate a tracer path, through the player as in the browser") { return }
 		testing.expect(t, victim.health == 100 && victim.active, "local shot presentation must never apply server-owned damage")
 		source := kproto.Krunker_World_Player{position = client.me.position, weapon_slot = 0, has_ack = true, ack_seq = 12, sync_revision = 1}
 		for _ in 0..<3 {
@@ -74,6 +75,36 @@ when ODIN_TEST {
 		before := len(client.game.impacts)
 		shared.player_melee(client.me, true)
 		testing.expect(t, len(client.game.impacts) == before && victim.health == 100, "predicted knives must create no bullet effects or damage")
+	}
+
+	// Krunker's browser shoots the same ray as its server, but its players have
+	// no stateHistory (only the server's storeState writes it), so fetchState
+	// returns nothing and the browser's tracer never stops at a player. Live
+	// predicted shots must pass through players; native prediction still stops.
+	@(test)
+	krunker_live_predicted_shots_pass_through_players :: proc(t: ^testing.T) {
+		client: Client
+		map_inst: shared.Map
+		krunker_presentation_fixture(&client, &map_inst)
+		defer krunker_presentation_cleanup(&client)
+		victim := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, victim)
+		shared.player_spawn(victim, 2)
+		victim.position, victim.scale, victim.height = {0, 0, -100}, 20, 100
+		client.me.position, client.me.direction = {}, {}
+		shared.player_shoot(client.me, true)
+		if !testing.expect(t, len(client.game.impacts) == 1) { return }
+		live := client.game.impacts[0]
+		range := client.me.weapon.range
+		testing.expect(t, live.kind == .Miss && !live.hit && abs(live.position.z+range) < 0.5,
+			"a live predicted bullet must reach its full range through the player, as the browser's does")
+		testing.expect(t, victim.health == 100)
+		client.game.server_hits_players = false
+		shared.player_shoot(client.me, true)
+		if !testing.expect(t, len(client.game.impacts) == 2) { return }
+		native := client.game.impacts[1]
+		testing.expect(t, native.kind == .Player && native.hit && native.position.z > -100,
+			"native predicted shots still stop at Krodin's player boxes")
 	}
 
 	// k record value 6 is the server's stepVal. The browser interpolates it
