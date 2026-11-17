@@ -20,6 +20,9 @@ rem                               (tools\server-bot-test.ps1 runs a server + bot
 rem   build.bat symbolicate       build the dump symbolication tool
 rem                                                     -> bin\krodin_symbolicate.exe
 rem   build.bat tests             build + run the sim tests
+rem   build.bat tests-vk          build + run the client tests on the Vulkan
+rem                               backend with validation on (any validation
+rem                               error fails the test that raised it)
 rem   build.bat check             typecheck client + server without linking
 rem   build.bat all               build client + server
 rem   build.bat clean             remove built binaries
@@ -49,7 +52,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client vulkan dev spectator browser inspect server bots symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client vulkan dev spectator browser inspect server bots symbolicate tests tests-vk check all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -149,6 +152,16 @@ if errorlevel 1 exit /b %errorlevel%
 %ODIN% test src/browser_access -out:%BIN_DIR%\browser_access_tests.exe -o:none
 exit /b %errorlevel%
 
+:tests-vk
+call :spirv
+if errorlevel 1 exit /b %errorlevel%
+set "KRODIN_VK_VALIDATION=1"
+set "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+%ODIN% build src/client -build-mode:test -o:none -define:KRODIN_VULKAN=true -define:ODIN_TEST_THREADS=1 -out:%BIN_DIR%\client_tests_vk.exe
+if errorlevel 1 exit /b %errorlevel%
+"%BIN_DIR%\client_tests_vk.exe"
+exit /b %errorlevel%
+
 :check
 %ODIN% check tools/browser_inspect
 if errorlevel 1 exit /b %errorlevel%
@@ -210,7 +223,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| vulkan ^| dev ^| spectator ^| browser ^| inspect ^| server ^| bots ^| symbolicate ^| tests] [level]
+echo Usage: build.bat [client ^| vulkan ^| dev ^| spectator ^| browser ^| inspect ^| server ^| bots ^| symbolicate ^| tests ^| tests-vk] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).

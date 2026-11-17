@@ -57,6 +57,7 @@ when ODIN_TEST {
 	// must name Krodin's threads, hold only thread stacks (no heap: a token
 	// placed on the heap must not be in it), stay small, and, when this test
 	// binary has a PDB (built with -debug), symbolicate to Krodin names.
+	when !KRODIN_VULKAN {
 	@(test)
 	crash_hang_dump_threads_memory_and_symbols :: proc(t: ^testing.T) {
 		old_config, old_diag := g_crash_config, g_diag
@@ -223,6 +224,7 @@ when ODIN_TEST {
 			testing.expect(t, result.krodin_frames > 2 && result.named_threads >= 3)
 		}
 	}
+	} // GL-only test (OpenGL state or contexts)
 
 	@(test)
 	crash_dump_type_has_no_heap_flags :: proc(t: ^testing.T) {

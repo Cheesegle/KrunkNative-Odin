@@ -74,7 +74,7 @@ when ODIN_TEST {
 			"Krodin hang report", "GPU reset: none detected",
 			"== What happened ==", "== System ==", "== Settings ==", "== Recent frames ==", "== Recent events ==",
 			"== Frame phases ==", "== GL messages ==", "== Network log",
-			"Windows: 11", "GPU: Intel(R) UHD Graphics", "GL context: reset notification on", "Test Monitor, 1920x1080 @ 144 Hz",
+			"Windows: 11", "GPU: Intel(R) UHD Graphics", (KRODIN_VULKAN ? "Vulkan: validation" : "GL context: reset notification on"), "Test Monitor, 1920x1080 @ 144 Hz",
 			"RAM free:", "Display mode: Fullscreen (exclusive)", "Fullscreen size: 1920x1080", "V-Sync: on", "Game FPS limit: 240",
 			"Menu FPS limit: monitor refresh rate", "Shadows: on", "Shadow quality: Sharp", "Lighting: High", "Night mode: on",
 			"Spatial audio: Surround", "Settings menu open: yes",
@@ -147,6 +147,7 @@ when ODIN_TEST {
 		return glfw.WindowHandle(uintptr(0x1000))
 	}
 
+	when !KRODIN_VULKAN {
 	@(test)
 	client_create_window_falls_back_without_robustness :: proc(t: ^testing.T) {
 		fake := fake_create_window
@@ -163,9 +164,11 @@ when ODIN_TEST {
 		window, robust = client_create_window(64, 64, "test", false, fake)
 		testing.expect(t, window != nil && !robust && len(fake_window_calls) == 1 && !fake_window_calls[0])
 	}
+	} // GL-only test (OpenGL state or contexts)
 
 	// A real hidden window with reset notification renders the map exactly
 	// like a plain one, passes the batching self-test, and reports no reset.
+	when !KRODIN_VULKAN {
 	@(test)
 	robust_context_renders_like_plain_context :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -189,7 +192,6 @@ when ODIN_TEST {
 			defer glfw.DestroyWindow(window)
 			glfw.MakeContextCurrent(window)
 			gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 			defer resource_cache_fini()
 			result.granted = gl_context_loses_on_reset()
 
@@ -212,18 +214,15 @@ when ODIN_TEST {
 			target := bench_target_init(w, h)
 			camera := map_batch_self_test_camera(map_inst)
 			gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target.target))
-			gl.Viewport(0, 0, w, h)
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+			gpu_set_target(test_gpu_current_target(), w, h)
 			result.pixels = make([]u8, int(w * h * 3))
 			start := time.tick_now()
 			FRAMES :: 60
 			for _ in 0 ..< FRAMES {
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+				gpu_clear(color = true, depth = true)
 				scene_render(client.scene, &camera, f32(w), f32(h), 0)
 			}
-			ui_flush()
-			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(result.pixels))
+			test_read_rgb(0, 0, w, h, raw_data(result.pixels))
 			result.ms = time.duration_milliseconds(time.tick_since(start)) / FRAMES
 			result.status = u32(gl.GetGraphicsResetStatus())
 			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
@@ -247,6 +246,7 @@ when ODIN_TEST {
 		testing.expect(t, len(plain.pixels) == len(robust.pixels) && mem.compare(plain.pixels, robust.pixels) == 0, "robust and plain contexts render identical pixels")
 		log.infof("burg 320x180 render: plain %.3f ms, robust %.3f ms per frame (reset notification granted: %v)", plain.ms, robust.ms, robust.granted)
 	}
+	} // GL-only test (OpenGL state or contexts)
 
 	// The history rings are fixed arrays written in place: nothing allocates
 	// per frame, however many frames and events go by.

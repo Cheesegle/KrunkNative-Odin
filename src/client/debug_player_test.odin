@@ -240,30 +240,20 @@ when ODIN_TEST && KRODIN_DEV {
 		W, H :: 1920, 1080
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Debug player", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-		gl.BindTexture(gl.TEXTURE_2D, color_texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-		if !testing.expect(t, gl.CheckFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE) { return }
-		gl.BindTexture(gl.TEXTURE_2D, 0)
+		test_gpu := test_gpu_open(640, 360, "Debug player")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
+		framebuffer: Gpu_Render_Target
+		defer test_gpu_target_destroy(&framebuffer)
+		test_gpu_target_destroy(&framebuffer)
+		framebuffer = test_gpu_target(W, H)
+		if !testing.expect(t, framebuffer != 0) { return }
+		test_gpu_use_target(framebuffer, W, H)
 		g_active_texture = 0
-		gl.Viewport(0, 0, W, H)
+		gpu_set_target(test_gpu_current_target(), W, H)
 
 		m := new(Debug_Player_Test_Map)
 		defer { delete(m.map_inst.objects); free(m) }
@@ -286,13 +276,12 @@ when ODIN_TEST && KRODIN_DEV {
 		for i in 0..<300 { perf_push(&client.perf, i % 50 == 0 ? 12 : 6.9, 2.5) }
 		client.mouse_state.locked = true
 		for _ in 0..<3 {
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT)
+			gpu_clear(color = true, depth = false)
 			ui_update(client.ui, W, H)
 			debug_ui_update(client)
 			debug_ui_render(client)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 		rect := mu.get_container(&client.debug_ui.ctx, DEBUG_WINDOW_TITLE).rect
 		testing.expectf(t, !client.debug_ui.overflow && rect.y + rect.h <= H, "the window fits 1080p: %v", rect)
 		texts := debug_player_test_texts(client.debug_ui)
@@ -304,9 +293,7 @@ when ODIN_TEST && KRODIN_DEV {
 		w, h := min(int(rect.w) + 2, W - x0), min(int(rect.h) + 2, H - y0)
 		pixels := make([]u8, w*h*3)
 		defer delete(pixels)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(i32(x0), i32(H - y0 - h), i32(w), i32(h), gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(i32(x0), i32(H - y0 - h), i32(w), i32(h), raw_data(pixels))
 		lit := 0
 		for i := 0; i < len(pixels); i += 3 { if pixels[i] > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 { lit += 1 } }
 		testing.expectf(t, lit > 500, "white text is drawn inside the window (%d bright pixels)", lit)

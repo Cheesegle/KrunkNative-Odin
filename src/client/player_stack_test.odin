@@ -142,15 +142,12 @@ when ODIN_TEST {
 
 	@(private = "file")
 	stack_shot :: proc(f: ^Stack_Fixture, camera: ^Camera, pixels: []u8, name: string) -> (top_half_covered: int) {
-		gl.ClearColor(0.75, 0.8, 0.85, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_clear_color({0.75, 0.8, 0.85})
+		gpu_clear(color = true, depth = true)
 		camera_update_projection_matrix(camera, f32(STACK_SHOT_W) / f32(STACK_SHOT_H))
 		camera_update_world_inverse_matrix(camera)
 		scene_render(f.client.scene, camera, STACK_SHOT_W, STACK_SHOT_H)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, STACK_SHOT_W, STACK_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, STACK_SHOT_W, STACK_SHOT_H, raw_data(pixels))
 		// Rows are bottom-up: the top half is the second half of the buffer.
 		for i := STACK_SHOT_W * STACK_SHOT_H / 2; i < STACK_SHOT_W * STACK_SHOT_H; i += 1 {
 			p := pixels[i * 3:]
@@ -174,17 +171,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(STACK_SHOT_W, STACK_SHOT_H, "Player stack", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, STACK_SHOT_W, STACK_SHOT_H)
+		test_gpu := test_gpu_open(STACK_SHOT_W, STACK_SHOT_H, "Player stack")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), STACK_SHOT_W, STACK_SHOT_H)
 
 		f: Stack_Fixture
 		f.client.window, f.client.scene, f.client.fps_scene = window, scene_init(), scene_init()
@@ -217,6 +209,6 @@ when ODIN_TEST {
 		down := camera
 		down.rotation.x = -1.2
 		stack_shot(&f, &down, pixels, "on_head_down")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

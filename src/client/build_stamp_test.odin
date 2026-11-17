@@ -155,6 +155,7 @@ when ODIN_TEST {
 	// failure is recorded and logged, the UI shaders fall back to their built-in
 	// copies, and the banner is drawn on screen. Writes the banner previews to
 	// bin/build_stamp/.
+	when !KRODIN_VULKAN { // GL-only test: compiles GLSL with the driver (SPIR-V is built ahead of time)
 	@(test)
 	build_stamp_shader_failure_shows_error :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -163,17 +164,12 @@ when ODIN_TEST {
 		W, H :: 1280, 720
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Build stamp", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, W, H)
+		test_gpu := test_gpu_open(W, H, "Build stamp")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), W, H)
 		build_status_fini()
 		defer build_status_fini()
 
@@ -192,7 +188,7 @@ when ODIN_TEST {
 
 		// The UI program falls back to the exe's own ui shader.
 		ui_program := shader_compile_ui(strings.concatenate({dir, "/"}, context.temp_allocator), "ui.vert", "ui.frag")
-		defer if ui_program != 0 { gl.DeleteProgram(ui_program) }
+		defer if ui_program != 0 { when !KRODIN_VULKAN { gl.DeleteProgram(ui_program) } }
 		testing.expect(t, ui_program != 0, "the UI shader falls back to its built-in source")
 		testing.expectf(t, len(g_build_status.shader_failures) == 2 && g_build_status.shader_failures[1] == "ui.frag", "the asset copy's failure is still reported: %v", g_build_status.shader_failures[:])
 
@@ -218,14 +214,11 @@ when ODIN_TEST {
 			return
 		}
 		render :: proc(client: ^Client, pixels: []u8, w, h: int) -> bool {
-			gl.ClearColor(0, 0, 0, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT)
+			gpu_set_clear_color({0, 0, 0})
+			gpu_clear(color = true, depth = false)
 			ui_update(client.ui, f32(w), f32(h))
 			drawn := build_status_banner_render(client.ui)
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-			ui_flush()
-			gl.ReadPixels(0, 0, i32(w), i32(h), gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, i32(w), i32(h), raw_data(pixels))
 			return drawn
 		}
 		testing.expect(t, render(client, pixels, W, H), "the shader error banner is drawn")
@@ -251,10 +244,11 @@ when ODIN_TEST {
 		clear(&g_build_status.shader_failures)
 		testing.expect(t, render(client, pixels, W, H))
 		stbi.write_png("bin/build_stamp/warning_banner.png", W, 120, 3, &pixels[(H - 1)*W*3], -W*3)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 
 		// Nothing wrong, nothing drawn.
 		build_status_fini()
 		testing.expect(t, !render(client, pixels, W, H), "no banner without a problem")
+	}
 	}
 }

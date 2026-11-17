@@ -57,12 +57,10 @@ when ODIN_TEST {
 
 	@(private = "file")
 	foliage_frame :: proc(client: ^Client, pixels: []u8) {
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, FOLIAGE_W, FOLIAGE_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), FOLIAGE_W, FOLIAGE_H)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, FOLIAGE_W, FOLIAGE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, FOLIAGE_W, FOLIAGE_H, raw_data(pixels))
 	}
 
 	@(private = "file")
@@ -82,16 +80,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(FOLIAGE_W, FOLIAGE_H, "Littletown foliage", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(FOLIAGE_W, FOLIAGE_H, "Littletown foliage")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/foliage")
 		tag := os.get_env("KRODIN_SHOT_TAG", context.temp_allocator)
 		if tag == "" do tag = "after"
@@ -180,17 +173,15 @@ when ODIN_TEST {
 					for tuft in tufts { if tuft == mesh { is_tuft = true; break } }
 					if !is_tuft && mesh.visible { mesh.visible = false; append(&hidden, mesh) }
 				}
-				gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-				gl.Viewport(0, 0, FOLIAGE_W, FOLIAGE_H)
+				test_gpu_use_device_target()
+				gpu_set_target(test_gpu_current_target(), FOLIAGE_W, FOLIAGE_H)
 				clear_color: [4]f32
-				gl.GetFloatv(gl.COLOR_CLEAR_VALUE, &clear_color[0])
-				gl.ClearColor(1, 0, 1, 1)
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+				when !KRODIN_VULKAN { gl.GetFloatv(gl.COLOR_CLEAR_VALUE, &clear_color[0]) } // GL state
+				gpu_set_clear_color({1, 0, 1})
+				gpu_clear(color = true, depth = true)
 				scene_render(client.scene, &client.camera, FOLIAGE_W, FOLIAGE_H, client.graphics_sampler)
-				ui_flush()
-				gl.ReadPixels(0, 0, FOLIAGE_W, FOLIAGE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(mask))
-				gl.ClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3])
+				test_read_rgb(0, 0, FOLIAGE_W, FOLIAGE_H, raw_data(mask))
+				gpu_set_clear_color({clear_color[0], clear_color[1], clear_color[2]})
 				for mesh in hidden { mesh.visible = true }
 
 				// Leak map: see-through pixels red over the darkened frame.
@@ -216,7 +207,7 @@ when ODIN_TEST {
 			}
 		}
 		client.render_batching, client.visual_settings.night_mode = true, false
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Littletown must render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "Littletown must render without OpenGL errors")
 		client_clear_players(client)
 		free_all(context.temp_allocator)
 	}

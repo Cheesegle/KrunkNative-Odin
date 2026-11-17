@@ -151,16 +151,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 180, "Countdown", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(320, 180, "Countdown")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/round-countdown")
 		client := new(Client); defer free(client)
 		client.ui = ui_init()
@@ -178,31 +173,23 @@ when ODIN_TEST {
 		sizes := [2][2]i32{{1280, 720}, {1920, 1080}}
 		for size in sizes {
 			W, H := size[0], size[1]
-			framebuffer, color_texture: u32
-			gl.GenFramebuffers(1, &framebuffer)
-			gl.GenTextures(1, &color_texture)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-			gl.BindTexture(gl.TEXTURE_2D, color_texture)
-			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-			gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-			gl.BindTexture(gl.TEXTURE_2D, 0)
+			framebuffer := test_gpu_target(W, H)
+			test_gpu_use_target(framebuffer, W, H)
 			g_active_texture = 0
 			client.viewport_width, client.viewport_height = W, H
-			gl.Viewport(0, 0, W, H)
+			gpu_set_target(test_gpu_current_target(), W, H)
 			// White text pixels and dark stroke pixels in each frame.
 			bright := make([]int, len(moments)); defer delete(bright)
 			dark := make([]int, len(moments)); defer delete(dark)
 			top_of_white: int
 			for moment, i in moments {
 				client.round_countdown = {number = moment.number, started = 50, visible = true}
-				gl.ClearColor(0.38, 0.55, 0.72, 1) // a stand-in sky
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT)
+				gpu_set_clear_color({0.38, 0.55, 0.72}) // a stand-in sky
+				gpu_clear(color = true, depth = false)
 				ui_update(client.ui, f32(W), f32(H))
 				round_countdown_render(client, 50 + moment.t)
 				pixels := make([]u8, int(W*H*3)); defer delete(pixels)
-				ui_flush()
-				gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+				test_read_rgb(0, 0, W, H, raw_data(pixels))
 				path := fmt.ctprintf("bin/round-countdown/%dx%d-%s.png", W, H, moment.name)
 				testing.expect(t, stbi.write_png(path, W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
 				for y in 0..<int(H) {
@@ -223,10 +210,8 @@ when ODIN_TEST {
 			// timerText sits at 26% of the height.
 			digit_height := int(f32(120) * min(f32(W)/2550, f32(H)/1350))
 			testing.expectf(t, abs(top_of_white - (int(f32(H)*0.26) - digit_height/2)) < digit_height/2, "%dx%d: centred on 26%% of the height (top %d)", W, H, top_of_white)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-			gl.DeleteFramebuffers(1, &framebuffer)
-			gl.DeleteTextures(1, &color_texture)
+			test_gpu_target_destroy(&framebuffer)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

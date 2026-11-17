@@ -17,9 +17,7 @@ when ODIN_TEST {
 
 	@(private = "file")
 	kill_cam_shot :: proc(name: string, pixels: []u8) {
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, raw_data(pixels))
 		os.make_directory("bin/kill-cam")
 		stbi.write_png(fmt.ctprintf("bin/kill-cam/%s.png", name), KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, 3, &pixels[(KILL_CAM_SHOT_H - 1) * KILL_CAM_SHOT_W * 3], -KILL_CAM_SHOT_W * 3)
 	}
@@ -46,16 +44,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, "Kill cam", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(KILL_CAM_SHOT_W, KILL_CAM_SHOT_H, "Kill cam")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		preferences := client_settings_defaults()
 		client := new(Client)
@@ -202,8 +195,8 @@ when ODIN_TEST {
 		offset, visible := kill_cam_screen_offset(client, point)
 		testing.expectf(t, visible && abs(offset.x) < 0.1 && abs(offset.y) < 0.1, "the killer is centred on screen (%v)", offset)
 		kill_cam_shot("3_kill_cam", pixels)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, KILL_CAM_SHOT_W, KILL_CAM_SHOT_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), KILL_CAM_SHOT_W, KILL_CAM_SHOT_H)
 		client_render_world(client)
 		player_healthbars_update_visibility(client, f32(glfw.GetTime()))
 		player_healthbars_render(client)
@@ -226,6 +219,6 @@ when ODIN_TEST {
 		// Next native snapshot: the killer moves (interpolates) again.
 		client_apply_player_state(client, &state)
 		testing.expect(t, killer.interpolate, "interpolation is restored")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

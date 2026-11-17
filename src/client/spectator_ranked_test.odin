@@ -66,16 +66,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Home", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(1280, 720, "Home")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		state: menuui.State
@@ -94,16 +89,10 @@ when ODIN_TEST {
 		for size in ([?][2]i32{{1280, 720}, {1920, 1080}}) {
 			glfw.SetWindowSize(window, size[0], size[1])
 			glfw.PollEvents()
-			framebuffer, color: u32
-			gl.GenFramebuffers(1, &framebuffer)
-			gl.GenTextures(1, &color)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-			gl.BindTexture(gl.TEXTURE_2D, color)
-			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, size[0], size[1], 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-			gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0)
-			gl.BindTexture(gl.TEXTURE_2D, 0)
+			framebuffer := test_gpu_target(size[0], size[1])
+			test_gpu_use_target(framebuffer, size[0], size[1])
 			g_active_texture = 0
-			gl.Viewport(0, 0, size[0], size[1])
+			gpu_set_target(test_gpu_current_target(), size[0], size[1])
 			ui_update(ui, f32(size[0]), f32(size[1]))
 			menuui.build(&state, view, {}, ui.width, ui.height, 1.0/60.0)
 			commands := menuui.build(&state, view, {}, ui.width, ui.height, 1.0/60.0)
@@ -118,19 +107,14 @@ when ODIN_TEST {
 			}
 			testing.expectf(t, ranked_control == !KRODIN_SPECTATOR && ranked_label == !KRODIN_SPECTATOR && clay.GetElementData(clay.ID("Ranked")).found == !KRODIN_SPECTATOR,
 				"Ranked button shown=%v/%v in the %s build at %v", ranked_control, ranked_label, build, size)
-			gl.ClearColor(0.17, 0.17, 0.17, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT)
+			gpu_set_clear_color({0.17, 0.17, 0.17})
+			gpu_clear(color = true, depth = false)
 			menu_render_commands(ui, commands)
 			pixels := make([]u8, int(size[0]*size[1]*3))
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-			ui_flush()
-			gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, size[0], size[1], raw_data(pixels))
 			testing.expect(t, stbi.write_png(fmt.ctprintf("bin/spectator/home_menu_%s_%dx%d.png", build, size[0], size[1]), size[0], size[1], 3, &pixels[(size[1]-1)*size[0]*3], -size[0]*3) != 0)
 			delete(pixels)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-			gl.DeleteTextures(1, &color)
-			gl.DeleteFramebuffers(1, &framebuffer)
+			test_gpu_target_destroy(&framebuffer)
 		}
 	}
 }

@@ -21,17 +21,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Native server hurtboxes", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+		test_gpu := test_gpu_open(HITBOX_SHOT_W, HITBOX_SHOT_H, "Native server hurtboxes")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), HITBOX_SHOT_W, HITBOX_SHOT_H)
 
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
 		g_client = &client
@@ -86,13 +81,11 @@ when ODIN_TEST {
 		dr.player_hitboxes = true
 		debug_render_build(&client, 0)
 		testing.expect(t, debug_hitbox_model(&client) == .KRODIN, "a native game draws the native server's boxes")
-		gl.ClearColor(0.55, 0.62, 0.7, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_clear_color({0.55, 0.62, 0.7})
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 		debug_render_lines(dr, view_projection, false)
-		err := gl.GetError()
-		testing.expectf(t, err == gl.NO_ERROR, "preview must draw without OpenGL errors (0x%x)", err)
+		testing.expect(t, test_gpu_no_error(), "preview must draw without GPU errors")
 		debug_test_read(pixels)
 		debug_test_save(pixels, "bin/debug_hitboxes/native_server_hurtboxes.png")
 

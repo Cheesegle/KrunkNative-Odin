@@ -62,29 +62,14 @@ when ODIN_TEST {
 		W, H :: 1280, 720
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Ranked end screen", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-		gl.BindTexture(gl.TEXTURE_2D, color_texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-		gl.BindTexture(gl.TEXTURE_2D, 0)
+		test_gpu := test_gpu_open(W, H, "Ranked end screen")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
 		g_active_texture = 0
-		gl.Viewport(0, 0, W, H)
+		gpu_set_target(test_gpu_current_target(), W, H)
 		ui := ui_init()
 		defer { overlay_fini(); ui_fini(ui); resource_cache_fini() }
 		os.make_directory("bin/end-screen")
@@ -97,16 +82,14 @@ when ODIN_TEST {
 			client.viewport_width, client.viewport_height = W, H
 			if !testing.expect(t, ranked_end_test_world(&client, ranked)) do return
 			testing.expect(t, client_end_screen_update(&client, 10, false), "the END packet shows the end screen")
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_clear(color = true, depth = true)
 			ui_update(ui, W, H)
 			end_screen_render(&client, 10+END_SCREEN_PANEL_DELAY+0.1)
-			ui_flush()
-			gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, W, H, raw_data(pixels))
 			for row in 0 ..< H { copy(flipped[row*W*3:][:W*3], pixels[(H-1-row)*W*3:][:W*3]) }
 			testing.expect(t, stbi.write_png(fmt.ctprintf("bin/end-screen/%s.png", ranked ? "ranked" : "unranked"), W, H, 3, raw_data(flipped), W*3) != 0)
 			kproto.krunker_world_reset(&client.krunker_world)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

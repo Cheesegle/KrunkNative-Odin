@@ -36,17 +36,15 @@ when ODIN_TEST {
 
 	@(private = "file")
 	spectate_render_shot :: proc(t: ^testing.T, client: ^Client, name: string, w, h: i32, delta: f32) -> (spread: f64) {
-		gl.Viewport(0, 0, w, h)
+		gpu_set_target(test_gpu_current_target(), w, h)
 		client.viewport_width, client.viewport_height = w, h
 		client_render_world(client)
 		ui_update(client.ui, f32(w), f32(h))
 		spectator_hud_render(client, delta)
-		testing.expectf(t, gl.GetError() == gl.NO_ERROR, "%s renders without GL errors", name)
+		testing.expectf(t, test_gpu_no_error(), "%s renders without GL errors", name)
 		pixels := make([]u8, int(w*h*3))
 		defer delete(pixels)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, w, h, raw_data(pixels))
 		os.make_directory("bin/spectator")
 		path := fmt.ctprintf("bin/spectator/%s_%dx%d.png", name, w, h)
 		testing.expect(t, stbi.write_png(path, w, h, 3, &pixels[(h - 1)*w*3], -w*3) != 0)
@@ -65,6 +63,7 @@ when ODIN_TEST {
 	// whole-degree angles): first person, third-person chase, free cam and
 	// the HUD with the scoreboard, at 1280x720 and 1920x1080. Writes
 	// bin/spectator/{first_person,chase,free_cam,hud_scoreboard}_<W>x<H>.png.
+	when !KRODIN_VULKAN {
 	@(test)
 	spectator_renders_first_person_chase_and_free_cam :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -72,16 +71,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Spectator", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(640, 360, "Spectator")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		preferences := client_settings_defaults()
 		client := new(Client)
@@ -280,4 +274,5 @@ when ODIN_TEST {
 			gl.DeleteFramebuffers(1, &framebuffer)
 		}
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

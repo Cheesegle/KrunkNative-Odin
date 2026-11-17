@@ -79,13 +79,10 @@ when ODIN_TEST {
 	@(private = "file")
 	nametag_test_draw :: proc(client: ^Client, pixels: []u8) {
 		healthbar_test_settle(client)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, NAMETAG_W, NAMETAG_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, NAMETAG_W, NAMETAG_H, raw_data(pixels))
 	}
 
 	@(private = "file")
@@ -141,18 +138,13 @@ when ODIN_TEST {
 	nametag_size_and_colors_render :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(NAMETAG_W, NAMETAG_H, "Nametag size and colour", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, NAMETAG_W, NAMETAG_H)
-		gl.ClearColor(f32(NAMETAG_BACKGROUND[0])/255, f32(NAMETAG_BACKGROUND[1])/255, f32(NAMETAG_BACKGROUND[2])/255, 1)
+		test_gpu := test_gpu_open(NAMETAG_W, NAMETAG_H, "Nametag size and colour")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), NAMETAG_W, NAMETAG_H)
+		gpu_set_clear_color({f32(NAMETAG_BACKGROUND[0])/255, f32(NAMETAG_BACKGROUND[1])/255, f32(NAMETAG_BACKGROUND[2])/255})
 
 		local := shared.Player{active = true, is_you = true, uid = 1, team = 1, height = 11, health = 100, max_health = 100}
 		enemy := shared.Player{active = true, uid = 2, team = 2, position = {-12, 0, -45}, height = 11, health = 60, max_health = 100}
@@ -216,6 +208,6 @@ when ODIN_TEST {
 		_, _, _, _, ffa_team := nametag_test_bounds(pixels, enemy_bar, nametag_test_rgb(0xffcc00))
 		_, _, _, _, ffa_enemy := nametag_test_bounds(pixels, enemy_bar, nametag_test_rgb(0x3366ff))
 		testing.expectf(t, ffa_team > 30 && ffa_enemy == 0, "FFA names use Nametag color, as Krunker draws them white (%d, %d)", ffa_team, ffa_enemy)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

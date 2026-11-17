@@ -46,16 +46,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Import exclude", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(1280, 720, "Import exclude")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		state: menuui.State
@@ -67,9 +62,9 @@ when ODIN_TEST {
 		popup_labels := []string{"Import Settings", "Krodin extra: excluded settings keep their current values.", "Exclude sensitivity", "Exclude keybinds", "Exclude sound", "On", "Off", "Import"}
 		longest := menuui.krunker_import_message({imported = 28, ignored = 13, skipped = 22}, {.SENSITIVITY, .KEYBINDS, .SOUND})
 		for size in ([?][2]i32{{1280, 720}, {1920, 1080}}) {
-			glfw.SetWindowSize(window, size[0], size[1])
+			test_gpu_resize(size[0], size[1])
 			glfw.PollEvents()
-			gl.Viewport(0, 0, size[0], size[1])
+			gpu_set_target(test_gpu_current_target(), size[0], size[1])
 			ui_update(ui, f32(size[0]), f32(size[1]))
 			pixels := make([]u8, int(size[0]*size[1]*3))
 			defer delete(pixels)
@@ -99,13 +94,10 @@ when ODIN_TEST {
 				} else {
 					import_exclude_texts_inside(t, commands, {longest}, clay.GetElementData(clay.ID("SettingsFooter")).boundingBox, size)
 				}
-				gl.ClearColor(0.17, 0.17, 0.17, 1)
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT)
+				gpu_set_clear_color({0.17, 0.17, 0.17})
+				gpu_clear(color = true, depth = false)
 				menu_render_commands(ui, commands)
-				gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-				ui_flush()
-				gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+				test_read_rgb(0, 0, size[0], size[1], raw_data(pixels))
 				name := scene == 0 ? "import_popup" : "import_message"
 				testing.expect(t, stbi.write_png(fmt.ctprintf("bin/import-filter/%s_%dx%d.png", name, size[0], size[1]), size[0], size[1], 3, &pixels[(size[1]-1)*size[0]*3], -size[0]*3) != 0, "preview PNG written")
 			}

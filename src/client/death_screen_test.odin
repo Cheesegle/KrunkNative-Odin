@@ -242,16 +242,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 180, "Death screen", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(320, 180, "Death screen")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/death-screen")
 
 		f := death_fixture(); defer death_fixture_free(f)
@@ -284,30 +279,22 @@ when ODIN_TEST {
 		sizes := [2][2]i32{{1280, 720}, {1920, 1080}}
 		for size in sizes {
 			W, H := size[0], size[1]
-			framebuffer, color_texture: u32
-			gl.GenFramebuffers(1, &framebuffer)
-			gl.GenTextures(1, &color_texture)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-			gl.BindTexture(gl.TEXTURE_2D, color_texture)
-			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-			gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-			gl.BindTexture(gl.TEXTURE_2D, 0)
+			framebuffer := test_gpu_target(W, H)
+			test_gpu_use_target(framebuffer, W, H)
 			g_active_texture = 0
 			client.viewport_width, client.viewport_height = W, H
-			gl.Viewport(0, 0, W, H)
+			gpu_set_target(test_gpu_current_target(), W, H)
 			frames := make([][]u8, len(moments))
 			for moment, i in moments {
 				client.death_screen = moment.state^
 				// A stand-in world: sky over ground, so overlays read clearly.
-				gl.ClearColor(0.38, 0.55, 0.72, 1)
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT)
+				gpu_set_clear_color({0.38, 0.55, 0.72})
+				gpu_clear(color = true, depth = false)
 				ui_update(client.ui, f32(W), f32(H))
 				ui_fill_rect(client.ui, {0.35, 0.42, 0.28, 1}, 0, f32(H) * 0.55, f32(W), f32(H) * 0.45)
 				death_screen_render(client, moment.now)
 				frames[i] = make([]u8, int(W*H*3))
-				ui_flush()
-				gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(frames[i]))
+				test_read_rgb(0, 0, W, H, raw_data(frames[i]))
 				path := fmt.ctprintf("bin/death-screen/%dx%d-%s.png", W, H, moment.name)
 				testing.expect(t, stbi.write_png(path, W, H, 3, &frames[i][(H-1)*W*3], -W*3) != 0)
 			}
@@ -339,10 +326,8 @@ when ODIN_TEST {
 			testing.expectf(t, int(edge[0]) > int(edge[2]), "%dx%d: red flash at the edge (got %v)", W, H, edge)
 			for frame in frames { delete(frame) }
 			delete(frames)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-			gl.DeleteFramebuffers(1, &framebuffer)
-			gl.DeleteTextures(1, &color_texture)
+			test_gpu_target_destroy(&framebuffer)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

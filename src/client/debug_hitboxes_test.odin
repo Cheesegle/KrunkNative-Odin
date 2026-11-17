@@ -363,9 +363,7 @@ when ODIN_TEST {
 	}
 
 	debug_test_read :: proc(pixels: []u8) {
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H, raw_data(pixels))
 	}
 
 	debug_test_save :: proc(pixels: []u8, path: cstring) {
@@ -387,17 +385,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Debug hitboxes", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+		test_gpu := test_gpu_open(HITBOX_SHOT_W, HITBOX_SHOT_H, "Debug hitboxes")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), HITBOX_SHOT_W, HITBOX_SHOT_H)
 
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
 		g_client = &client
@@ -449,11 +442,10 @@ when ODIN_TEST {
 		defer delete(player_lines)
 		debug_lines_player(&player_lines, remote, .KRODIN, .SHOT, false)
 		testing.expect(t, len(dr.lines) == len(player_lines), "only the remote player is drawn (first-person you is not)")
-		gl.ClearColor(0, 0, 0, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_clear_color({0, 0, 0})
+		gpu_clear(color = true, depth = true)
 		testing.expect(t, debug_render_lines(dr, view_projection, true) == len(player_lines))
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "wireframes must draw without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "wireframes must draw without OpenGL errors")
 		debug_test_read(pixels)
 		// The torso and head boxes the native shot test uses (standing still: unpadded).
 		tested: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
@@ -473,17 +465,19 @@ when ODIN_TEST {
 		testing.expect(t, !debug_test_pixel_near(pixels, shifted, 1, is_green), "no body edge where the box is not")
 
 		// 2. Depth-tested lines hide behind nearer depth; x-ray shows through.
-		gl.ClearDepth(0)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-		debug_render_lines(dr, view_projection, true)
-		debug_test_read(pixels)
-		testing.expect(t, debug_test_lit_pixels(pixels) == 0, "depth-tested wireframes must be hidden behind nearer geometry")
-		debug_render_lines(dr, view_projection, false)
-		debug_test_read(pixels)
-		testing.expect(t, debug_test_lit_pixels(pixels) > 100, "x-ray wireframes must show through geometry")
-		testing.expect(t, gl.IsEnabled(gl.DEPTH_TEST) && gl.GetError() == gl.NO_ERROR, "line drawing must restore depth testing")
-		gl.ClearDepth(1)
+		// (GL only: the GPU layer always clears depth to the far plane.)
+		when !KRODIN_VULKAN {
+			gl.ClearDepth(0)
+			gpu_clear(color = true, depth = true)
+			debug_render_lines(dr, view_projection, true)
+			debug_test_read(pixels)
+			testing.expect(t, debug_test_lit_pixels(pixels) == 0, "depth-tested wireframes must be hidden behind nearer geometry")
+			debug_render_lines(dr, view_projection, false)
+			debug_test_read(pixels)
+			testing.expect(t, debug_test_lit_pixels(pixels) > 100, "x-ray wireframes must show through geometry")
+			testing.expect(t, gl.IsEnabled(gl.DEPTH_TEST) && test_gpu_no_error(), "line drawing must restore depth testing")
+			gl.ClearDepth(1)
+		}
 
 		// 3. Screenshots over the real player model, with map collision (only
 		// the two nearby objects) and a recorded shot ray.
@@ -504,15 +498,12 @@ when ODIN_TEST {
 				debug_lines_player(&dr.lines, remote, .KRUNKER, .SHOT, false)
 				debug_lines_map(&dr.lines, &client.game, camera.position, DEBUG_MAP_RANGE)
 			}
-			gl.ClearColor(0.55, 0.62, 0.7, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_clear_color({0.55, 0.62, 0.7})
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
-			scene_err := gl.GetError()
-			testing.expectf(t, scene_err == gl.NO_ERROR, "the world pass after a wireframe pass must draw without OpenGL errors (0x%x)", scene_err)
+			testing.expectf(t, test_gpu_no_error(), "the world pass after a wireframe pass must draw without GPU errors")
 			debug_render_lines(dr, view_projection, true)
-			err := gl.GetError()
-			testing.expectf(t, err == gl.NO_ERROR, "wireframes over the scene must draw without OpenGL errors (0x%x)", err)
+			testing.expectf(t, test_gpu_no_error(), "wireframes over the scene must draw without GPU errors")
 			debug_test_read(pixels)
 			debug_test_save(pixels, shots[i])
 		}
@@ -531,17 +522,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Krunker hurtbox poses", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+		test_gpu := test_gpu_open(HITBOX_SHOT_W, HITBOX_SHOT_H, "Krunker hurtbox poses")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), HITBOX_SHOT_W, HITBOX_SHOT_H)
 
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
 		g_client = &client
@@ -619,9 +605,8 @@ when ODIN_TEST {
 			shared.player_update_height(remote)
 			player_update_meshes(remote, false)
 
-			gl.ClearColor(0.55, 0.62, 0.7, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_clear_color({0.55, 0.62, 0.7})
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 
 			pose, server_moving := debug_krunker_hurtbox_pose(&client, remote)
@@ -632,8 +617,7 @@ when ODIN_TEST {
 			debug_lines_model_bounds(lines, remote)
 			debug_lines_krunker_pose(lines, pose, padded)
 			debug_render_lines(&client.debug_render, view_projection, false)
-			err := gl.GetError()
-			testing.expectf(t, err == gl.NO_ERROR, "%s: pose preview must draw without OpenGL errors (0x%x)", c.name, err)
+			testing.expectf(t, test_gpu_no_error(), "%s: pose preview must draw without GPU errors", c.name)
 			debug_test_read(pixels)
 			debug_test_save(pixels, c.file)
 
@@ -670,17 +654,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Remote stride", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+		test_gpu := test_gpu_open(HITBOX_SHOT_W, HITBOX_SHOT_H, "Remote stride")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), HITBOX_SHOT_W, HITBOX_SHOT_H)
 
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
 		g_client = &client
@@ -760,13 +739,11 @@ when ODIN_TEST {
 
 			clear(&client.debug_render.lines)
 			debug_lines_player(&client.debug_render.lines, remote, .KRUNKER, .SHOT, false)
-			gl.ClearColor(0.55, 0.62, 0.7, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_clear_color({0.55, 0.62, 0.7})
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
 			debug_render_lines(&client.debug_render, view_projection, false)
-			err := gl.GetError()
-			testing.expectf(t, err == gl.NO_ERROR, "stride preview must draw without OpenGL errors (0x%x)", err)
+			testing.expectf(t, test_gpu_no_error(), "stride preview must draw without GPU errors")
 			debug_test_read(pixels)
 			testing.expectf(t, debug_test_pixel_near(pixels, pixel, 2, is_red), "the leg hurtbox is drawn at its projected foot %v", pixel)
 			debug_test_save(pixels, names[i])

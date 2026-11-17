@@ -64,16 +64,11 @@ when ODIN_TEST {
 		W, H :: 1280, 720
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Scope borders", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(W, H, "Scope borders")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		ui := ui_init()
 		client := Client{scene = scene_init(), ui = ui}
 		g_client = &client
@@ -95,7 +90,7 @@ when ODIN_TEST {
 		camera := camera_init(DEFAULT_WEAPON_FOV)
 		camera.position = {60, 115, 210}
 		camera.rotation = {-0.12, 0.3, 0}
-		gl.Viewport(0, 0, W, H)
+		gpu_set_target(test_gpu_current_target(), W, H)
 		os.make_directory("bin/scope")
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
@@ -103,14 +98,11 @@ when ODIN_TEST {
 		defer delete(flipped)
 		edge: [2][3]u8
 		for borders, i in ([2]bool{true, false}) {
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, W, H)
 			ui_update(ui, W, H)
 			overlay_scope_render(ui, borders)
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-			ui_flush()
-			gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, W, H, raw_data(pixels))
 			// The left edge, outside the square scope image, at mid height.
 			edge[i] = {pixels[(H/2*W)*3], pixels[(H/2*W)*3+1], pixels[(H/2*W)*3+2]}
 			center := pixels[(H/2*W + W/2)*3:][:3]
@@ -121,6 +113,6 @@ when ODIN_TEST {
 		}
 		testing.expect(t, edge[0] == ([3]u8{}), "borders on: black outside the scope")
 		testing.expect(t, int(edge[1][0]) + int(edge[1][1]) + int(edge[1][2]) > 30, "borders off: the map shows outside the scope")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "scope borders render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "scope borders render without OpenGL errors")
 	}
 }

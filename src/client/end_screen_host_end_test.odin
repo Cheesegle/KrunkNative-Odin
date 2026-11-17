@@ -149,27 +149,12 @@ when ODIN_TEST {
 		H :: 720
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Host end", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-		gl.BindTexture(gl.TEXTURE_2D, color_texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-		gl.BindTexture(gl.TEXTURE_2D, 0)
+		test_gpu := test_gpu_open(W, H, "Host end")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
 		g_active_texture = 0
 		client := Client{ui = ui_init(), bindings = menuui.default_bindings()}
 		defer { overlay_fini(); ui_fini(client.ui); resource_cache_fini() }
@@ -182,26 +167,21 @@ when ODIN_TEST {
 		kproto.krunker_world_apply_packet(world, []kproto.Krunker_Msgpack_Value{"init", i64(0), i64(1)})
 		client.in_game, client.krunker.spawned = false, false
 		client.viewport_width, client.viewport_height = W, H
-		gl.Viewport(0, 0, W, H)
+		gpu_set_target(test_gpu_current_target(), W, H)
 		testing.expect(t, client_end_screen_update(&client, 200.02, false))
 		pixels := make([]u8, W*H*3)
 		blank := make([]u8, W*H*3)
 		defer { delete(pixels); delete(blank) }
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
-		ui_flush()
-		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(blank))
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = false)
+		test_read_rgb(0, 0, W, H, raw_data(blank))
+		gpu_clear(color = true, depth = true)
 		ui_update(client.ui, W, H)
 		end_screen_render(&client, 200.02+END_SCREEN_PANEL_DELAY+0.1)
-		ui_flush()
-		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, W, H, raw_data(pixels))
 		w, h := client.ui.width/client.ui.scale, client.ui.height/client.ui.scale
 		testing.expect(t, match_hud_region_delta(&client, blank, pixels, w*0.5-300, h*0.3, w*0.5+300, h*0.6) > 1000, "the final standings are drawn after the restart")
 		os.make_directory("bin/end-screen")
 		testing.expect(t, stbi.write_png("bin/end-screen/host-end-final-scoreboard.png", W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

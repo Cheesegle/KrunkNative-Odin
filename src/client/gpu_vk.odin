@@ -365,6 +365,8 @@ Vk_State :: struct {
 	warned_no_target: bool,
 
 	present:          Vk_Swapchain,
+	// What target 0 means (GL's "the window"): the window target, or a test's.
+	default_target:   Gpu_Render_Target,
 }
 
 @(private = "file")
@@ -637,6 +639,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		g_vk.present.vsync = true
 		width, height := glfw.GetFramebufferSize(window)
 		g_vk.present.target = gpu_render_target_create(max(width, 1), max(height, 1))
+		g_vk.default_target = g_vk.present.target
 		// Built by the first frame, after the caller's gpu_set_vsync.
 		g_vk.present.dirty = true
 	}
@@ -1350,6 +1353,7 @@ gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 		vk_retire({image = t.depth})
 	}
 	if g_vk.target == target^ { g_vk.target = 0; g_vk.pending_color, g_vk.pending_depth = false, false }
+	if g_vk.default_target == target^ { g_vk.default_target = 0 }
 	vk_table_remove(&g_vk.targets, u32(target^))
 	target^ = 0
 }
@@ -1733,13 +1737,23 @@ vk_flush_pending_clear :: proc() {
 	g_vk.pending_color, g_vk.pending_depth = false, false
 }
 
+// Target 0 is the default target, as GL's 0 is the window.
+gpu_vk_set_default_target :: proc(target: Gpu_Render_Target) {
+	g_vk.default_target = target
+}
+
+@(private = "file")
+vk_resolve_target :: proc(target: Gpu_Render_Target) -> Gpu_Render_Target {
+	return target != 0 ? target : g_vk.default_target
+}
+
 gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 	gpu_flush_deferred()
+	target := vk_resolve_target(target)
 	if target != g_vk.target {
-		if g_vk.recording {
-			vk_pass_end()
-			vk_flush_pending_clear()
-		}
+		// Clears requested for the old target still happen there.
+		vk_pass_end()
+		vk_flush_pending_clear()
 		g_vk.target = target
 	}
 	g_vk.viewport = {width, height}
@@ -1809,6 +1823,9 @@ vk_set0 :: proc() -> vk.DescriptorSet {
 gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 	if !g_vk.ready || index_count <= 0 { return }
 	cmd := vk_cmd()
+	// Before the pass: making the texture's set may first create the blank
+	// texture, whose upload must run outside a render pass.
+	set1 := vk_color_set()
 	if !g_vk.in_pass && !vk_pass_begin_color() { return }
 	key := Vk_Pipeline_Key{program = g_vk.program, state = g_vk.draw_state, depth_only = g_vk.pass_depth_only, cull_front = g_vk.pass_cull_front}
 	if key.depth_only { key.state.blend = false }
@@ -1824,7 +1841,6 @@ gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, g_vk.pipeline_layout, 0, 1, &set0, 2, &offsets[0])
 		g_vk.bound_set0, g_vk.bound_offsets = set0, offsets
 	}
-	set1 := vk_color_set()
 	if set1 != g_vk.bound_set1 && set1 != 0 {
 		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, g_vk.pipeline_layout, 1, 1, &set1, 0, nil)
 		g_vk.bound_set1 = set1
@@ -1917,7 +1933,7 @@ gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: b
 
 gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
 	if g_vk.recording { vk_depth_pass_finish() }
-	g_vk.target = restore
+	g_vk.target = vk_resolve_target(restore)
 	g_vk.viewport = {viewport[2], viewport[3]}
 }
 
@@ -2130,9 +2146,11 @@ gpu_present :: proc(window: glfw.WindowHandle = nil) {
 
 @(private = "file")
 vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: i32) -> (data: [^]u8, ok: bool) {
+	target := vk_resolve_target(target)
 	t := vk_table_get(&g_vk.targets, u32(target))
 	if t == nil || t.depth_only { return }
-	if g_vk.target == target && g_vk.recording { vk_pass_end(); vk_flush_pending_clear() }
+	// Draws and clears still pending for it land first.
+	if g_vk.target == target { vk_pass_end(); vk_flush_pending_clear() }
 	size := int(width) * int(height) * 4
 	if g_vk.readback.size < size {
 		vk_retire({buffer = g_vk.readback})
