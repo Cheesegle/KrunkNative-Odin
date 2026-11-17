@@ -280,6 +280,7 @@ crash_main_thread_address :: proc(path_buffer: ^[260]u8) -> (address: uintptr, m
 
 @(private = "file")
 crash_watchdog :: proc(t: ^thread.Thread) {
+	cpu_pin_current_thread_off_game_core()
 	last_frame := sync.atomic_load_explicit(&g_diag.frame, .Acquire)
 	last_change := time.tick_now()
 	stage := 0 // 0 running, 1 hang reported, 2 second dump written

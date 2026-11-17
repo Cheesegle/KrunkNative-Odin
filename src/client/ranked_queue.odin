@@ -220,6 +220,7 @@ ranked_job_push :: proc(job: ^Ranked_Job, message: []byte) {
 }
 
 ranked_job_run :: proc(data: rawptr) {
+	cpu_pin_current_thread_off_game_core()
 	job := cast(^Ranked_Job)data
 	defer intrinsics.atomic_store(&job.done, true)
 	handle := curl.easy_init()
@@ -319,6 +320,7 @@ Ranked_Check_Job :: struct {
 }
 
 ranked_check_run :: proc(data: rawptr) {
+	cpu_pin_current_thread_off_game_core()
 	job := cast(^Ranked_Check_Job)data
 	job.result = kproto.network_http_quiet(job.url, "GET", "", job.timeout_ms, &job.cancel, job.token)
 	intrinsics.atomic_store(&job.done, true)

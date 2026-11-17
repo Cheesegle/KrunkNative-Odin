@@ -113,6 +113,7 @@ guest_step_succeeded :: proc(result: ^kproto.Network_HTTP_Result) -> bool {
 }
 
 guest_job_run :: proc(data: rawptr) {
+	cpu_pin_current_thread_off_game_core()
 	job := cast(^Guest_Job)data
 	start := time.tick_now()
 	remaining :: proc(job: ^Guest_Job, start: time.Tick) -> int {

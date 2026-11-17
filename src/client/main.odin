@@ -443,6 +443,7 @@ Client_Options :: struct {
 	no_batching: bool,
 	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
 	no_gl_robustness: bool, // Create the context without GPU reset notification.
+	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
 }
 
 print_client_help :: proc() {
@@ -471,6 +472,9 @@ print_client_help :: proc() {
 	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
 	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
+	fmt.println("      --no-cpu-pinning  Let the OS place threads instead of giving the game")
+	fmt.println("                        thread its own core (never core 0) and keeping")
+	fmt.println("                        networking and helper threads off it")
 	fmt.println("      --no-gl-robustness")
 	fmt.println("                        Create the OpenGL context without GPU reset detection")
 	fmt.println()
@@ -536,6 +540,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.gl_debug = true
 		case "--no-gl-robustness":
 			options.no_gl_robustness = true
+		case "--no-cpu-pinning":
+			options.no_cpu_pinning = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -1676,6 +1682,13 @@ main :: proc() {
 	if !options_ok {
 		print_client_help()
 		return
+	}
+	// Before any thread starts, so every thread is placed from the beginning.
+	// The benchmark runs pinned too, measuring what the game does.
+	if options.no_cpu_pinning {
+		fmt.println("[CPU] pinning off (--no-cpu-pinning)")
+	} else {
+		fmt.printfln("[CPU] %s", cpu_pinning_apply())
 	}
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))
