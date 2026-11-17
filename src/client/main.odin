@@ -75,7 +75,7 @@ Client :: struct {
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
-	graphics_sampler: u32,
+	graphics_sampler: Gpu_Sampler,
 	graphics_sampler_ready: bool,
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
@@ -86,7 +86,7 @@ Client :: struct {
 	// The startup self-test (map_batch_self_test.odin) has compared batched and
 	// per-object rendering this session.
 	batch_self_test_done: bool,
-	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
+	render_target: Gpu_Render_Target, // Target of the world pass; 0 (the window) except in benchmark mode.
 	settings_dirty, vsync: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
@@ -1152,12 +1152,7 @@ client_load_current_map :: proc(client: ^Client) {
 	// every map mesh; keeping this state global lets the existing scene API stay
 	// lightweight while still matching per-map captures.
 	g_lighting_config = client.game.map_inst.lighting
-	gl.ClearColor(
-		g_lighting_config.sky_color.x,
-		g_lighting_config.sky_color.y,
-		g_lighting_config.sky_color.z,
-		1.0,
-	)
+	gpu_set_clear_color(g_lighting_config.sky_color.xyz)
 
 	shared.map_load_meshes(client.game.map_inst, prefab_init_cb)
 	client_load_map(client)
@@ -1630,7 +1625,7 @@ client_render_world :: proc(client: ^Client) {
 	phase_mark(.PREVIEW_GRAPHICS)
 	client_update_graphics(client)
 	phase_mark(.RENDER_SCENE)
-	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	gpu_clear(color = true, depth = true)
 	g_draw_stats = {}
 	client.scene.batching_enabled = client.render_batching
 	// After batching_enabled: the shadow pass draws the static map through the
@@ -1639,7 +1634,7 @@ client_render_world :: proc(client: ^Client) {
 	quality = menuui.quality_settings_validate(quality)
 	// Self shadow: your third-person rig, drawn only into the player shadow map.
 	g_shadow_extra_casters = self_shadow_update(client, quality)
-	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
+	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
 	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
@@ -1649,7 +1644,7 @@ client_render_world :: proc(client: ^Client) {
 	client.camera.fov = saved_fov
 
 	phase_mark(.RENDER_VIEWMODEL)
-	gl.Clear(gl.DEPTH_BUFFER_BIT)
+	gpu_clear(color = false, depth = true)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
 	// The viewmodel keeps the sun's shadows but not the player map, so your
 	// own body (Self shadow) never shades your arms.

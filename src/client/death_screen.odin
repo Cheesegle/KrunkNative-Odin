@@ -449,10 +449,10 @@ death_screen_frame_render :: proc(ui: ^UI, bars, mood, flash: f32) {
 	}
 }
 
-death_class_icon :: proc(client: ^Client, class_index: i32) -> u32 {
+death_class_icon :: proc(client: ^Client, class_index: i32) -> Gpu_Texture {
 	if class_index < 0 || int(class_index) >= len(client.game.classes) { return 0 }
 	icon_index := client.game.classes[class_index].icon_index
-	if class_icons == nil { class_icons = make(map[i32]u32) }
+	if class_icons == nil { class_icons = make(map[i32]Gpu_Texture) }
 	icon, cached := class_icons[icon_index]
 	if !cached {
 		path := shared.concat(shared.assets_path(), fmt.tprintf("textures/classes/icon_%d.png", icon_index))

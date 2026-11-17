@@ -127,7 +127,7 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 			if clip_count == 0 { gl.Disable(gl.SCISSOR_TEST) }
 			else { menu_scissor(ui, clips[clip_count - 1]) }
 		case .Image:
-			texture := u32(uintptr(command.renderData.image.imageData))
+			texture := Gpu_Texture(uintptr(command.renderData.image.imageData))
 			if texture != 0 { ui_draw_image(ui, texture, box.x, box.y, box.width, box.height) }
 		case .Custom:
 			if command.id == clay.ID("CrosshairPreview").id && command.renderData.custom.customData != nil {

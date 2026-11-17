@@ -31,7 +31,7 @@ when ODIN_TEST {
 	@(private = "file")
 	remember_test_fixture :: proc(client: ^Client, map_inst: ^shared.Map) {
 		krunker_presentation_fixture(client, map_inst)
-		if menu_portraits == nil { menu_portraits = make(map[i32]u32) }
+		if menu_portraits == nil { menu_portraits = make(map[i32]Gpu_Texture) }
 		for class in client.game.classes { menu_portraits[class.icon_index] = 0 }
 	}
 

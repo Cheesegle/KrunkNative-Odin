@@ -185,9 +185,10 @@ when ODIN_TEST {
 		if !ok { return }
 		vert := strings.concatenate({dir, "/basic.vert"}, context.temp_allocator)
 		frag := strings.concatenate({dir, "/basic.frag"}, context.temp_allocator)
-		testing.expect(t, shader_compile(vert, frag) == 0, "the broken shader does not compile")
+		defines := basic_shader_defines(false, false, context.temp_allocator)
+		testing.expect(t, shader_compile(vert, frag, defines) == 0, "the broken shader does not compile")
 		testing.expectf(t, len(g_build_status.shader_failures) == 1 && g_build_status.shader_failures[0] == "basic.frag", "the failure is recorded: %v", g_build_status.shader_failures[:])
-		testing.expect(t, shader_compile(vert, frag) == 0 && len(g_build_status.shader_failures) == 1 && g_build_status.shader_failure_count == 2, "a file is listed once")
+		testing.expect(t, shader_compile(vert, frag, defines) == 0 && len(g_build_status.shader_failures) == 1 && g_build_status.shader_failure_count == 2, "a file is listed once")
 
 		// The UI program falls back to the exe's own quad shader.
 		quad := shader_compile_ui(strings.concatenate({dir, "/"}, context.temp_allocator), "quad.vert", "quad.frag")

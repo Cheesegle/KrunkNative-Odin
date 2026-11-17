@@ -59,7 +59,7 @@ Kill_Feed :: struct {
 	count: int,
 }
 
-kill_feed_icon_headshot, kill_feed_icon_wallbang, kill_feed_icon_fists: u32
+kill_feed_icon_headshot, kill_feed_icon_wallbang, kill_feed_icon_fists: Gpu_Texture
 
 kill_feed_name :: proc(text: string, is_you: bool, team, local_team: i32) -> Kill_Feed_Name {
 	name: Kill_Feed_Name
@@ -201,7 +201,7 @@ kill_feed_sweep_icons :: proc() {
 	kill_feed_load_icon(&kill_feed_icon_headshot, KILL_FEED_ICON_HEADSHOT)
 }
 
-kill_feed_load_icon :: proc(icon: ^u32, relative: string) -> u32 {
+kill_feed_load_icon :: proc(icon: ^Gpu_Texture, relative: string) -> Gpu_Texture {
 	if icon^ == 0 {
 		path := shared.concat(shared.assets_path(), relative)
 		icon^ = load_texture(path)
@@ -224,7 +224,7 @@ kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, 
 		if draw { ui_fill_text(ui, color, value, x^, baseline, size) }
 		x^ += ui_measure_text(ui, value, size)
 	}
-	image :: proc(ui: ^UI, x: ^f32, texture: u32, before, w, h, after, top: f32, color: shared.Vec4, mirror, draw: bool) {
+	image :: proc(ui: ^UI, x: ^f32, texture: Gpu_Texture, before, w, h, after, top: f32, color: shared.Vec4, mirror, draw: bool) {
 		x^ += before
 		if draw && texture != 0 { ui_draw_image(ui, texture, x^, top, w, h, color, mirror) }
 		x^ += w + after
@@ -234,7 +234,7 @@ kill_feed_entry_layout :: proc(client: ^Client, entry: ^Kill_Feed_Entry, right, 
 		text(ui, &x, fmt.tprintf(" committed %s", KILL_FEED_SUICIDE_PHRASES[entry.phrase]), KILL_FEED_MUTED, baseline, text_size, draw)
 	} else {
 		text(ui, &x, kill_feed_name_text(&entry.killer), entry.killer.color, baseline, text_size, draw)
-		icon: u32
+		icon: Gpu_Texture
 		melee := false
 		if entry.fists {
 			icon = kill_feed_load_icon(&kill_feed_icon_fists, KILL_FEED_ICON_FISTS)

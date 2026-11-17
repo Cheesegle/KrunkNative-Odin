@@ -208,7 +208,7 @@ when ODIN_TEST {
 			w, h := i32(320), i32(180)
 			target := bench_target_init(w, h)
 			camera := map_batch_self_test_camera(map_inst)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+			gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target.target))
 			gl.Viewport(0, 0, w, h)
 			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
 			result.pixels = make([]u8, int(w * h * 3))

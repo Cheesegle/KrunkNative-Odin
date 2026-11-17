@@ -98,9 +98,9 @@ when ODIN_TEST {
 		client_update_graphics(&client)
 		scene_test_pixel(t, scene, &camera, 32,32, {32,32,32})
 		filter: i32
-		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, &filter)
+		gl.GetSamplerParameteriv(u32(client.graphics_sampler), gl.TEXTURE_MIN_FILTER, &filter)
 		mag_filter: i32
-		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, &mag_filter)
+		gl.GetSamplerParameteriv(u32(client.graphics_sampler), gl.TEXTURE_MAG_FILTER, &mag_filter)
 		testing.expect(t, filter == gl.NEAREST_MIPMAP_NEAREST && mag_filter == gl.NEAREST, "world textures must always use Sharp (nearest) filtering")
 		testing.expect(t, client.quality_settings.anisotropy != 16, "quality changes must preview without modifying saved settings")
 		scene_render(scene, &camera, 64,64, client.graphics_sampler)
@@ -110,7 +110,7 @@ when ODIN_TEST {
 		menuui.activate(&client.menu, {action={kind=.SETTINGS_CANCEL}})
 		client_update_graphics(&client)
 		scene_test_pixel(t, scene, &camera, 32,32, {128,128,128})
-		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, &filter)
+		gl.GetSamplerParameteriv(u32(client.graphics_sampler), gl.TEXTURE_MAG_FILTER, &filter)
 		testing.expect(t, filter == gl.NEAREST, "Cancel must restore sharp filtering")
 		client.visual_settings = menuui.DEFAULT_VISUAL_SETTINGS
 		client.visual_settings.values[.AMBIENT] = 0.5

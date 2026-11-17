@@ -2,12 +2,15 @@ package main
 
 import shared "../shared"
 
-// low 4 bytes = VBO, high 4 bytes = EBO
 Geometry :: struct {
-	vao:         u32,
-	vbo:         u32,
-	ebo:         u32,
-	index_count: i32,
+	input:         Gpu_Vertex_Input, // .Basic layout over the two buffers below
+	vertex_buffer: Gpu_Buffer,
+	index_buffer:  Gpu_Buffer,
+	index_count:   i32,
+	// CPU copies of the uploaded data (owned), read when building map batches
+	// so nothing is ever read back from the GPU.
+	vertices:      []Vertex,
+	indices:       []u32,
 	cache_key:   string,
 	ref_count:   u32,
 	last_used:   u64,
@@ -19,7 +22,7 @@ Geometry :: struct {
 }
 
 Texture_Cache_Entry :: struct {
-	id:         u32,
+	id:         Gpu_Texture,
 	width:      i32,
 	height:     i32,
 	cache_key:  string,
@@ -46,7 +49,7 @@ Material :: struct {
 	wireframe:   bool,
 	transparent: bool,
 	no_depth_write: bool,
-	program:     u32,
+	program:     Gpu_Program,
 }
 
 Quad_Material :: struct {
@@ -60,13 +63,13 @@ Quad_Material :: struct {
 	r_clip: f32,
 	stroke_width: f32,
 	texture_viewport: [4]f32,
-	texture: u32,
+	texture: Gpu_Texture,
 }
 
 Text_Material :: struct {
 	using base: Material,
 	color: shared.Vec4,
-	texture: u32,
+	texture: Gpu_Texture,
 }
 
 Basic_Material :: struct {
@@ -87,7 +90,7 @@ Basic_Material :: struct {
 	texture_offset: shared.Vec2,
 	base_texture_offset: shared.Vec2,
 	texture_rotation: f32,
-	texture: u32,
+	texture: Gpu_Texture,
 }
 
 Mesh_Transform :: struct {
@@ -192,11 +195,11 @@ UI :: struct {
 	width:         f32,
 	height:        f32,
 	scale:         f32,
-	vignette:      u32, // The damage overlay texture.
+	vignette:      Gpu_Texture, // The damage overlay texture.
 }
 
 Glyph_Cache_Entry :: struct {
-	texture:   u32,
+	texture:   Gpu_Texture,
 	size:      shared.Vec2,
 	h_bearing: shared.Vec2,
 	v_bearing: shared.Vec2,
@@ -227,7 +230,7 @@ Tracer_Marker :: struct {
 // Asset caches (keyed by path)
 g_geometry_cache: map[string]^Geometry
 g_texture_cache:  map[string]^Texture_Cache_Entry
-g_texture_by_id:  map[u32]^Texture_Cache_Entry
+g_texture_by_id:  map[Gpu_Texture]^Texture_Cache_Entry
 g_glyph_cache:    [256]^Glyph_Cache_Entry
 
 g_resource_clock: u64
@@ -240,6 +243,6 @@ g_plane_geometry: ^Geometry
 g_ramp_geometry:  ^Geometry
 g_sphere_geometry: ^Geometry
 
-g_blank_texture:  u32
-g_active_texture: u32
+g_blank_texture:  Gpu_Texture
+g_active_texture: Gpu_Texture
 g_active_shader:  u32

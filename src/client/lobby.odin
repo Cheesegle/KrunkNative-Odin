@@ -11,7 +11,7 @@ import menuui "../menu"
 import clay "../third_party/clay"
 import kproto "../krunker"
 
-menu_portraits: map[i32]u32
+menu_portraits: map[i32]Gpu_Texture
 
 menu_character :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
 	if g_client != nil && g_client.chat.open {
@@ -183,7 +183,7 @@ menu_weapon_icon :: proc(client: ^Client, id: i32) -> rawptr {
 
 menu_view :: proc(client: ^Client) -> menuui.View {
 	classes := make([]menuui.Class, len(client.game.classes), context.temp_allocator)
-	if menu_portraits == nil { menu_portraits = make(map[i32]u32) }
+	if menu_portraits == nil { menu_portraits = make(map[i32]Gpu_Texture) }
 	secondaries := make([dynamic]menuui.Secondary, context.temp_allocator)
 	secondary_id := client_secondary_choice(client)
 	secondary_name := "None"

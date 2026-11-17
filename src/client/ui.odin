@@ -53,30 +53,14 @@ load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 	bitmap := stbtt.GetCodepointBitmap(&g_font_info, scale, scale, rune(c), &width, &height, &xoff, &yoff)
 
 	if bitmap != nil && width > 0 && height > 0 {
-		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-		gl.GenTextures(1, &glyph.texture)
-		gl.BindTexture(gl.TEXTURE_2D, glyph.texture)
-
-		gl.TexImage2D(
-			gl.TEXTURE_2D, 0, gl.RED,
-			width, height,
-			0, gl.RED, gl.UNSIGNED_BYTE,
-			bitmap,
-		)
-
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 		// Glyphs are grayscale coverage textures. Linear filtering preserves
 		// their edge coverage when the 100 px raster is scaled to UI size;
 		// nearest filtering makes every menu and HUD character look jagged.
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-
-		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+		glyph.texture = gpu_texture_create(
+			{width = width, height = height, format = .R8, sampler = GPU_SAMPLER_UI_LINEAR},
+			bitmap[:int(width) * int(height)],
+		)
 		stbtt.FreeBitmap(bitmap, nil)
-		// Glyphs load during layout, between draws: the bind above must not
-		// leave the material binding cache naming the previous texture.
-		g_active_texture = 0
 	}
 
 	glyph.size.x = f32(width)
@@ -215,14 +199,14 @@ ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
 
 	ui.material.r_clip = 0.0
 
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 
 	material_update_uniforms(&ui.material.base)
 
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_fill_rect_(ui, u32(ui.material.base.program), x, y, width, height)
 }
 
 // A convex (or center-visible) polygon in screen pixels, drawn as a triangle
@@ -246,12 +230,12 @@ ui_fill_polygon :: proc(ui: ^UI, color: shared.Vec4, points: []shared.Vec2) {
 	ui.material.border_top_right_radius = 0.0
 	ui.material.r_clip = 0.0
 	ui.material.stroke_width = 0
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 	material_update_uniforms(&ui.material.base)
-	u := scene_uniforms(ui.material.base.program)
+	u := scene_uniforms(u32(ui.material.base.program))
 	if u.offset > -1 { gl.Uniform2f(u.offset, 0, 0) }
 	if u.scale > -1 { gl.Uniform2f(u.scale, 1, 1) }
 	gl.BindVertexArray(ui.poly_vao)
@@ -277,14 +261,14 @@ ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: 
 
 	ui.material.r_clip = 0.0
 
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 
 	material_update_uniforms(&ui.material.base)
 
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_fill_rect_(ui, u32(ui.material.base.program), x, y, width, height)
 }
 
 ui_fill_rect_rclip :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, r_clip: f32) {
@@ -303,14 +287,14 @@ ui_fill_rect_rclip :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, rad
 
 	ui.material.r_clip = r_clip
 
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 
 	material_update_uniforms(&ui.material.base)
 
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_fill_rect_(ui, u32(ui.material.base.program), x, y, width, height)
 }
 
 ui_stroke_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, thickness: f32) {
@@ -320,7 +304,7 @@ ui_stroke_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, r
 }
 
 // mirror flips the image horizontally (CSS transform: scaleX(-1)).
-ui_draw_image :: proc(ui: ^UI, texture_id: u32, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
+ui_draw_image :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
 	ui.material.color = color
 	ui.material.texture = texture_id
 
@@ -334,17 +318,17 @@ ui_draw_image :: proc(ui: ^UI, texture_id: u32, x, y, width, height: f32, color 
 
 	ui.material.r_clip = 0.0
 
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 
 	material_update_uniforms(&ui.material.base)
 
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_fill_rect_(ui, u32(ui.material.base.program), x, y, width, height)
 }
 
-ui_draw_image_rounded :: proc(ui: ^UI, texture_id: u32, x, y, width, height, radius: f32) {
+ui_draw_image_rounded :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height, radius: f32) {
 	ui.material.color = shared.Vec4{1.0, 1.0, 1.0, 1.0}
 	ui.material.texture = texture_id
 
@@ -360,14 +344,14 @@ ui_draw_image_rounded :: proc(ui: ^UI, texture_id: u32, x, y, width, height, rad
 
 	ui.material.r_clip = 0.0
 
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if g_active_shader != u32(ui.material.base.program) {
+		gl.UseProgram(u32(ui.material.base.program))
+		g_active_shader = u32(ui.material.base.program)
 	}
 
 	material_update_uniforms(&ui.material.base)
 
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_fill_rect_(ui, u32(ui.material.base.program), x, y, width, height)
 }
 
 ui_measure_text :: proc(ui: ^UI, text: string, size: f32) -> f32 {
@@ -411,9 +395,9 @@ ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32)
 	ui.text_material.color = color
 	gl.BindVertexArray(ui.vao)
 
-	if g_active_shader != ui.text_material.base.program {
-		gl.UseProgram(ui.text_material.base.program)
-		g_active_shader = ui.text_material.base.program
+	if g_active_shader != u32(ui.text_material.base.program) {
+		gl.UseProgram(u32(ui.text_material.base.program))
+		g_active_shader = u32(ui.text_material.base.program)
 	}
 
 	for c in text {
@@ -429,7 +413,7 @@ ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32)
 			material_update_uniforms(&ui.text_material.base)
 
 			glyph_y := y - glyph.h_bearing.y * size / 100.0
-			ui_fill_rect_(ui, ui.text_material.base.program, cursor_x + glyph.h_bearing.x * size / 100.0, glyph_y, glyph.size.x * size / 100.0, glyph.size.y * size / 100.0)
+			ui_fill_rect_(ui, u32(ui.text_material.base.program), cursor_x + glyph.h_bearing.x * size / 100.0, glyph_y, glyph.size.x * size / 100.0, glyph.size.y * size / 100.0)
 		}
 
 		cursor_x += glyph.advance * size / 100.0
@@ -448,9 +432,7 @@ ui_fini :: proc(ui: ^UI) {
 		if glyph == nil {
 			continue
 		}
-		if glyph.texture != 0 {
-			gl.DeleteTextures(1, &glyph.texture)
-		}
+		gpu_texture_destroy(&glyph.texture)
 		free(glyph)
 	}
 	g_glyph_cache = {}
@@ -464,7 +446,7 @@ ui_fini :: proc(ui: ^UI) {
 	}
 	if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
 	if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
-	if ui.vignette != 0 { gl.DeleteTextures(1, &ui.vignette) }
+	gpu_texture_destroy(&ui.vignette)
 	material_fini(&ui.material.base)
 	material_fini(&ui.text_material.base)
 	delete(g_font_data)

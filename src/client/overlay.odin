@@ -2,17 +2,16 @@ package main
 
 import "core:fmt"
 import "core:math"
-import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import menuui "../menu"
 import shared "../shared"
 
-ammo_icon: u32
-timer_icon: u32
-health_icon: u32
-class_icons: map[i32]u32
-weapon_icons: map[i32]u32
-scope_icon: u32
+ammo_icon: Gpu_Texture
+timer_icon: Gpu_Texture
+health_icon: Gpu_Texture
+class_icons: map[i32]Gpu_Texture
+weapon_icons: map[i32]Gpu_Texture
+scope_icon: Gpu_Texture
 
 // Use the same interpolated aim as the first-person rig and camera.
 overlay_scope_active :: proc(client: ^Client) -> bool {
@@ -115,21 +114,17 @@ overlay_match_render :: proc(client: ^Client) {
 	ui_fill_text(ui, white, rotation, (ui.width-ui_measure_text(ui, rotation, 24*s))*0.5, overlay_numeric_baseline(countdown_y, 32*s, 24*s), 24*s)
 }
 
-overlay_icon_filter :: proc(icon: u32) {
-	if icon == 0 { return }
-	gl.BindTexture(gl.TEXTURE_2D, icon)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	g_active_texture = 0
+overlay_icon_filter :: proc(icon: Gpu_Texture) {
+	gpu_texture_set_filter(icon, .Linear)
 }
 
 // HUD silhouettes (textures/weapons or textures/melee), shared by the loadout
 // list and the killfeed. Returns 0 when the icon is missing.
-overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.Weapon) {
+overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (Gpu_Texture, ^shared.Weapon) {
 	if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { return 0, nil }
 	weapon := client.game.weapons[weapon_id]
 	if weapon == nil { return 0, nil }
-	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
+	if weapon_icons == nil { weapon_icons = make(map[i32]Gpu_Texture) }
 	icon, cached := weapon_icons[weapon_id]
 	if !cached {
 		folder := "melee" if weapon.melee else "weapons"
@@ -144,7 +139,7 @@ overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.We
 
 overlay_loadout_render :: proc(client: ^Client, right, bottom: f32) {
 	if client.me == nil { return }
-	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
+	if weapon_icons == nil { weapon_icons = make(map[i32]Gpu_Texture) }
 	s := client.ui.scale
 	row_height := 58.0 * s
 	key_size := 26.0 * s
@@ -200,12 +195,7 @@ overlay_ammo_render :: proc(client: ^Client) {
 		path := shared.concat(shared.assets_path(), "textures/ammo_0.png")
 		ammo_icon = load_texture(path)
 		delete(path)
-		if ammo_icon != 0 {
-			gl.BindTexture(gl.TEXTURE_2D, ammo_icon)
-			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-			g_active_texture = 0
-		}
+		overlay_icon_filter(ammo_icon)
 	}
 
 	weapon := client.me.weapon
@@ -264,7 +254,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 		ui_round_rect(client.ui, background_color, class_icon_pos.x, class_icon_pos.y, 103.0 * client.ui.scale, 103.0 * client.ui.scale, 10.0 * client.ui.scale)
 
 		if class_icons == nil {
-			class_icons = make(map[i32]u32)
+			class_icons = make(map[i32]Gpu_Texture)
 		}
 
 		class_icon := class_icons[class.icon_index]

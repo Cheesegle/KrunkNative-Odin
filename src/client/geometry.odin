@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:math"
+import "core:slice"
 import "core:strings"
 import gl "vendor:OpenGL"
 import stbi "vendor:stb/image"
@@ -28,44 +29,15 @@ load_obj_model :: proc(path: string, transform_y: bool) -> ^Geometry {
 	}
 	defer delete(vertices)
 
-	geometry := new(Geometry)
-
-	vao, vbo, ebo: u32
-	gl.GenVertexArrays(1, &vao)
-	gl.GenBuffers(1, &vbo)
-	gl.GenBuffers(1, &ebo)
-
-	gl.BindVertexArray(vao)
-
-	gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices) * size_of(Vertex), &vertices[0], gl.STATIC_DRAW)
-
-	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
-
 	indices := make([]u32, len(vertices))
 	defer delete(indices)
 	for i in 0 ..< len(vertices) {
 		indices[i] = u32(i)
 	}
 
-	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices) * size_of(u32), &indices[0], gl.STATIC_DRAW)
-
-	stride := i32(size_of(Vertex))
-
-	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, stride, 0)
-	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, stride, uintptr(3 * size_of(f32)))
-
-	gl.EnableVertexAttribArray(0)
-	gl.EnableVertexAttribArray(1)
-
-	geometry.vao = vao
-	geometry.vbo = vbo
-	geometry.ebo = ebo
-	geometry.index_count = i32(len(indices))
+	geometry := create_geometry(vertices, indices)
 	geometry.cache_key = strings.clone(path)
-	geometry.ref_count = 1
 	geometry.last_used = resource_touch()
-	geometry_set_bounds(geometry, vertices[:])
 
 	g_geometry_cache[geometry.cache_key] = geometry
 	resource_trim_geometry_cache()
@@ -480,33 +452,18 @@ create_sphere_geo :: proc() -> ^Geometry {
 	return g_sphere_geometry
 }
 
+// Uploads the mesh and keeps a CPU copy of both arrays (geometry.vertices and
+// .indices) for map batching. Indices must be in range of `vertices`.
 create_geometry :: proc(vertices: []Vertex, indices: []u32) -> ^Geometry {
 	geometry := new(Geometry)
+	geometry.vertices = make([]Vertex, len(vertices))
+	geometry.indices = make([]u32, len(indices))
+	copy(geometry.vertices, vertices)
+	copy(geometry.indices, indices)
 
-	vao, vbo, ebo: u32
-	gl.GenVertexArrays(1, &vao)
-	gl.GenBuffers(1, &vbo)
-	gl.GenBuffers(1, &ebo)
-
-	gl.BindVertexArray(vao)
-
-	gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices) * size_of(Vertex), &vertices[0], gl.STATIC_DRAW)
-
-	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
-	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices) * size_of(u32), &indices[0], gl.STATIC_DRAW)
-
-	stride := i32(size_of(Vertex))
-
-	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, stride, 0)
-	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, stride, uintptr(3 * size_of(f32)))
-
-	gl.EnableVertexAttribArray(0)
-	gl.EnableVertexAttribArray(1)
-
-	geometry.vao = vao
-	geometry.vbo = vbo
-	geometry.ebo = ebo
+	geometry.vertex_buffer = gpu_buffer_create(.Vertex, slice.to_bytes(geometry.vertices))
+	geometry.index_buffer = gpu_buffer_create(.Index, slice.to_bytes(geometry.indices))
+	geometry.input = gpu_vertex_input_create(.Basic, geometry.vertex_buffer, geometry.index_buffer)
 	geometry.index_count = i32(len(indices))
 	geometry.ref_count = 1
 	geometry_set_bounds(geometry, vertices)
@@ -628,7 +585,7 @@ create_ladder_geo :: proc(height: f32) -> ^Geometry {
 PI: f32 = 3.14159265358979323846
 
 // texture loading with cache
-load_texture :: proc(path: string) -> u32 {
+load_texture :: proc(path: string) -> Gpu_Texture {
 	if cached, ok := g_texture_cache[path]; ok {
 		cached.ref_count += 1
 		cached.last_used = resource_touch()
@@ -649,18 +606,15 @@ load_texture :: proc(path: string) -> u32 {
 	}
 	defer stbi.image_free(data)
 
-	texture_id: u32
-
-	gl.GenTextures(1, &texture_id)
-	gl.BindTexture(gl.TEXTURE_2D, texture_id)
-
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
-	gl.GenerateMipmap(gl.TEXTURE_2D)
+	// Mips are built but not sampled through this texture's own filter (sharp,
+	// no mip selection); the world pass's graphics sampler does use them.
+	texture_id := gpu_texture_create({
+		width = w, height = h, format = .RGBA8, mipmaps = true,
+		sampler = {filter = .Nearest, wrap = .Repeat},
+	}, data[:int(w) * int(h) * 4])
+	if texture_id == 0 {
+		return 0
+	}
 
 	entry := new(Texture_Cache_Entry)
 	entry.id = texture_id
@@ -699,7 +653,7 @@ geometry_release :: proc(geometry: ^Geometry) {
 	}
 }
 
-texture_release :: proc(texture_id: u32) {
+texture_release :: proc(texture_id: Gpu_Texture) {
 	if texture_id == 0 {
 		return
 	}
@@ -721,15 +675,11 @@ geometry_destroy :: proc(geometry: ^Geometry) {
 		return
 	}
 
-	if geometry.vao != 0 {
-		gl.DeleteVertexArrays(1, &geometry.vao)
-	}
-	if geometry.vbo != 0 {
-		gl.DeleteBuffers(1, &geometry.vbo)
-	}
-	if geometry.ebo != 0 {
-		gl.DeleteBuffers(1, &geometry.ebo)
-	}
+	gpu_vertex_input_destroy(&geometry.input)
+	gpu_buffer_destroy(&geometry.vertex_buffer)
+	gpu_buffer_destroy(&geometry.index_buffer)
+	delete(geometry.vertices)
+	delete(geometry.indices)
 	free(geometry)
 }
 
@@ -748,7 +698,7 @@ resource_trim_texture_cache :: proc(force: bool = false) {
 
 		delete_key(&g_texture_cache, oldest.cache_key)
 		delete_key(&g_texture_by_id, oldest.id)
-		gl.DeleteTextures(1, &oldest.id)
+		gpu_texture_destroy(&oldest.id)
 		delete(oldest.cache_key)
 		free(oldest)
 	}
@@ -825,25 +775,14 @@ resource_cache_fini :: proc() {
 		geometry_destroy(g_sphere_geometry)
 		g_sphere_geometry = nil
 	}
-	if g_blank_texture != 0 {
-		gl.DeleteTextures(1, &g_blank_texture)
-		g_blank_texture = 0
-	}
-	if g_impact_texture != 0 {
-		gl.DeleteTextures(1, &g_impact_texture)
-		g_impact_texture = 0
-	}
+	gpu_texture_destroy(&g_blank_texture)
+	gpu_texture_destroy(&g_impact_texture)
 
-	if basic_shader_program != 0 {
-		gl.DeleteProgram(basic_shader_program)
-		basic_shader_program = 0
-	}
-	if basic_batched_shader_program != 0 {
-		gl.DeleteProgram(basic_batched_shader_program)
-		basic_batched_shader_program = 0
-	}
+	gpu_program_destroy(&basic_shader_program)
+	gpu_program_destroy(&basic_batched_shader_program)
 	g_map_batch_shader_layout_reason = ""
 	shadow_placeholders_fini()
+	gpu_uniforms_fini()
 	if quad_shader_program != 0 {
 		gl.DeleteProgram(quad_shader_program)
 		quad_shader_program = 0
