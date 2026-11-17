@@ -164,6 +164,10 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		// Krodin's own: scales the whole feed, 1x is Krunker's CSS size.
 		settings_slider(state, "Killfeed size", "HudKillFeedSize", kill_feed_size(values.hud), KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE, {kind = .KILL_FEED_SIZE}, step = 0.1)
 		settings_damage(state)
+		settings_section(state, "Scope")
+		// Krunker scopeBorders (Scope window, beside "Scope Border Color"; on by default).
+		settings_toggle_row(state, "Scope borders", "HudScopeBorders", !values.hud.hide_scope_borders, {kind = .HUD_TOGGLE, index = 8})
+		settings_note(state, "Scope borders fill the screen around the sniper scope with black. Off shows the scope image alone, as Krunker's Scope Borders switch does.")
 	}
 }
 
