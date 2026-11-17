@@ -20,6 +20,7 @@ Client_Settings :: struct {
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS; 0 (the default) is the monitor's refresh rate.
 	game_fps_limit: i32, // Krunker's Frame Cap: 0 (the default) is unlimited, else 10-1200.
 	net_rate: i32, // Krunker's netRate in Hz (shared.NET_RATES); older files without it get 144.
+	net_interp: i32, // Krodin's interpolation delay in ms (menuui.NET_INTERP_OPTIONS); 0 = Auto, also for older files.
 	perf_overlay: bool, // The debug performance window (F3).
 	bindings: menuui.Bindings,
 	hud: menuui.HUD_Settings,
@@ -64,7 +65,7 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui, audio.weapons},
 		spatial_audio = i32(audio.spatial), distance_falloff = i32(audio.falloff),
 		levelling = audio.levelling, levelling_strength = audio.levelling_strength,
-		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, game_fps_limit = d.game_fps_limit, net_rate = d.net_rate, bindings = d.bindings, hud = d.hud,
+		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, game_fps_limit = d.game_fps_limit, net_rate = d.net_rate, net_interp = d.net_interp, bindings = d.bindings, hud = d.hud,
 		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage,
 		remember_secondary = d.remember_secondary, spectator = d.spectator}
 }
@@ -84,6 +85,7 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.menu_fps_limit = menuui.menu_fps_limit_validate(result.menu_fps_limit)
 	result.game_fps_limit = menuui.game_fps_limit_validate(result.game_fps_limit)
 	result.net_rate = shared.net_rate_validate(result.net_rate)
+	result.net_interp = menuui.net_interp_validate(result.net_interp)
 	result.viewmodel = menuui.viewmodel_settings_validate(result.viewmodel)
 	result.crosshair = menuui.crosshair_settings_validate(result.crosshair)
 	result.hitmarker = menuui.hitmarker_settings_validate(result.hitmarker)
@@ -144,7 +146,7 @@ client_settings_migrate_spectator :: proc(data: []byte, settings: ^Client_Settin
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 	return {version = 1, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
-		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, net_rate = client.net_rate, bindings = client.bindings, hud = client.hud_settings,
+		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, net_rate = client.net_rate, net_interp = client.net_interp, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings, ranked = client.ranked_prefs,
 		remember_secondary = client.remember_secondary, secondary_picks = client.secondary_picks, spectator = client.spectator_settings}

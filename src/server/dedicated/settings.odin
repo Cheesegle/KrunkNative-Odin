@@ -30,6 +30,18 @@ MAX_TEAM_SIZE :: 4 // Krunker tmSize options: 1v1 .. 4v4
 DEFAULT_INTERMISSION :: 25.0
 MIN_INTERMISSION :: 5.0
 MAX_INTERMISSION :: 120.0
+// Snapshots per second. Krunker's sendFrequency comes from the game's `snf`
+// (default 10) or the mode's `sendR` (Race, Trade, Zombies: 5), next to the
+// 30 Hz tickFrequency (`tf`). Krodin defaults to one snapshot per tick (0 here
+// means "the tick rate"), like CS; lower rates send every Nth tick.
+DEFAULT_SNAPSHOT_RATE :: 0
+MIN_SNAPSHOT_RATE :: 10 // Krunker's default snf
+// Players further than this from the recipient are left out of its
+// snapshots (Krunker's mode `viewDis`: 500, 1000 or 2000 in the modes that set
+// it). Hardpoint and FFA set none, so 0 (off) is the default.
+DEFAULT_VIEW_DISTANCE :: 0.0
+MIN_VIEW_DISTANCE :: 100.0
+MAX_VIEW_DISTANCE :: 10000.0
 DEFAULT_STATS_INTERVAL :: 10.0
 MAX_STATS_INTERVAL :: 3600.0
 MAX_SERVER_NAME_LEN :: 32
@@ -50,6 +62,8 @@ Server_Settings :: struct {
 	port:           int,
 	bind:           string,
 	tick_rate:      int,
+	snapshot_rate:  int, // Hz; 0 until validated, then the tick rate's divisor-friendly value
+	view_distance:  f32, // 0: no culling
 	max_players:    int,
 	name:           string,
 	// Rotation slots: indices into shared.ROTATION_MAPS, which is the map table
@@ -73,6 +87,8 @@ server_settings_default :: proc() -> Server_Settings {
 		port           = DEFAULT_PORT,
 		bind           = strings.clone(DEFAULT_BIND),
 		tick_rate      = DEFAULT_TICK_RATE,
+		snapshot_rate  = DEFAULT_SNAPSHOT_RATE,
+		view_distance  = DEFAULT_VIEW_DISTANCE,
 		max_players    = DEFAULT_MAX_PLAYERS,
 		name           = strings.clone(DEFAULT_SERVER_NAME),
 		rotation       = .SHUFFLE,
@@ -205,6 +221,10 @@ settings_apply_table :: proc(s: ^Server_Settings, table: ^shared.Toml_Table, war
 			if text, is_str := value.(string); is_str { settings_set_string(&s.bind, text) } else { warnf(warnings, "server.toml: bind must be a string") }
 		case "tick_rate":
 			if n, is_int := value.(i64); is_int { s.tick_rate = int(n) } else { warnf(warnings, "server.toml: tick_rate must be an integer") }
+		case "snapshot_rate":
+			if n, is_int := value.(i64); is_int { s.snapshot_rate = int(n) } else { warnf(warnings, "server.toml: snapshot_rate must be an integer (Hz, 0 = tick rate)") }
+		case "view_distance":
+			if f, num := shared.toml_get_f32(table, key); num { s.view_distance = f } else { warnf(warnings, "server.toml: view_distance must be a number (0 = off)") }
 		case "max_players":
 			if n, is_int := value.(i64); is_int { s.max_players = int(n) } else { warnf(warnings, "server.toml: max_players must be an integer") }
 		case "team_size":
@@ -311,6 +331,12 @@ server_settings_apply_args :: proc(s: ^Server_Settings, args: []string, warnings
 		case "--tick-rate":
 			n, e := int_value(flag, value); if len(e) > 0 { return .ERROR, e }
 			s.tick_rate = n
+		case "--snapshot-rate":
+			n, e := int_value(flag, value); if len(e) > 0 { return .ERROR, e }
+			s.snapshot_rate = n
+		case "--view-distance":
+			f, e := f32_value(flag, value); if len(e) > 0 { return .ERROR, e }
+			s.view_distance = f
 		case "--max-players":
 			n, e := int_value(flag, value); if len(e) > 0 { return .ERROR, e }
 			s.max_players = n
@@ -366,6 +392,20 @@ clamp_int :: proc(value: ^int, lo, hi: int, what: string, warnings: ^[dynamic]st
 server_settings_validate :: proc(s: ^Server_Settings, warnings: ^[dynamic]string) {
 	clamp_int(&s.port, 0, 65535, "port", warnings) // 0: the OS picks a free port
 	clamp_int(&s.tick_rate, MIN_TICK_RATE, MAX_TICK_RATE, "tick_rate", warnings)
+	if s.snapshot_rate <= 0 {
+		s.snapshot_rate = s.tick_rate
+	} else {
+		clamp_int(&s.snapshot_rate, min(MIN_SNAPSHOT_RATE, s.tick_rate), s.tick_rate, "snapshot_rate", warnings)
+	}
+	if divisor := server_snapshot_divisor(s); s.tick_rate % divisor != 0 || s.tick_rate / divisor != s.snapshot_rate {
+		warnf(warnings, "snapshot_rate %d is not the tick rate %d divided by a whole number; sending every %d ticks (%.1f Hz)",
+			s.snapshot_rate, s.tick_rate, divisor, f32(s.tick_rate) / f32(divisor))
+	}
+	if !(s.view_distance == 0 || s.view_distance >= MIN_VIEW_DISTANCE && s.view_distance <= MAX_VIEW_DISTANCE) {
+		clamped := s.view_distance != s.view_distance || s.view_distance < 0 ? 0 : clamp(s.view_distance, MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
+		warnf(warnings, "view_distance %.0f is outside %.0f..%.0f (0 = off); using %.0f", s.view_distance, MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE, clamped)
+		s.view_distance = clamped
+	}
 	clamp_int(&s.max_players, MIN_MAX_PLAYERS, MAX_MAX_PLAYERS, "max_players", warnings)
 	clamp_int(&s.team_size, MIN_TEAM_SIZE, MAX_TEAM_SIZE, "team_size", warnings)
 
@@ -408,12 +448,18 @@ server_settings_validate :: proc(s: ^Server_Settings, warnings: ^[dynamic]string
 	if s.mode < 0 || int(s.mode) >= len(SERVER_MODE_NAMES) { s.mode = 0 }
 }
 
+// server_snapshot_divisor: a snapshot goes out every this many ticks.
+server_snapshot_divisor :: proc(s: ^Server_Settings) -> int {
+	rate := s.snapshot_rate > 0 ? s.snapshot_rate : s.tick_rate
+	return max(1, int(f32(max(1, s.tick_rate)) / f32(max(1, rate)) + 0.5))
+}
+
 // server_settings_summary is the startup log line. It reports whether an admin
 // password is set, never the password itself.
 server_settings_summary :: proc(s: ^Server_Settings, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
-	fmt.sbprintf(&b, "name=%q bind=%s port=%d tick_rate=%d max_players=%d team_size=%d mode=%s rotation=%v intermission=%.0fs admin_password=%s maps=[",
-		s.name, s.bind, s.port, s.tick_rate, s.max_players, s.team_size, SERVER_MODE_NAMES[s.mode], s.rotation, s.intermission,
+	fmt.sbprintf(&b, "name=%q bind=%s port=%d tick_rate=%d snapshot_rate=%.4g view_distance=%.0f max_players=%d team_size=%d mode=%s rotation=%v intermission=%.0fs admin_password=%s maps=[",
+		s.name, s.bind, s.port, s.tick_rate, f32(s.tick_rate) / f32(server_snapshot_divisor(s)), s.view_distance, s.max_players, s.team_size, SERVER_MODE_NAMES[s.mode], s.rotation, s.intermission,
 		len(s.admin_password) > 0 ? "set" : "unset")
 	for slot, i in s.maps {
 		if i > 0 { strings.write_string(&b, ",") }
@@ -434,6 +480,8 @@ Settings come from assets/config/server.toml; every flag overrides the file.
   --bind <ip>               listen address (default 0.0.0.0; 127.0.0.1 for local only)
   --name <text>             server name, up to 32 bytes (default "Krodin Server")
   --tick-rate <hz>          simulation tick rate, 30..128 (default 64)
+  --snapshot-rate <hz>      snapshots per second, 10..tick rate (default: one per tick)
+  --view-distance <units>   leave out players further away, 100..10000 (default 0 = off)
   --max-players <n>         connection limit, 1..16 (default 8)
   --team-size <n>           players per team for team select, 1..4 (default 4)
   --mode <name>             game mode: hardpoint (default)

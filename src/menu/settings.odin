@@ -113,6 +113,8 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Network")
 		settings_net_rate_row(state)
 		settings_note(state, "Net rate (Krunker's netRate) is how many input commands per second the game sends to a Krodin server. Higher rates track your aim and movement more finely and use a little more upload; Krunker's default is 144.")
+		settings_net_interp_row(state)
+		settings_note(state, "Krodin's own, like cl_interp. How far behind the server other players are drawn on a Krodin server. Auto (the default) is two snapshot intervals plus the measured network jitter. Lower shows players sooner but stutters when snapshots arrive late.")
 	case .AUDIO:
 		settings_section(state, "Volume")
 		// Display order; audio_volumes is indexed master, effects, footsteps, UI, weapons.
@@ -321,7 +323,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
-		draft.hitmarker, draft.remember_secondary, draft.net_rate = defaults.hitmarker, defaults.remember_secondary, defaults.net_rate
+		draft.hitmarker, draft.remember_secondary, draft.net_rate, draft.net_interp = defaults.hitmarker, defaults.remember_secondary, defaults.net_rate, defaults.net_interp
 		draft.spectator = defaults.spectator
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes

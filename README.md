@@ -116,6 +116,8 @@ weapons) stay in `game.toml`.
 | `--bind` / `bind` | `0.0.0.0` | `127.0.0.1` for local only |
 | `--name` / `name` | `Krodin Server` | up to 32 bytes |
 | `--tick-rate` / `tick_rate` | 64 | 30–128 Hz |
+| `--snapshot-rate` / `snapshot_rate` | 0 (every tick) | 10 Hz – tick rate (Krunker `snf`/`sendR`: 10 Hz) |
+| `--view-distance` / `view_distance` | 0 (off) | 100–10000 units (Krunker `viewDis`) |
 | `--max-players` / `max_players` | 8 | 1–16 (Krunker custom games: 10) |
 | `--team-size` / `team_size` | 4 | 1–4 |
 | `--mode` / `mode` | `hardpoint` | `hardpoint` |
@@ -128,7 +130,30 @@ weapons) stay in `game.toml`.
 | `--quit-after <s>`, `--seed <n>` | off | testing aids |
 
 Every `stats_interval` seconds the server logs its tick budget: average and maximum tick time,
-late ticks, ticks over budget and the player count.
+late ticks, ticks over budget and the player count, plus the snapshot rate, the average snapshot
+size, the snapshot bandwidth per client, and how many snapshots were full and how many players
+were culled.
+
+### Snapshots (protocol 12)
+
+- Each client gets one `SNAPSHOT` packet per snapshot, numbered by server tick and carrying the
+  server time. It holds the match state, the lobby (only when it changed), every player and the
+  bullet impacts and kills since the last one.
+- Snapshots are delta-encoded against the newest one the client acknowledged (`SNAPSHOT_ACK`).
+  The client keeps the last 64 as baselines. Without a usable baseline (the first snapshot, an
+  ack older than 63 ticks, or a client asking for a reset) the server sends a full snapshot.
+- Other players are quantised: position to 1/128 unit, pitch and yaw to milliradians (the grid
+  input commands already use), crouch and aim to 1/255, health to 1/16. Your own player is sent
+  unquantised, so reconciliation replays from exactly the server's state.
+- With `view_distance` set, players further away than that from a living player are left out of
+  its snapshots (Krunker skips them in `UPDATE_PLAYERS` when the mode sets `viewDis`). They stay
+  on the scoreboard and reappear at their new position when they come back into range.
+- Other players are drawn **Interpolation delay** behind the server (**Settings → Gameplay**,
+  like `cl_interp`): Auto (default) is two snapshot intervals plus the measured jitter, or a
+  fixed 10–200 ms. Positions and angles are blended with a cubic curve through the buffered
+  snapshots; if snapshots stop, the path is extrapolated for at most 50 ms and then held.
+- Every input command reports the server tick and fraction the player was looking at
+  (`view_tick`/`view_frac`, Krunker's `inputSTime`/`inputSTPrg`) for lag compensation.
 
 ### Input model
 
@@ -141,7 +166,7 @@ Movement follows Krunker's input stream rather than the server tick:
 - A press that starts and ends between two commands (a click, a jump, a swap, a Scroll press)
   still reaches the next command.
 - Every frame the client sends the new commands, plus the last two unacknowledged ones, in one
-  `PLAYER_INPUT` batch (protocol 11).
+  `PLAYER_INPUT` batch (protocol 11 and later).
 - The server queues each client's commands, drops copies it has already seen, and simulates
   each one in order as one movement step with its own duration, clamped to 1–33 ms like Krunker.
   This happens before the world update, so a shot is fired inside the command that pressed it,

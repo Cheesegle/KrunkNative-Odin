@@ -5,10 +5,13 @@ import "core:net"
 import "core:strings"
 import shared "../shared"
 
+// A whole SNAPSHOT (up to 64 KiB) must fit.
+NET_CLIENT_RECV_BUFFER :: shared.SNAPSHOT_MAX_PACKET
+
 Net_Client_State :: struct {
 	socket:    net.TCP_Socket,
 	connected: bool,
-	recv_buffer: [4096]byte,
+	recv_buffer: []byte, // NET_CLIENT_RECV_BUFFER bytes, allocated on connect
 	recv_len: int,
 	match_state_received: bool,
 	lobby_received: bool,
@@ -17,6 +20,28 @@ Net_Client_State :: struct {
 	ping: shared.Net_Ping_State,
 	// Input commands for this connection (native_prediction.odin).
 	commands: Native_Command_State,
+	// Snapshots (protocol 12): the decoded baselines, the newest tick and
+	// whether it still has to be acknowledged (or a full snapshot requested).
+	snapshots:   ^shared.Snapshot_Ring,
+	frame:       ^shared.Snapshot_Frame, // decode scratch
+	last_tick:   u32,
+	has_tick:    bool,
+	ack_pending: bool,
+	ack_reset:   bool,
+	applied_lobby: [shared.SNAPSHOT_LOBBY_MAX]u8,
+	applied_lobby_len: int,
+	snapshot_impacts: [dynamic]shared.Bullet_Impact,
+	snapshot_kills:   [dynamic]shared.Kill_Event,
+	snapshot_stats:   Net_Client_Snapshot_Stats,
+	// Remote player interpolation (native_interp.odin).
+	view:        Native_View_Clock,
+	remotes:     map[i32]Native_Remote_Track,
+	applying_snapshot: bool, // client_apply_player_state is applying a snapshot's entity
+	applying_time:     f64,  // that snapshot's server time
+}
+
+Net_Client_Snapshot_Stats :: struct {
+	received, full, bytes, no_baseline, malformed: u64,
 }
 
 net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
@@ -72,6 +97,7 @@ net_client_connect :: proc(host: string, port: int) -> (nc: Net_Client_State, ok
 	net.set_option(socket, .TCP_Nodelay, true)
 	nc.socket = socket
 	nc.connected = true
+	nc.recv_buffer = make([]byte, NET_CLIENT_RECV_BUFFER)
 	fmt.printf("[Net Client] Connected to Dedicated Server at %s:%d!\n", host, port)
 	return nc, true
 }
@@ -107,96 +133,65 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 		return
 	}
 
-	bytes_read, err := net.recv_tcp(nc.socket, nc.recv_buffer[nc.recv_len:])
+	// Drain what has arrived (a few reads at most per frame), so snapshots
+	// sent faster than the frame rate never back up in the socket.
+	for _ in 0 ..< 8 {
+		if !nc.connected || nc.recv_len >= len(nc.recv_buffer) { break }
+		bytes_read, err := net.recv_tcp(nc.socket, nc.recv_buffer[nc.recv_len:])
 
-	if bytes_read > 0 {
-		nc.recv_len += bytes_read
-		for nc.recv_len >= shared.PACKET_HEADER_SIZE {
-			header, h_ok := shared.packet_deserialize_header(nc.recv_buffer[:nc.recv_len])
-			if !h_ok {
-				nc.connected = false
-				return
-			}
-			packet_size := shared.PACKET_HEADER_SIZE + int(header.payload_len)
-			if packet_size > len(nc.recv_buffer) {
-				nc.connected = false
-				return
-			}
-			if nc.recv_len < packet_size {
-				break
-			}
-			packet := nc.recv_buffer[:packet_size]
-			#partial switch header.packet_type {
-			case .LOBBY_STATE:
-				if lobby, valid := shared.packet_deserialize_lobby(packet); valid {
-					for name in nc.lobby.team_names { delete(name) }
-					nc.lobby = lobby
-					for &name in nc.lobby.team_names { name = strings.clone(name) }
-					nc.lobby_received = true
-					client.lobby_team = lobby.team
-					if client.team_pending && lobby.team_result != 0 {
-						client.team_pending = false
-						client.requested_team = lobby.team
-						client_selection_status(client, lobby.team_result == 1 ? "Team confirmed by server." : "Team change rejected: team full or selection disabled.")
+		if bytes_read > 0 {
+			nc.recv_len += bytes_read
+			for nc.recv_len >= shared.PACKET_HEADER_SIZE {
+				header, h_ok := shared.packet_deserialize_header(nc.recv_buffer[:nc.recv_len])
+				if !h_ok {
+					nc.connected = false
+					return
+				}
+				packet_size := shared.PACKET_HEADER_SIZE + int(header.payload_len)
+				if packet_size > len(nc.recv_buffer) {
+					nc.connected = false
+					return
+				}
+				if nc.recv_len < packet_size {
+					break
+				}
+				packet := nc.recv_buffer[:packet_size]
+				#partial switch header.packet_type {
+				case .SNAPSHOT:
+					net_client_receive_snapshot(client, packet, now)
+				case .PING:
+					if seq, ping_ok := shared.packet_deserialize_ping(packet); ping_ok {
+						shared.net_ping_receive(&nc.ping, seq, now)
+					}
+				case .DISCONNECT:
+					// The server says why it is closing the connection (full, shutting
+					// down); the close itself follows and is handled below.
+					if reason, reason_ok := shared.packet_deserialize_disconnect(packet); reason_ok {
+						text := net_client_disconnect_text(reason)
+						fmt.printf("[Net Client] %s\n", text)
+						krunker_ws_set_status(client, text)
+					}
+				case .CHAT:
+					if sender, team, text, chat_ok := shared.packet_deserialize_chat(packet); chat_ok {
+						client_chat_receive_native(client, sender, team, text)
 					}
 				}
-			case .GAME_STATE:
-				if state, state_ok := shared.packet_deserialize_state(packet); state_ok {
-					client_apply_player_state(client, &state)
-				}
-			case .MATCH_STATE:
-				if state, state_ok := shared.packet_deserialize_match_state(packet); state_ok {
-					client_apply_match_state(client, &state)
-					nc.match_state_received = true
-				}
-			case .PING:
-				if seq, ping_ok := shared.packet_deserialize_ping(packet); ping_ok {
-					shared.net_ping_receive(&nc.ping, seq, now)
-				}
-			case .BULLET_IMPACT:
-				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
-					// The local player's own shots already drew their tracers and
-					// holes when they were predicted; the server's copy only
-					// confirms a hit.
-					own := client.me != nil && impact.shooter_uid == client.me.uid && client.me.active && native_client_predicts(client, client.me)
-					if !own {
-						if len(client.game.impacts) >= 256 {
-							ordered_remove(&client.game.impacts, 0)
-						}
-						append(&client.game.impacts, impact)
-					}
-					client_hit_marker_native_impact(client, impact)
-				}
-			case .DISCONNECT:
-				// The server says why it is closing the connection (full, shutting
-				// down); the close itself follows and is handled below.
-				if reason, reason_ok := shared.packet_deserialize_disconnect(packet); reason_ok {
-					text := net_client_disconnect_text(reason)
-					fmt.printf("[Net Client] %s\n", text)
-					krunker_ws_set_status(client, text)
-				}
-			case .CHAT:
-				if sender, team, text, chat_ok := shared.packet_deserialize_chat(packet); chat_ok {
-					client_chat_receive_native(client, sender, team, text)
-				}
-			case .KILL_FEED:
-				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
-					shared.game_push_kill_event(&client.game, event)
+				nc.recv_len -= packet_size
+				if nc.recv_len > 0 {
+					copy(nc.recv_buffer[:nc.recv_len], nc.recv_buffer[packet_size:packet_size + nc.recv_len])
 				}
 			}
-			nc.recv_len -= packet_size
-			if nc.recv_len > 0 {
-				copy(nc.recv_buffer[:nc.recv_len], nc.recv_buffer[packet_size:packet_size + nc.recv_len])
-			}
+		} else if err == nil {
+			// 0 bytes with no error is a graceful FIN from the server.
+			fmt.printf("[Net Client] Server closed the connection\n")
+			nc.connected = false
+		} else if err != .Would_Block && err != .Timeout {
+			fmt.printf("[Net Client] Connection error: %v\n", err)
+			nc.connected = false
 		}
-	} else if err == nil {
-		// 0 bytes with no error is a graceful FIN from the server.
-		fmt.printf("[Net Client] Server closed the connection\n")
-		nc.connected = false
-	} else if err != .Would_Block && err != .Timeout {
-		fmt.printf("[Net Client] Connection error: %v\n", err)
-		nc.connected = false
+		if bytes_read <= 0 { break }
 	}
+	net_client_send_ack(nc)
 }
 
 net_client_disconnect_text :: proc(reason: shared.Disconnect_Reason) -> string {
@@ -225,6 +220,16 @@ net_client_disconnect :: proc(nc: ^Net_Client_State) {
 	nc.lobby = {}
 	nc.lobby_received = false
 	nc.ping = {}
+	delete(nc.recv_buffer)
+	free(nc.snapshots)
+	free(nc.frame)
+	delete(nc.snapshot_impacts)
+	delete(nc.snapshot_kills)
+	delete(nc.remotes)
+	nc.recv_buffer, nc.recv_len, nc.snapshots, nc.frame = nil, 0, nil, nil
+	nc.snapshot_impacts, nc.snapshot_kills, nc.remotes = nil, nil, nil
+	nc.has_tick, nc.ack_pending, nc.ack_reset, nc.applied_lobby_len = false, false, false, 0
+	nc.view = {}
 	if nc.connected {
 		buf: [shared.PACKET_HEADER_SIZE]byte
 		if size := shared.packet_serialize_disconnect(buf[:]); size > 0 {
@@ -233,4 +238,119 @@ net_client_disconnect :: proc(nc: ^Net_Client_State) {
 		net.close(nc.socket)
 		nc.connected = false
 	}
+}
+
+// net_client_receive_snapshot decodes one SNAPSHOT against the stored
+// baselines, keeps it as a baseline, applies it (lobby, match, players,
+// events) and marks it for acknowledgement. A delta whose baseline is gone
+// asks the server for a full snapshot instead.
+net_client_receive_snapshot :: proc(client: ^Client, packet: []byte, now: f64) -> shared.Snapshot_Decode_Result {
+	nc := &client.net
+	if nc.snapshots == nil { nc.snapshots = new(shared.Snapshot_Ring) }
+	if nc.frame == nil { nc.frame = new(shared.Snapshot_Frame) }
+	clear(&nc.snapshot_impacts)
+	clear(&nc.snapshot_kills)
+	result := shared.snapshot_decode(packet, nc.snapshots, nc.frame, &nc.snapshot_impacts, &nc.snapshot_kills)
+	switch result {
+	case .NO_BASELINE:
+		nc.snapshot_stats.no_baseline += 1
+		nc.ack_pending, nc.ack_reset = true, true
+		return result
+	case .MALFORMED:
+		nc.snapshot_stats.malformed += 1
+		if nc.snapshot_stats.malformed == 1 || nc.snapshot_stats.malformed % 100 == 0 {
+			fmt.eprintf("[Net Client] %d malformed snapshots; asking for a full one\n", nc.snapshot_stats.malformed)
+		}
+		nc.ack_pending, nc.ack_reset = true, true
+		return result
+	case .OK:
+	}
+	frame := nc.frame
+	nc.snapshot_stats.received += 1
+	nc.snapshot_stats.bytes += u64(len(packet))
+	if len(packet) > shared.PACKET_HEADER_SIZE + 8 && packet[shared.PACKET_HEADER_SIZE + 8] == 0 { nc.snapshot_stats.full += 1 }
+	// TCP keeps order; a stale one (replayed or reordered on a future
+	// transport) is still a valid baseline but must not move the view back.
+	stale := nc.has_tick && !shared.snapshot_tick_after(frame.tick, nc.last_tick)
+	shared.snapshot_ring_store(nc.snapshots, frame)
+	if stale { return .OK }
+	nc.last_tick, nc.has_tick = frame.tick, true
+	nc.ack_pending, nc.ack_reset = true, false
+	net_client_apply_snapshot(client, frame, now)
+	return .OK
+}
+
+// The server time of a snapshot in seconds: tick / tick_rate (exact), or the
+// millisecond stamp when the rate is unknown.
+net_client_snapshot_time :: proc(frame: ^shared.Snapshot_Frame) -> f64 {
+	if frame.match.tick_rate > 0 { return f64(frame.tick) / f64(frame.match.tick_rate) }
+	return f64(frame.server_time_ms) / 1000
+}
+
+net_client_apply_snapshot :: proc(client: ^Client, frame: ^shared.Snapshot_Frame, now: f64) {
+	nc := &client.net
+	server_time := net_client_snapshot_time(frame)
+	native_view_clock_observe(&nc.view, now, server_time, f64(frame.match.tick_rate), f64(frame.match.send_rate))
+
+	lobby_bytes := frame.lobby[:frame.lobby_len]
+	if frame.lobby_len > 0 && (nc.applied_lobby_len != frame.lobby_len || string(nc.applied_lobby[:nc.applied_lobby_len]) != string(lobby_bytes)) {
+		if lobby, valid := shared.packet_deserialize_lobby(lobby_bytes); valid {
+			for name in nc.lobby.team_names { delete(name) }
+			nc.lobby = lobby
+			for &name in nc.lobby.team_names { name = strings.clone(name) }
+			nc.lobby_received = true
+			client.lobby_team = lobby.team
+			if client.team_pending && lobby.team_result != 0 {
+				client.team_pending = false
+				client.requested_team = lobby.team
+				client_selection_status(client, lobby.team_result == 1 ? "Team confirmed by server." : "Team change rejected: team full or selection disabled.")
+			}
+			copy(nc.applied_lobby[:], lobby_bytes)
+			nc.applied_lobby_len = frame.lobby_len
+		}
+	}
+
+	// The roster that drops departed players is the lobby's: every client the
+	// server still tracks.
+	match := shared.snapshot_match_to_state(&frame.match)
+	match.player_count = i32(min(nc.lobby.count, shared.MAX_PLAYERS_PER_MATCH))
+	for i in 0 ..< int(match.player_count) { match.player_ids[i] = nc.lobby.players[i].id }
+	client_apply_match_state(client, &match)
+	nc.match_state_received = true
+
+	nc.applying_snapshot, nc.applying_time = true, server_time
+	for &entity in frame.entities[:frame.count] {
+		state := shared.snapshot_entity_to_state(&entity, entity.id == frame.you_id)
+		client_apply_player_state(client, &state)
+	}
+	nc.applying_snapshot = false
+
+	for impact in nc.snapshot_impacts {
+		// The local player's own shots already drew their tracers and holes
+		// when they were predicted; the server's copy only confirms a hit.
+		own := client.me != nil && impact.shooter_uid == client.me.uid && client.me.active && native_client_predicts(client, client.me)
+		if !own {
+			if len(client.game.impacts) >= 256 {
+				ordered_remove(&client.game.impacts, 0)
+			}
+			append(&client.game.impacts, impact)
+		}
+		client_hit_marker_native_impact(client, impact)
+	}
+	for event in nc.snapshot_kills {
+		shared.game_push_kill_event(&client.game, event)
+	}
+}
+
+// One SNAPSHOT_ACK per poll at most, for the newest snapshot decoded (or a
+// request for a full snapshot after a lost baseline).
+net_client_send_ack :: proc(nc: ^Net_Client_State) {
+	if !nc.ack_pending || !nc.connected { return }
+	buf: [shared.SNAPSHOT_ACK_PACKET_SIZE]byte
+	size := shared.packet_serialize_snapshot_ack(buf[:], nc.last_tick, nc.ack_reset ? shared.SNAPSHOT_ACK_RESET : 0)
+	if size > 0 && !net_client_send(nc, buf[:size]) {
+		nc.connected = false
+		return
+	}
+	nc.ack_pending = false
 }

@@ -29,6 +29,10 @@ param(
     [ValidateRange(0, 1000)] [int] $MaxLatency = 60,
     [ValidateRange(0, 200)] [int] $Jitter = 2,
     [ValidateRange(30, 128)] [int] $TickRate = 64,
+    # Snapshots per second, 10..TickRate; 0 sends one every tick (the default).
+    [ValidateRange(0, 128)] [int] $SnapshotRate = 0,
+    # Leave players further than this out of each snapshot (Krunker viewDis); 0 = off.
+    [ValidateRange(0, 10000)] [int] $ViewDistance = 0,
     [ValidateRange(1, 65535)] [int] $Port = 21015,
     [string] $HostName = "127.0.0.1",
     [int] $Seed = 0,
@@ -95,7 +99,7 @@ try {
 
     if (-not $NoServer) {
         $serverLog = Join-Path $logDir "server.log"
-        $serverArgs = @("--bind", "0.0.0.0", "--port", $Port, "--tick-rate", $TickRate, "--max-players", ($Bots + 2), "--stats-interval", 10)
+        $serverArgs = @("--bind", "0.0.0.0", "--port", $Port, "--tick-rate", $TickRate, "--snapshot-rate", $SnapshotRate, "--view-distance", $ViewDistance, "--max-players", ($Bots + 2), "--stats-interval", 10)
         $server = Start-Process -FilePath $serverExe -ArgumentList $serverArgs -WorkingDirectory $root -NoNewWindow -PassThru `
             -RedirectStandardOutput $serverLog -RedirectStandardError (Join-Path $logDir "server.err.log")
         $started.Add($server)

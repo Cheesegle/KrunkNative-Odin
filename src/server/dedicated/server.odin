@@ -20,7 +20,13 @@ Server :: struct {
 	now:          f32,
 	fixed_delta:  f32,
 	tick:         u64,
-	broadcast_tick: u32,
+	// A snapshot goes out every snapshot_divisor ticks (server_snapshot_divisor).
+	snapshot_divisor: int,
+}
+
+// The snapshot rate in Hz the server is actually using.
+server_send_rate :: proc(server: ^Server) -> f32 {
+	return f32(server.settings.tick_rate) / f32(max(1, server.snapshot_divisor))
 }
 
 // server_init sets up the simulation (and, with open_net, the listener). The
@@ -29,6 +35,7 @@ server_init :: proc(server: ^Server, settings: Server_Settings, gameplay: ^share
 	server.settings = settings
 	s := &server.settings
 	server.fixed_delta = 1.0 / f32(s.tick_rate)
+	server.snapshot_divisor = server_snapshot_divisor(s)
 	tick_budget_init(&server.budget, s.tick_rate)
 	lifecycle_init(&server.lifecycle, s.maps[:], s.rotation, s.intermission, s.seed)
 
@@ -54,6 +61,7 @@ server_init :: proc(server: ^Server, settings: Server_Settings, gameplay: ^share
 			return false
 		}
 		server.net = ns
+		server.net.view_distance = s.view_distance
 		server.net_ok = true
 	}
 	return true
@@ -97,7 +105,7 @@ server_start_match :: proc(server: ^Server, slot: i32) -> bool {
 
 // server_step runs exactly one server tick: network input (every received
 // command simulated with its own duration), the world update, match lifecycle
-// and (every SNAPSHOT_RATE_DIVISOR ticks) the snapshot broadcast.
+// and (every snapshot_divisor ticks) the snapshot broadcast.
 server_step :: proc(server: ^Server) {
 	server.tick += 1
 	server.now += server.fixed_delta
@@ -119,10 +127,9 @@ server_step :: proc(server: ^Server) {
 		server.game.match.time_remaining = server.lifecycle.remaining
 	}
 
-	server.broadcast_tick += 1
-	if server.broadcast_tick % shared.SNAPSHOT_RATE_DIVISOR == 0 {
+	if server.tick % u64(max(1, server.snapshot_divisor)) == 0 {
 		if server.net_ok {
-			net_server_broadcast_match(&server.net, &server.game)
+			net_server_broadcast_snapshot(&server.net, &server.game, server.tick, server.settings.tick_rate, server_send_rate(server))
 		} else {
 			// Headless (tests): nobody consumes the reliable events.
 			clear(&server.game.impacts)
@@ -146,8 +153,17 @@ server_destroy :: proc(server: ^Server, reason := shared.Disconnect_Reason.SHUTD
 
 server_log_budget :: proc(server: ^Server) {
 	b := &server.budget
-	fmt.printf("[Tick] %d Hz | avg %.3f ms, max %.3f ms (budget %.2f ms) | late %d, over budget %d | players %d\n",
+	fmt.printf("[Tick] %d Hz | avg %.3f ms, max %.3f ms (budget %.2f ms) | late %d, over budget %d | players %d",
 		server.settings.tick_rate, tick_budget_average(b), b.max_ms, b.budget_ms, b.late, b.over, server_player_count(server))
+	if server.net_ok {
+		// Snapshot bandwidth: average size, and per client per second.
+		stats := net_server_take_snapshot_stats(&server.net)
+		seconds := max(b.window, 1e-6)
+		clients := f64(stats.snapshots) * f64(server.snapshot_divisor) / max(1, f64(b.ticks))
+		fmt.printf(" | snapshots %.4g Hz: %.0f B avg, %.2f KB/s per client, %d full, %d culled",
+			server_send_rate(server), f64(stats.bytes) / max(1, f64(stats.snapshots)), f64(stats.bytes) / 1024 / seconds / max(1, clients), stats.full, stats.culled)
+	}
+	fmt.println()
 	tick_budget_reset(b)
 }
 
