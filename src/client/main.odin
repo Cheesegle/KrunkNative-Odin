@@ -901,7 +901,11 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		player.interp_dir_start = player.direction
 		player.interp_dir_end = {state.x_dir, state.y_dir}
 		player.velocity = state.velocity
+		was_grounded := player.on_ground
 		client_apply_movement_state(player, state)
+		// Snapshots carry no landing; a remote player who comes down plays one
+		// like the live path's interpolated landing (krunker_presentation.odin).
+		if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 	} else {
 		// Fresh spawn or re-appearance: snap, then interpolate from here.
 		player.position = state.position

@@ -93,7 +93,10 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		client.me.direction = state.command_direction
 		shot_seq := client.me.shot_seq
 		shared.player_proc_input(client.me, &command, true, client.krunker_world.move_lock, true, true)
-		if client.me.shot_seq != shot_seq { kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time) }
+		if client.me.shot_seq != shot_seq {
+			kproto.krunker_input_stamp_shot(&client.krunker_world, &command, shot_time)
+			when KRODIN_DEV { krunker_shot_diagnostic_log(client, &command, shot_time) }
+		}
 		command.predicted_ramp_fix, command.predicted_has_ramp_fix = client.me.ramp_fix, client.me.has_ramp_fix
 		append(&state.input_commands, command)
 		// Keep client-only impulse metadata produced by prediction for replay.
@@ -132,6 +135,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 			player.position, player.direction = source.position, source.direction
 			player.crouch_val, player.aim_val = source.crouch_val, source.aim_val
 			player.on_ground = source.on_ground
+			player.step_val = source.step_val // forcePos takes stepVal directly too.
 			shared.player_update_height(player)
 		}
 		player.interpolate = false

@@ -69,7 +69,9 @@ map_object_blocks_shots :: proc(object: ^Object) -> bool {
 // Every box grows by 1 unit on each side (before hurtboxScale) while the target
 // is moving. The server rewinds the pose to the shooter's view (fetchState).
 
-KRUNKER_HURTBOX_MAX :: 14
+// Head, torso, 3 boxes per arm, then 2 standing + 6 crouched leg boxes (one
+// set is inactive: Krunker toggles them through userData.active).
+KRUNKER_HURTBOX_MAX :: 16
 
 Krunker_Hurtbox_Part :: enum u8 { HEAD, TORSO, ARM, LEG }
 
@@ -77,6 +79,14 @@ Krunker_Hurtbox_Part :: enum u8 { HEAD, TORSO, ARM, LEG }
 Krunker_Hurtbox :: struct {
 	part:      Krunker_Hurtbox_Part,
 	transform: Mat4,
+	// False only for the other leg set, emitted on request for drawing.
+	active:    bool,
+}
+
+// A box's world centre: its geometry is centred on the mesh origin, so this is
+// three.js getGeometryCenterWorldPosition (bounding-box centre x matrixWorld).
+krunker_hurtbox_center :: proc(box: Krunker_Hurtbox) -> Vec3 {
+	return (box.transform * Vec4{0, 0, 0, 1}).xyz
 }
 
 Krunker_Hurtbox_Pose :: struct {
@@ -89,6 +99,11 @@ Krunker_Hurtbox_Pose :: struct {
 	head_mlt:      f32, // Head-size multiplier (1 unless a mode grows heads).
 	hurtbox_scale: f32, // Server hurtboxScale setting (1 by default).
 	weapon:        ^Weapon, // Arm IK targets; nil leaves the arms out.
+	// cH lifts the arm holder by recoilAnimY * (weapon recoilYM || 0.3) * animMult.
+	recoil_anim_y: f32,
+	// Also emit the inactive leg set (crouched legs while standing and the
+	// reverse) with active = false, for drawing only.
+	inactive_legs: bool,
 }
 
 krunker_hurtbox_pose :: proc(player: ^Player, moving: bool) -> Krunker_Hurtbox_Pose {
@@ -100,6 +115,7 @@ krunker_hurtbox_pose :: proc(player: ^Player, moving: bool) -> Krunker_Hurtbox_P
 		step_val = player.step_val, step_chase = player.step_chase,
 		moving = moving, head_mlt = 1, hurtbox_scale = 1,
 		weapon = player.weapon,
+		recoil_anim_y = player.recoil_anim_y,
 	}
 }
 
@@ -114,12 +130,12 @@ node :: proc(position: Vec3, rotation: Mat4 = 1) -> Mat4 {
 }
 
 @(private="file")
-hurtbox_append :: proc(out: ^[KRUNKER_HURTBOX_MAX]Krunker_Hurtbox, count: ^int, part: Krunker_Hurtbox_Part, parent: Mat4, size: Vec3, scale: f32, moving: bool) {
+hurtbox_append :: proc(out: ^[KRUNKER_HURTBOX_MAX]Krunker_Hurtbox, count: ^int, part: Krunker_Hurtbox_Part, parent: Mat4, size: Vec3, scale: f32, moving: bool, active := true) {
 	if count^ >= KRUNKER_HURTBOX_MAX { return }
 	// three.js OBB.fromBox3 + halfSize + 1, then applyMatrix4(matrixWorld),
 	// which includes the mesh's own scale.
 	full := size + (moving ? Vec3{2, 2, 2} : Vec3{})
-	out[count^] = {part, parent * linalg.matrix4_scale_f32(full * scale)}
+	out[count^] = {part, parent * linalg.matrix4_scale_f32(full * scale), active}
 	count^ += 1
 }
 
@@ -152,7 +168,9 @@ krunker_player_hurtboxes :: proc(pose: Krunker_Hurtbox_Pose, out: ^[KRUNKER_HURT
 	hurtbox_append(out, &count, .TORSO, torso, {g.chest_width, torso_height, g.chest_scale}, hurt, pose.moving)
 
 	if weapon := pose.weapon; weapon != nil {
-		arm_hold := upper * node({0, g.player_height - g.camera_height - g.leg_height, 0}, linalg.matrix4_rotate_f32(pose.pitch * 0.5, {1, 0, 0}))
+		recoil_y_mlt := weapon.recoil_y_mlt != 0 ? weapon.recoil_y_mlt : 0.3
+		arm_lift := pose.recoil_anim_y * recoil_y_mlt * anim_mlt
+		arm_hold := upper * node({0, arm_lift + g.player_height - g.camera_height - g.leg_height, 0}, linalg.matrix4_rotate_f32(pose.pitch * 0.5, {1, 0, 0}))
 		n_mlt := 1 - cv * 0.8
 		h := -math.sin(pose.step_chase) * step
 		arms_position := Vec3{
@@ -170,14 +188,18 @@ krunker_player_hurtboxes :: proc(pose: Krunker_Hurtbox_Pose, out: ^[KRUNKER_HURT
 	}
 
 	legs := root
-	if cv == 0 {
+	// Both sets are posed every frame; only the one matching cV is tested.
+	if cv == 0 || pose.inactive_legs {
+		active := cv == 0
 		for i in 0 ..< 2 {
 			side: f32 = i == 0 ? 1 : -1
 			swing := d * (i == 1 ? 1 : -1) * 9
 			holder := legs * node({g.leg_scale * 0.5 * side, g.leg_height, 0}, linalg.matrix4_rotate_f32(swing, {1, 0, 0}))
-			hurtbox_append(out, &count, .LEG, holder * node({0, -g.leg_height * 0.5, 0}), {g.leg_scale, g.leg_height, g.leg_scale}, hurt, pose.moving)
+			hurtbox_append(out, &count, .LEG, holder * node({0, -g.leg_height * 0.5, 0}), {g.leg_scale, g.leg_height, g.leg_scale}, hurt, pose.moving, active)
 		}
-	} else {
+	}
+	if cv != 0 || pose.inactive_legs {
+		active := cv != 0
 		s := g.leg_scale
 		o := g.leg_height / 2
 		l := s / 2
@@ -189,9 +211,9 @@ krunker_player_hurtboxes :: proc(pose: Krunker_Hurtbox_Pose, out: ^[KRUNKER_HURT
 			side: f32 = is_left ? -1 : 1
 			swing := d * (i == 3 ? 1 : -1) * 9 - 0.6
 			holder := legs * node({g.leg_scale * 0.5 * side, g.leg_height - g.crouch_distance + 0.5, 0}, euler_xyz(swing, is_left ? math.PI / 8 : -math.PI / 6, 0))
-			hurtbox_append(out, &count, .LEG, holder * node({0, -o / 2 * math.cos(x1), -o / 2 * math.sin(x1)}, linalg.matrix4_rotate_f32(x1, {1, 0, 0})), {s, o, s}, hurt, pose.moving)
-			hurtbox_append(out, &count, .LEG, holder * node({0, -o * math.cos(x1), -o * math.sin(x1)}, linalg.matrix4_rotate_f32((x1 + x0) / 2, {1, 0, 0})), {s, p, f}, hurt, pose.moving)
-			hurtbox_append(out, &count, .LEG, holder * node({0, -o * math.cos(x1) - o / 2 * math.cos(x0), -o * math.sin(x1) - o / 2 * math.sin(x0)}, linalg.matrix4_rotate_f32(x0, {1, 0, 0})), {s, o, s}, hurt, pose.moving)
+			hurtbox_append(out, &count, .LEG, holder * node({0, -o / 2 * math.cos(x1), -o / 2 * math.sin(x1)}, linalg.matrix4_rotate_f32(x1, {1, 0, 0})), {s, o, s}, hurt, pose.moving, active)
+			hurtbox_append(out, &count, .LEG, holder * node({0, -o * math.cos(x1), -o * math.sin(x1)}, linalg.matrix4_rotate_f32((x1 + x0) / 2, {1, 0, 0})), {s, p, f}, hurt, pose.moving, active)
+			hurtbox_append(out, &count, .LEG, holder * node({0, -o * math.cos(x1) - o / 2 * math.cos(x0), -o * math.sin(x1) - o / 2 * math.sin(x0)}, linalg.matrix4_rotate_f32(x0, {1, 0, 0})), {s, o, s}, hurt, pose.moving, active)
 		}
 	}
 	return
