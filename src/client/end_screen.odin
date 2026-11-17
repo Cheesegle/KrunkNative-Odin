@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import glfw "vendor:glfw"
 import menuui "../menu"
 import shared "../shared"
@@ -152,6 +153,12 @@ client_end_screen :: proc(client: ^Client) -> End_Screen {
 	} else {
 		screen.board = scoreboard_from_game(&client.game)
 		screen.result, screen.winner_team = end_screen_native_result(&client.game.match, &screen.board)
+		// A Krodin dedicated server counts its intermission down in the ended
+		// match's time_remaining, as Krunker's "t" packet does with endTimer.
+		if client.net.connected && client.game.match.time_remaining > 0 {
+			seconds := int(math.ceil(client.game.match.time_remaining))
+			screen.timer = fmt.tprintf("Next Round in %d:%02d", seconds / 60, seconds % 60)
+		}
 		end_screen_finish(client, &screen, client.game.match.team_scores)
 	}
 	return screen

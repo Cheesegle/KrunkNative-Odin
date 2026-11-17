@@ -13,6 +13,8 @@ rem                               never packaged
 rem   build.bat browser           build browser helper and restore WebView2 loader
 rem   build.bat inspect           build standalone WebView2 inspector
 rem   build.bat server            build the server      -> bin\krodin_server.exe
+rem   build.bat bots              build the headless test bots -> bin\krodin_netbot.exe
+rem                               (tools\server-bot-test.ps1 runs a server + bots)
 rem   build.bat symbolicate       build the dump symbolication tool
 rem                                                     -> bin\krodin_symbolicate.exe
 rem   build.bat tests             build + run the sim tests
@@ -45,7 +47,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client dev spectator browser inspect server symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client dev spectator browser inspect server bots symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -115,6 +117,10 @@ exit /b %errorlevel%
 %ODIN% build src/server -out:%BIN_DIR%\krodin_server.exe -o:%PROFILE%
 exit /b %errorlevel%
 
+:bots
+%ODIN% build tools/netbot -out:%BIN_DIR%\krodin_netbot.exe -o:%PROFILE%
+exit /b %errorlevel%
+
 :symbolicate
 %ODIN% build tools/symbolicate -out:%BIN_DIR%\krodin_symbolicate.exe -o:%PROFILE%
 exit /b %errorlevel%
@@ -141,6 +147,8 @@ if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client -define:KRODIN_SPECTATOR=true
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/server
+if errorlevel 1 exit /b %errorlevel%
+%ODIN% check tools/netbot
 exit /b %errorlevel%
 
 :all
@@ -180,7 +188,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| dev ^| spectator ^| browser ^| inspect ^| server ^| symbolicate ^| tests] [level]
+echo Usage: build.bat [client ^| dev ^| spectator ^| browser ^| inspect ^| server ^| bots ^| symbolicate ^| tests] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).

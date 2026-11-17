@@ -15,6 +15,8 @@ Net_Client_State :: struct {
 	lobby: shared.Lobby_State,
 	send_queue: shared.Net_Send_Queue,
 	ping: shared.Net_Ping_State,
+	// Input commands for this connection (native_prediction.odin).
+	commands: Native_Command_State,
 }
 
 net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
@@ -72,20 +74,6 @@ net_client_connect :: proc(host: string, port: int) -> (nc: Net_Client_State, ok
 	nc.connected = true
 	fmt.printf("[Net Client] Connected to Dedicated Server at %s:%d!\n", host, port)
 	return nc, true
-}
-
-net_client_send_input :: proc(nc: ^Net_Client_State, input: ^shared.Input) {
-	if !nc.connected {
-		return
-	}
-
-	buf: [32]byte
-	n := shared.packet_serialize_input(buf[:], input)
-	if n > 0 {
-		if !net_client_send(nc, buf[:n]) {
-			nc.connected = false
-		}
-	}
 }
 
 net_client_send_spawn :: proc(nc: ^Net_Client_State, class_id: i32, secondary_id: i32 = 2) {
@@ -167,11 +155,29 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				}
 			case .BULLET_IMPACT:
 				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
-					if len(client.game.impacts) >= 256 {
-						ordered_remove(&client.game.impacts, 0)
+					// The local player's own shots already drew their tracers and
+					// holes when they were predicted; the server's copy only
+					// confirms a hit.
+					own := client.me != nil && impact.shooter_uid == client.me.uid && client.me.active && native_client_predicts(client, client.me)
+					if !own {
+						if len(client.game.impacts) >= 256 {
+							ordered_remove(&client.game.impacts, 0)
+						}
+						append(&client.game.impacts, impact)
 					}
-					append(&client.game.impacts, impact)
 					client_hit_marker_native_impact(client, impact)
+				}
+			case .DISCONNECT:
+				// The server says why it is closing the connection (full, shutting
+				// down); the close itself follows and is handled below.
+				if reason, reason_ok := shared.packet_deserialize_disconnect(packet); reason_ok {
+					text := net_client_disconnect_text(reason)
+					fmt.printf("[Net Client] %s\n", text)
+					krunker_ws_set_status(client, text)
+				}
+			case .CHAT:
+				if sender, team, text, chat_ok := shared.packet_deserialize_chat(packet); chat_ok {
+					client_chat_receive_native(client, sender, team, text)
 				}
 			case .KILL_FEED:
 				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
@@ -193,9 +199,24 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 	}
 }
 
+net_client_disconnect_text :: proc(reason: shared.Disconnect_Reason) -> string {
+	switch reason {
+	case .SERVER_FULL: return "Server is full."
+	case .SHUTDOWN:    return "Server shut down."
+	case .NONE:
+	}
+	return "Disconnected by the server."
+}
+
 net_client_send_team :: proc(nc: ^Net_Client_State, team: i32) -> bool {
 	buf: [11]byte
 	size := shared.packet_serialize_team_request(buf[:], team)
+	return size > 0 && net_client_send(nc, buf[:size])
+}
+
+net_client_send_chat :: proc(nc: ^Net_Client_State, text: string, team: bool) -> bool {
+	buf: [shared.NET_CHAT_REQUEST_MAX_SIZE]byte
+	size := shared.packet_serialize_chat_request(buf[:], text, team)
 	return size > 0 && net_client_send(nc, buf[:size])
 }
 

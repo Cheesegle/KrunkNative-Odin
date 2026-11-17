@@ -1,8 +1,9 @@
-package server_main
+package dedicated
 
 import "core:fmt"
 import "core:net"
-import shared "../shared"
+import "core:time"
+import shared "../../shared"
 
 Net_Client :: struct {
 	id:         u32,
@@ -11,18 +12,33 @@ Net_Client :: struct {
 	joined:     bool,
 	team_result: u8,
 	player:     ^shared.Player,
-	pending_input: shared.Input,
-	has_pending_input: bool,
+	// Received input commands, simulated in order each tick (input_commands.odin).
+	commands:   Command_Stream,
+	malformed_inputs: int,
 	initial_match_sent: bool,
 	recv_buffer: [4096]byte,
 	recv_len:    int,
 	send_queue:  shared.Net_Send_Queue,
+	chat:        Net_Chat_Limit, // chat.odin
 }
 
 Net_Server :: struct {
 	listener: net.TCP_Socket,
 	clients:  [dynamic]^Net_Client,
 	next_id:  u32,
+	// Connections beyond this are refused before a player is created.
+	max_players:   int,
+	// Team select allows this many players per team (server team_size).
+	team_capacity: int,
+	rejected:      int, // connections refused because the server was full
+	// Real time for the input time bank; ticks can stall or be skipped, so
+	// simulated server time is not used for it.
+	clock_start:   time.Tick,
+}
+
+// Real seconds since the listener opened.
+net_server_now :: proc(ns: ^Net_Server) -> f64 {
+	return time.duration_seconds(time.tick_since(ns.clock_start))
 }
 
 net_server_flush :: proc(client: ^Net_Client) -> bool {
@@ -62,22 +78,53 @@ net_server_send :: proc(client: ^Net_Client, data: []byte) -> bool {
 	return net_server_flush(client)
 }
 
-net_server_init :: proc(port: int) -> (ns: Net_Server, ok: bool) {
+// net_server_init listens on bind:port (port 0 picks a free port; see
+// net_server_port). max_players and team_capacity come from the settings.
+net_server_init :: proc(bind: string, port: int, max_players: int, team_capacity: int) -> (ns: Net_Server, ok: bool) {
+	address := net.parse_address(bind)
+	if address == nil {
+		fmt.eprintf("Invalid bind address %q\n", bind)
+		return ns, false
+	}
 	endpoint := net.Endpoint {
-		address = net.IP4_Any,
+		address = address,
 		port    = port,
 	}
 
 	listener, err := net.listen_tcp(endpoint)
 	if err != nil {
-		fmt.eprintf("Failed to listen on port %d: %v\n", port, err)
+		fmt.eprintf("Failed to listen on %s:%d: %v\n", bind, port, err)
 		return ns, false
 	}
+	net.set_blocking(listener, false)
 
 	ns.listener = listener
+	ns.clock_start = time.tick_now()
 	ns.next_id = 1
-	fmt.printf("Odin TCP Socket Server listening on 0.0.0.0:%d\n", port)
+	ns.max_players = max(1, max_players)
+	ns.team_capacity = max(1, team_capacity)
 	return ns, true
+}
+
+net_server_port :: proc(ns: ^Net_Server) -> int {
+	endpoint, err := net.bound_endpoint(ns.listener)
+	return err == nil ? endpoint.port : 0
+}
+
+// net_server_has_room: every accepted connection holds a slot (a player is
+// created on accept), so the limit counts connections, joined or not.
+net_server_has_room :: proc(ns: ^Net_Server) -> bool {
+	return len(ns.clients) < ns.max_players
+}
+
+// net_server_refuse tells a connection why it is being closed and closes it.
+// One best-effort send is enough: the packet is 8 bytes on a fresh socket.
+net_server_refuse :: proc(socket: net.TCP_Socket, reason: shared.Disconnect_Reason) {
+	buf: [shared.PACKET_HEADER_SIZE + 1]byte
+	if size := shared.packet_serialize_disconnect(buf[:], reason); size > 0 {
+		net.send_tcp(socket, buf[:size])
+	}
+	net.close(socket)
 }
 
 // net_server_drop_client tears down a client that has left: the player is
@@ -94,14 +141,18 @@ net_server_drop_client :: proc(ns: ^Net_Server, game: ^shared.Game, client: ^Net
 		client.player = nil
 	}
 	net.close(client.socket)
+	command_stream_destroy(&client.commands)
 	free(client)
 }
 
 net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	// Poll for new client connections (non-blocking accept check)
-	net.set_blocking(ns.listener, false)
 	client_socket, _, err := net.accept_tcp(ns.listener)
-	if err == nil {
+	if err == nil && !net_server_has_room(ns) {
+		ns.rejected += 1
+		fmt.printf("[Net Server] Refused a connection: server full (%d/%d)\n", len(ns.clients), ns.max_players)
+		net_server_refuse(client_socket, .SERVER_FULL)
+	} else if err == nil {
 		net.set_blocking(client_socket, false)
 		// Tiny per-player snapshots must not sit in the Nagle buffer while the
 		// peer's delayed ACK (40 ms on Windows) holds them back.
@@ -114,6 +165,7 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 		client.active = true
 		client.player = shared.player_init(game)
 		client.player.uid = i32(client.id)
+		command_stream_init(&client.commands, net_server_now(ns))
 
 		append(&ns.clients, client)
 		fmt.printf("[Net Server] Client #%d connected!\n", client.id)
@@ -170,7 +222,7 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 						if team, valid := shared.packet_deserialize_team_request(packet); valid {
 							count := 0
 							for other in ns.clients { if other != client && other.active && other.player != nil && other.player.team == team { count += 1 } }
-							allowed := game.config.select_team && (team == 0 || count < int((game.config.max_players+1)/2))
+							allowed := game.config.select_team && (team == 0 || count < ns.team_capacity)
 							client.team_result = allowed ? 1 : 2
 							if allowed {
 								client.player.team = team
@@ -178,22 +230,28 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 							}
 						}
 					case .PLAYER_INPUT:
-						if input, input_ok := shared.packet_deserialize_input(packet); input_ok && client.player != nil && client.player.active {
-							pending_swap := client.pending_input.swap
-							client.pending_input = input
-
-							if input.swap == 0 && pending_swap != 0 {
-								client.pending_input.swap = pending_swap
+						commands: [shared.INPUT_BATCH_MAX_COMMANDS]shared.Input
+						if count, input_ok := shared.packet_deserialize_input_batch(packet, commands[:]); input_ok {
+							if client.joined {
+								for command in commands[:count] {
+									command_stream_push(&client.commands, command)
+								}
 							}
-
-							client.player.input_seq = input.seq
-							client.has_pending_input = true
+						} else {
+							// A malformed batch is dropped whole; the stream itself stays
+							// framed, so the connection is kept.
+							client.malformed_inputs += 1
+							if client.malformed_inputs == 1 || client.malformed_inputs % 100 == 0 {
+								fmt.printf("[Net Server] Client #%d sent %d malformed input batches\n", client.id, client.malformed_inputs)
+							}
 						}
 					case .PING:
 						// Echo the probe unchanged so the client can time the round trip.
 						if _, ping_ok := shared.packet_deserialize_ping(packet); ping_ok && !net_server_send(client, packet) {
 							client.active = false
 						}
+					case .CHAT:
+						net_server_chat(ns, client, packet)
 					case .DISCONNECT:
 						client.active = false
 						fmt.printf("[Net Server] Client #%d requested disconnect\n", client.id)
@@ -226,21 +284,27 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	}
 }
 
-net_server_queue_inputs :: proc(ns: ^Net_Server, tick_delta: f32) {
+// net_server_broadcast_chat sends one chat line to every connected client, or
+// with team > 0 only to that team's players (team-only chat).
+net_server_broadcast_chat :: proc(ns: ^Net_Server, sender: i32, team: i32, text: string) {
+	buf: [shared.NET_CHAT_MAX_SIZE]byte
+	size := shared.packet_serialize_chat(buf[:], sender, team > 0, text)
+	if size == 0 { return }
+	for other in ns.clients {
+		if !other.active || team > 0 && (other.player == nil || other.player.team != team) { continue }
+		if !net_server_send(other, buf[:size]) { other.active = false }
+	}
+}
+
+// net_server_run_commands simulates every command each client sent since the
+// last tick, in order, each with its own duration. It runs in the network
+// phase, before the world update.
+net_server_run_commands :: proc(ns: ^Net_Server, game: ^shared.Game) {
+	now := net_server_now(ns)
 	for client in ns.clients {
-		if !client.active || !client.has_pending_input || client.player == nil {
-			continue
-		}
-		if !client.player.active {
-			client.has_pending_input = false
-			continue
-		}
-		client.pending_input.delta = tick_delta
-		client.player.input_seq = client.pending_input.seq
-		shared.player_queue_input(client.player, &client.pending_input)
-		// Movement/look/fire/scope are held control state and must be sampled on
-		// every server tick. Consume only one-shot weapon switching.
-		client.pending_input.swap = 0
+		if !client.active { continue }
+		command_stream_run(&client.commands, client.joined ? client.player : nil, game, now)
+		command_stream_log(&client.commands, client.id, now)
 	}
 }
 
@@ -268,7 +332,7 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 			continue
 		}
 		client.initial_match_sent = true
-		lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = (game.config.max_players+1)/2, select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
+		lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = i32(ns.team_capacity), select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
 		for other in ns.clients {
 			if !other.active || other.player == nil || lobby.count >= shared.MAX_PLAYERS_PER_MATCH { continue }
 			lobby.players[lobby.count] = {id = other.id, team = other.player.team, class_id = other.joined ? other.player.class_index : -1}
@@ -283,49 +347,7 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 		}
 
 		for player in game.players {
-			weapon_id: u8
-			active_ammo: u32
-			if player.loadout_index >= 0 && player.loadout_index < player.loadout_size {
-				weapon_id = u8(player.loadout[player.loadout_index])
-				active_ammo = player.ammo[player.loadout_index]
-			}
-			player_state := shared.Packet_Player_State{
-				player_id = u32(player.uid),
-				active = player.active,
-				is_you = player == client.player,
-				team = player.team,
-				class_id = player.class_index,
-				secondary_id = player.secondary_id,
-				position = player.position,
-				velocity = player.velocity,
-				x_dir = player.direction.x,
-				y_dir = player.direction.y,
-				on_ground = player.on_ground,
-				on_ladder = player.on_ladder,
-				on_ramp = player.on_ramp,
-				on_terrain = player.on_terrain,
-				terrain_slipping = player.terrain_slipping,
-				did_jump = player.did_jump,
-				did_wall_jump = player.did_wall_jump,
-				can_slide = player.can_slide,
-				on_wall = player.on_wall,
-				wall_jump_count = u8(clamp(player.wall_jump_count, 0, 255)),
-				crouch_val = player.crouch_val,
-				aim_val = player.aim_val,
-				slide_timer = player.slide_timer,
-				jump_timer = player.jump_timer,
-				health = player.health,
-				max_health = player.max_health,
-				weapon_id = weapon_id,
-				active_ammo = active_ammo,
-				shot_seq = player.shot_seq,
-				ack_seq = player.input_seq,
-				spread_plus = player.spread_plus,
-				projectile_shot_seq = player.projectile_shot_seq,
-				score = player.score,
-				kills = player.kills,
-				deaths = player.deaths,
-			}
+			player_state := net_server_player_state(player, player == client.player)
 			state_size := shared.packet_serialize_state(player_buf[:], &player_state)
 			if state_size > 0 {
 				if !net_server_send(client, player_buf[:state_size]) {
@@ -361,14 +383,72 @@ net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	clear(&game.kill_events)
 }
 
-net_server_close :: proc(ns: ^Net_Server) {
+// The GAME_STATE snapshot of one player; is_you marks the recipient's own.
+net_server_player_state :: proc(player: ^shared.Player, is_you: bool) -> shared.Packet_Player_State {
+	weapon_id: u8
+	active_ammo: u32
+	if player.loadout_index >= 0 && player.loadout_index < player.loadout_size {
+		weapon_id = u8(player.loadout[player.loadout_index])
+		active_ammo = player.ammo[player.loadout_index]
+	}
+	return {
+		player_id = u32(player.uid),
+		active = player.active,
+		is_you = is_you,
+		team = player.team,
+		class_id = player.class_index,
+		secondary_id = player.secondary_id,
+		position = player.position,
+		velocity = player.velocity,
+		x_dir = player.direction.x,
+		y_dir = player.direction.y,
+		on_ground = player.on_ground,
+		on_ladder = player.on_ladder,
+		on_ramp = player.on_ramp,
+		on_terrain = player.on_terrain,
+		terrain_slipping = player.terrain_slipping,
+		did_jump = player.did_jump,
+		did_wall_jump = player.did_wall_jump,
+		can_slide = player.can_slide,
+		on_wall = player.on_wall,
+		wall_jump_count = u8(clamp(player.wall_jump_count, 0, 255)),
+		can_slide_timer = player.can_slide_timer,
+		cylinder_velocity = {player.x_vel_cylinder, player.z_vel_cylinder},
+		crouch_val = player.crouch_val,
+		aim_val = player.aim_val,
+		slide_timer = player.slide_timer,
+		jump_timer = player.jump_timer,
+		health = player.health,
+		max_health = player.max_health,
+		weapon_id = weapon_id,
+		active_ammo = active_ammo,
+		shot_seq = player.shot_seq,
+		ack_seq = player.input_seq,
+		spread_plus = player.spread_plus,
+		projectile_shot_seq = player.projectile_shot_seq,
+		score = player.score,
+		kills = player.kills,
+		deaths = player.deaths,
+	}
+}
+
+// net_server_close tells every client why (when a reason is given), closes
+// all sockets and frees the client records.
+net_server_close :: proc(ns: ^Net_Server, reason := shared.Disconnect_Reason.NONE) {
 	for client in ns.clients {
 		if client.active {
+			if reason != .NONE {
+				buf: [shared.PACKET_HEADER_SIZE + 1]byte
+				if size := shared.packet_serialize_disconnect(buf[:], reason); size > 0 {
+					net_server_send(client, buf[:size])
+				}
+			}
 			net.close(client.socket)
 		}
 		if !client.joined && client.player != nil {
 			shared.player_destroy(client.player)
 		}
+		command_stream_destroy(&client.commands)
 		free(client)
 	}
 	delete(ns.clients)

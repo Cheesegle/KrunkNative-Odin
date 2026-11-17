@@ -4,8 +4,8 @@ import "core:encoding/endian"
 
 PACKET_MAGIC :: 0x4B52554E // 'KRUN'
 PACKET_HEADER_SIZE :: 7
-PROTOCOL_VERSION :: 10 // 10: wall-jump count appended to player state
-PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 110
+PROTOCOL_VERSION :: 11 // 11: PLAYER_INPUT carries a batch of fixed-duration commands (net_input.odin)
+PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 122 // 11: + can_slide_timer and the cylinder push velocity
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
 // victim, killer, weapon (i32 each) + flags. Older clients skip the unknown
 // packet type by its payload length, so this needs no PROTOCOL_VERSION bump.
@@ -68,7 +68,7 @@ net_send_queue_consume :: proc(queue: ^Net_Send_Queue, count: int) {
 Packet_Type :: enum u8 {
 	CONNECT      = 1,
 	DISCONNECT   = 2,
-	PLAYER_INPUT = 3,
+	PLAYER_INPUT = 3, // a batch of input commands, see net_input.odin
 	GAME_STATE   = 4,
 	PING         = 5,
 	CHAT         = 6,
@@ -83,18 +83,6 @@ Packet_Header :: struct {
 	magic:       u32,
 	packet_type: Packet_Type,
 	payload_len: u16,
-}
-
-// Matches the C Input struct field layout for player inputs.
-Packet_Player_Input :: struct {
-	seq:      i32,
-	move_dir: i32,
-
-	delta:    f32,
-	x_dir:    f32,
-	y_dir:    f32,
-
-	flags:    u8,
 }
 
 packet_serialize_connect :: proc(buf: []byte, class_id: i32, secondary_id: i32 = 2) -> int {
@@ -149,6 +137,11 @@ Packet_Player_State :: struct {
 	can_slide: bool,
 	on_wall: u8,
 	wall_jump_count: u8, // wall jumps since landing, so prediction honours the class limit
+	// Read by the next movement step but not derivable from the rest, so a
+	// replay from this snapshot must start from them (Krunker's l sync sends
+	// the same values).
+	can_slide_timer: f32,
+	cylinder_velocity: Vec2, // x_vel_cylinder, z_vel_cylinder
 	crouch_val: f32,
 	aim_val: f32,
 	slide_timer: f32,
@@ -165,14 +158,42 @@ Packet_Player_State :: struct {
 	score, kills, deaths: u32,
 }
 
-packet_serialize_disconnect :: proc(buf: []byte) -> int {
-	if len(buf) < PACKET_HEADER_SIZE {
+// Why the server closed a connection. Sent as an optional 1-byte DISCONNECT
+// payload; a client's own DISCONNECT stays empty. Older clients skip the
+// packet by its length, so this needs no PROTOCOL_VERSION bump.
+Disconnect_Reason :: enum u8 {
+	NONE        = 0,
+	SERVER_FULL = 1,
+	SHUTDOWN    = 2,
+}
+
+packet_serialize_disconnect :: proc(buf: []byte, reason := Disconnect_Reason.NONE) -> int {
+	payload := reason == .NONE ? 0 : 1
+	if len(buf) < PACKET_HEADER_SIZE + payload {
 		return 0
 	}
 	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
 	buf[4] = u8(Packet_Type.DISCONNECT)
-	endian.put_u16(buf[5:7], .Little, 0)
-	return PACKET_HEADER_SIZE
+	endian.put_u16(buf[5:7], .Little, u16(payload))
+	if payload > 0 {
+		buf[PACKET_HEADER_SIZE] = u8(reason)
+	}
+	return PACKET_HEADER_SIZE + payload
+}
+
+packet_deserialize_disconnect :: proc(buf: []byte) -> (reason: Disconnect_Reason, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .DISCONNECT || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) {
+		return .NONE, false
+	}
+	if header.payload_len == 0 {
+		return .NONE, true
+	}
+	value := buf[PACKET_HEADER_SIZE]
+	if value > u8(max(Disconnect_Reason)) {
+		return .NONE, true
+	}
+	return Disconnect_Reason(value), true
 }
 
 Packet_Match_State :: struct {
@@ -191,102 +212,6 @@ Packet_Match_State :: struct {
 	send_rate:           f32,
 	player_count:        i32,
 	player_ids:          [MAX_PLAYERS_PER_MATCH]u32,
-}
-
-packet_serialize_input :: proc(buf: []byte, input: ^Input) -> int {
-	header_size := PACKET_HEADER_SIZE
-	payload_size := 5 * 4 + 1 // seq + move_dir + delta + x_dir + y_dir + flags
-
-	if len(buf) < header_size + payload_size {
-		return 0
-	}
-
-	header := Packet_Header {
-		magic       = PACKET_MAGIC,
-		packet_type = .PLAYER_INPUT,
-		payload_len = u16(payload_size),
-	}
-
-	endian.put_u32(buf[0:4], .Little, header.magic)
-	buf[4] = u8(header.packet_type)
-	endian.put_u16(buf[5:7], .Little, header.payload_len)
-
-	offset := header_size
-
-	endian.put_i32(buf[offset:offset + 4], .Little, input.seq)
-	offset += 4
-
-	endian.put_i32(buf[offset:offset + 4], .Little, input.move_dir)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.delta)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.x_dir)
-	offset += 4
-
-	endian.put_f32(buf[offset:offset + 4], .Little, input.y_dir)
-	offset += 4
-
-	flags: u8 = 0
-	if input.shoot {
-		flags |= 1
-	}
-	if input.scope {
-		flags |= 2
-	}
-	if input.jump {
-		flags |= 4
-	}
-	if input.crouch {
-		flags |= 8
-	}
-	if input.reload {
-		flags |= 16
-	}
-	flags |= u8((input.swap & 0x3) << 5)
-
-	buf[offset] = flags
-	offset += 1
-
-	return offset
-}
-
-packet_deserialize_input :: proc(buf: []byte) -> (input: Input, ok: bool) {
-	header_size := PACKET_HEADER_SIZE
-	payload_size := 5 * 4 + 1
-
-	if len(buf) < header_size + payload_size {
-		return {}, false
-	}
-
-	offset := header_size
-
-	input.seq, _ = endian.get_i32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.move_dir, _ = endian.get_i32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.delta, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.x_dir, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	input.y_dir, _ = endian.get_f32(buf[offset:offset + 4], .Little)
-	offset += 4
-
-	flags := buf[offset]
-
-	input.shoot = (flags & 1) != 0
-	input.scope = (flags & 2) != 0
-	input.jump = (flags & 4) != 0
-	input.crouch = (flags & 8) != 0
-	input.reload = (flags & 16) != 0
-	input.swap = u8((flags >> 5) & 0x3)
-
-	return input, true
 }
 
 packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int {
@@ -384,6 +309,10 @@ packet_serialize_state :: proc(buf: []byte, state: ^Packet_Player_State) -> int 
 	offset += 12
 	buf[offset] = state.wall_jump_count
 	offset += 1
+	endian.put_f32(buf[offset:offset + 4], .Little, state.can_slide_timer)
+	endian.put_f32(buf[offset + 4:offset + 8], .Little, state.cylinder_velocity.x)
+	endian.put_f32(buf[offset + 8:offset + 12], .Little, state.cylinder_velocity.y)
+	offset += 12
 
 	return offset
 }
@@ -471,6 +400,10 @@ packet_deserialize_state :: proc(buf: []byte) -> (state: Packet_Player_State, ok
 	state.kills, _ = endian.get_u32(buf[offset + 4:offset + 8], .Little)
 	state.deaths, _ = endian.get_u32(buf[offset + 8:offset + 12], .Little)
 	state.wall_jump_count = buf[offset + 12]
+	offset += 13
+	state.can_slide_timer, _ = endian.get_f32(buf[offset:offset + 4], .Little)
+	state.cylinder_velocity.x, _ = endian.get_f32(buf[offset + 4:offset + 8], .Little)
+	state.cylinder_velocity.y, _ = endian.get_f32(buf[offset + 8:offset + 12], .Little)
 
 	return state, true
 }
@@ -708,4 +641,72 @@ packet_deserialize_kill_feed :: proc(buf: []byte) -> (event: Kill_Event, ok: boo
 		return {}, false
 	}
 	return event, true
+}
+
+// CHAT (Krodin's native protocol; Krunker's equivalents are "ct" and "ch").
+// Client -> server: [team u8][length u8][text]. team 1 asks for team-only chat.
+// Server -> client: [sender i32][team u8][length u8][text]. sender is the
+// player uid, or NET_CHAT_SYSTEM for the server's own lines; team 1 marks a
+// team-only message. Text is printable ASCII, 1..NET_CHAT_MAX_LENGTH bytes
+// (Krunker's #chatInput maxlength). Older peers skip the packet type.
+NET_CHAT_MAX_LENGTH :: 70
+NET_CHAT_SYSTEM :: i32(-1)
+NET_CHAT_REQUEST_MAX_SIZE :: PACKET_HEADER_SIZE + 2 + NET_CHAT_MAX_LENGTH
+NET_CHAT_MAX_SIZE :: PACKET_HEADER_SIZE + 6 + NET_CHAT_MAX_LENGTH
+
+net_chat_text_valid :: proc(text: string) -> bool {
+	if len(text) == 0 || len(text) > NET_CHAT_MAX_LENGTH { return false }
+	blank := true
+	for i in 0..<len(text) {
+		c := text[i]
+		if c < 32 || c >= 127 { return false }
+		if c != ' ' { blank = false }
+	}
+	return !blank
+}
+
+packet_serialize_chat_request :: proc(buf: []byte, text: string, team: bool) -> int {
+	if !net_chat_text_valid(text) || len(buf) < PACKET_HEADER_SIZE + 2 + len(text) { return 0 }
+	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
+	buf[4] = u8(Packet_Type.CHAT)
+	endian.put_u16(buf[5:7], .Little, u16(2 + len(text)))
+	buf[PACKET_HEADER_SIZE] = team ? 1 : 0
+	buf[PACKET_HEADER_SIZE + 1] = u8(len(text))
+	copy(buf[PACKET_HEADER_SIZE + 2:], text)
+	return PACKET_HEADER_SIZE + 2 + len(text)
+}
+
+// The text points into `buf`. Invalid text (control characters, blank, too
+// long or a length that disagrees with the payload) fails.
+packet_deserialize_chat_request :: proc(buf: []byte) -> (text: string, team: bool, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .CHAT || header.payload_len < 2 || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) { return }
+	length := int(buf[PACKET_HEADER_SIZE + 1])
+	if buf[PACKET_HEADER_SIZE] > 1 || int(header.payload_len) != 2 + length { return }
+	text = string(buf[PACKET_HEADER_SIZE + 2:])
+	if !net_chat_text_valid(text) { return "", false, false }
+	return text, buf[PACKET_HEADER_SIZE] == 1, true
+}
+
+packet_serialize_chat :: proc(buf: []byte, sender: i32, team: bool, text: string) -> int {
+	if !net_chat_text_valid(text) || len(buf) < PACKET_HEADER_SIZE + 6 + len(text) { return 0 }
+	endian.put_u32(buf[0:4], .Little, PACKET_MAGIC)
+	buf[4] = u8(Packet_Type.CHAT)
+	endian.put_u16(buf[5:7], .Little, u16(6 + len(text)))
+	endian.put_u32(buf[PACKET_HEADER_SIZE:PACKET_HEADER_SIZE + 4], .Little, transmute(u32)sender)
+	buf[PACKET_HEADER_SIZE + 4] = team ? 1 : 0
+	buf[PACKET_HEADER_SIZE + 5] = u8(len(text))
+	copy(buf[PACKET_HEADER_SIZE + 6:], text)
+	return PACKET_HEADER_SIZE + 6 + len(text)
+}
+
+packet_deserialize_chat :: proc(buf: []byte) -> (sender: i32, team: bool, text: string, ok: bool) {
+	header, header_ok := packet_deserialize_header(buf)
+	if !header_ok || header.packet_type != .CHAT || header.payload_len < 6 || len(buf) != PACKET_HEADER_SIZE + int(header.payload_len) { return }
+	length := int(buf[PACKET_HEADER_SIZE + 5])
+	if buf[PACKET_HEADER_SIZE + 4] > 1 || int(header.payload_len) != 6 + length { return }
+	raw, _ := endian.get_u32(buf[PACKET_HEADER_SIZE:PACKET_HEADER_SIZE + 4], .Little)
+	text = string(buf[PACKET_HEADER_SIZE + 6:])
+	if !net_chat_text_valid(text) { return 0, false, "", false }
+	return transmute(i32)raw, buf[PACKET_HEADER_SIZE + 4] == 1, text, true
 }

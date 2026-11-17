@@ -110,6 +110,9 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_toggle_row(state, "Remember last secondary", "RememberSecondary", values.remember_secondary, {kind = .REMEMBER_SECONDARY})
 		settings_spectator(state)
 		settings_note(state, "Krodin's own (default Off). Picking a class reuses the secondary you last chose for it and skips the loadout prompt. To change it, choose the class you already have again to open its loadout.")
+		settings_section(state, "Network")
+		settings_net_rate_row(state)
+		settings_note(state, "Net rate (Krunker's netRate) is how many input commands per second the game sends to a Krodin server. Higher rates track your aim and movement more finely and use a little more upload; Krunker's default is 144.")
 	case .AUDIO:
 		settings_section(state, "Volume")
 		// Display order; audio_volumes is indexed master, effects, footsteps, UI, weapons.
@@ -318,7 +321,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
-		draft.hitmarker, draft.remember_secondary = defaults.hitmarker, defaults.remember_secondary
+		draft.hitmarker, draft.remember_secondary, draft.net_rate = defaults.hitmarker, defaults.remember_secondary, defaults.net_rate
 		draft.spectator = defaults.spectator
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes

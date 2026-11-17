@@ -92,6 +92,92 @@ Join problems are logged to `logs/krunker-network.log`. Supported packets are li
 
 Settings are saved to `client-settings.json` and `audio-settings.json` in the working directory.
 
+## Running a dedicated server
+
+Build it with `.\build.bat server` (Windows) or `make server` (Linux; no GLFW needed), then
+run it from the repository root:
+
+```bash
+./bin/krodin_server                                   # settings from assets/config/server.toml
+./bin/krodin_server --tick-rate 128 --max-players 8 --maps burg,sandstorm --rotation sequential
+```
+
+Players join by pasting `tcp://<host>:21015` into **Join**. Ctrl+C (or SIGINT/SIGTERM) stops
+the server cleanly. When a match ends the end screen counts down the intermission, then the next
+rotation map loads and players deploy again.
+
+Settings live in [`assets/config/server.toml`](assets/config/server.toml); each flag overrides it.
+Values outside their range are clamped with a warning. Match rules (game time, score limit,
+weapons) stay in `game.toml`.
+
+| Flag / key | Default | Range |
+| --- | --- | --- |
+| `--port` / `port` | 21015 | 0–65535 (0 picks a free port) |
+| `--bind` / `bind` | `0.0.0.0` | `127.0.0.1` for local only |
+| `--name` / `name` | `Krodin Server` | up to 32 bytes |
+| `--tick-rate` / `tick_rate` | 64 | 30–128 Hz |
+| `--max-players` / `max_players` | 8 | 1–16 (Krunker custom games: 10) |
+| `--team-size` / `team_size` | 4 | 1–4 |
+| `--mode` / `mode` | `hardpoint` | `hardpoint` |
+| `--maps` / `maps` | every client map | burg, sandstorm, subzero, undergrowth, industry, site, bureau, frontier |
+| `--rotation` / `rotation` | `shuffle` | `shuffle`, `sequential` |
+| `--intermission` / `intermission` | 25 s | 5–120 s |
+| `--stats-interval` / `stats_interval` | 10 s | 0 (off) – 3600 s |
+| `--admin-password` / `admin_password` | empty | stored for admin commands; never logged |
+| `--config <path>` | `assets/config/server.toml` | |
+| `--quit-after <s>`, `--seed <n>` | off | testing aids |
+
+Every `stats_interval` seconds the server logs its tick budget: average and maximum tick time,
+late ticks, ticks over budget and the player count.
+
+### Input model
+
+Movement follows Krunker's input stream rather than the server tick:
+
+- The client samples one input command every 1/netRate s (**Settings → Gameplay → Net rate**,
+  Krunker's `netRate`: 30, 60, 120, 144, 240 or 360 Hz, default 144). Each command carries a
+  sequence number, its duration in whole milliseconds (the fraction is carried to the next
+  command), pitch and yaw in milliradians, the move direction, the buttons and a weapon swap.
+- A press that starts and ends between two commands (a click, a jump, a swap, a Scroll press)
+  still reaches the next command.
+- Every frame the client sends the new commands, plus the last two unacknowledged ones, in one
+  `PLAYER_INPUT` batch (protocol 11).
+- The server queues each client's commands, drops copies it has already seen, and simulates
+  each one in order as one movement step with its own duration, clamped to 1–33 ms like Krunker.
+  This happens before the world update, so a shot is fired inside the command that pressed it,
+  with that command's aim. Projectiles, timers, regeneration and the objective stay on the tick.
+- Each snapshot acknowledges the last command the server handled. The client resets to that
+  state, drops acknowledged commands and replays the rest with the same durations, so a correct
+  prediction is never corrected. Small corrections are blended out of the camera over ~50 ms;
+  large ones (over 4 units) snap.
+- A client that sends nothing does not move (as in Krunker).
+- *Krodin's own:* command time may not run more than 250 ms ahead of real time (a time bank that
+  real time refills and command durations drain). Commands beyond it are dropped and logged at
+  most every 5 s per client. Commands with a non-finite angle, a move direction outside -1..7 or
+  a bad swap are dropped; batches carry 1–64 commands and a client's queue holds at most 256.
+
+### Testing with bots
+
+`tools/server-bot-test.ps1` (Windows) and `tools/server-bot-test.sh` (Linux) start a server plus
+headless bots (`bin/krodin_netbot`, built with `build.bat bots`). Each bot plays with a random
+simulated latency: every packet in each direction is held for half its round trip, 20–60 ms by
+default, plus ±2 ms jitter. The bots wander, close in on the nearest enemy, and shoot when they
+have line of sight. `-Difficulty easy|normal|hard` (`--difficulty` on Linux) sets how well they
+aim; easy is the default. `-BotRate` (`--bot-rate`) sets how many input commands per second each
+bot sends, 64 by default. Join with `tcp://127.0.0.1:21015`; Ctrl+C stops everything. Logs go to
+`logs/bot-test/`.
+
+```powershell
+.\tools\server-bot-test.ps1                                  # 6 bots, 20-60 ms, 64 tick
+.\tools\server-bot-test.ps1 -Bots 7 -TickRate 128 -MinLatency 30 -MaxLatency 80 -BotRate 128
+```
+
+```bash
+./tools/server-bot-test.sh --bots 7 --tick-rate 128
+```
+
+The bots are a Krodin-only test tool, with no Krunker equivalent.
+
 ## Controls
 
 These are the default bindings. Rebind them in **Settings → Key binds**: select a slot and press a key or mouse button (Escape cancels). To unbind a slot, click its **X**, right-click it, or focus it and press Delete or Backspace.
@@ -114,6 +200,7 @@ These are the default bindings. Rebind them in **Settings → Key binds**: selec
 
 - **Classes:** [`krunker-configs/class-configs.json`](krunker-configs/class-configs.json).
 - **Weapons and match rules:** [`assets/config/game.toml`](assets/config/game.toml).
+- **Dedicated server:** [`assets/config/server.toml`](assets/config/server.toml) (see above).
 - **Maps:** run `python download_maps.py` to refresh all 47 official maps.
 
 ## Testing
