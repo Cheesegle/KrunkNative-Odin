@@ -1434,6 +1434,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	if !client.net.connected && !client.krunker.connected {
 		shared.game_tick(&client.game, now, delta)
+		client_local_new_game(client)
 	} else {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
