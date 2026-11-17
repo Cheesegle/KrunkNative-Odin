@@ -321,6 +321,20 @@ krunker_world_apply_leaders :: proc(state: ^Krunker_World_State, value: Krunker_
 
 krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krunker_Msgpack_Value, opcode: string) -> bool {
 	switch opcode {
+	case "bh":
+		// H4e -> updateHeadSize(player, headMlt, reset): only a value above 1
+		// or a reset (back to 1) changes the head.
+		if len(packet) < 3 { return false }
+		sid, ok := krunker_world_bounded_number(packet[1], 0, 2147483647); if !ok { return false }
+		reset := len(packet) > 3 && krunker_world_bool(packet[3])
+		mlt := krunker_world_f32(packet[2], 1)
+		if !(mlt > 1 || reset) { return true }
+		for &player in state.players {
+			if player.sid != i32(sid) { continue }
+			player.head_mlt = reset ? 1 : min(mlt, 10)
+			player.revision += 1
+		}
+		return true
 	case "gmsg":
 		message := ""
 		if len(packet) > 1 { text, ok := packet[1].(string); if !ok { return false }; message = strings.trim_space(text) }

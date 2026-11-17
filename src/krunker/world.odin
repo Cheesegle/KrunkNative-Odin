@@ -46,6 +46,8 @@ Krunker_World_Player :: struct {
 	cylinder_velocity: shared.Vec2,
 	crouch_val: f32,
 	aim_val:    f32,
+	// headMlt: roster record value 38, then BIG_HEAD (bh) updates. 0 = 1.
+	head_mlt:   f32,
 	weapon_slot: i32,
 	ping:       i32,
 	active:     bool,
@@ -353,6 +355,8 @@ krunker_world_apply_add_players :: proc(state: ^Krunker_World_State, packet: []K
 		player.secondary_id = krunker_world_i32(records[offset + 15], 2)
 		player.secondary_revision += 1
 		player.direction.y = krunker_world_f32(records[offset + 18], player.direction.y)
+		// players.add(..., e[t+38]) assigns it as headMlt.
+		player.head_mlt = max(krunker_world_f32(records[offset + 38], 1), 0)
 		player.active = true
 		player.life_ended = false
 		player.revision += 1
