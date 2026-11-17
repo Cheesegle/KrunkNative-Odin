@@ -52,6 +52,7 @@ Client :: struct {
 	scroll_press_time: f64, // GetTime of the last latched press (50 ms throttle).
 	hud_settings: menuui.HUD_Settings,
 	kill_feed: Kill_Feed,
+	chat: Chat,
 	kill_cam: Kill_Cam,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
@@ -1288,8 +1289,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 
 	editing_settings := client.menu.page == .SETTINGS || client.menu.page == .CONTROLS
-	debug_key := !editing_settings && glfw.GetKey(client.window, glfw.KEY_GRAVE_ACCENT) == glfw.PRESS
-	freecam_key := glfw.GetKey(client.window, glfw.KEY_RIGHT_BRACKET) == glfw.PRESS
+	debug_key := !editing_settings && !client.chat.open && glfw.GetKey(client.window, glfw.KEY_GRAVE_ACCENT) == glfw.PRESS
+	freecam_key := !client.chat.open && glfw.GetKey(client.window, glfw.KEY_RIGHT_BRACKET) == glfw.PRESS
 
 	if debug_key && !client.last_debug_key && !client.net.connected && !client.krunker.connected {
 		client_unload_map(client)
@@ -1329,7 +1330,12 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
 
+	// Chat runs first: while its input is open no gameplay bind reads as held,
+	// and the Escape that closes it does not also open the menu.
+	chat_was_open := client.chat.open
+	client_chat_update(client, glfw.GetTime())
 	escape_key := client_action_down(client, .MENU) || glfw.GetKey(client.window, glfw.KEY_ESCAPE) == glfw.PRESS
+	if chat_was_open || client.chat.open { client.last_escape_key = client.last_escape_key || escape_key }
 	if client.mouse_state.locked && escape_key && !client.last_escape_key {
 		audio_play_effect(client.audio, "menu_open", .UI, 0.35)
 		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
@@ -1359,7 +1365,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.camera.position = client.game.map_inst.camera_position
 	}
 
-	noclip_key := !client_binding_used(client, glfw.KEY_N) && glfw.GetKey(client.window, glfw.KEY_N) == glfw.PRESS
+	noclip_key := !client.chat.open && !client_binding_used(client, glfw.KEY_N) && glfw.GetKey(client.window, glfw.KEY_N) == glfw.PRESS
 	aim_down := client_action_down(client, .AIM)
 	scope_input := client_aim_input(client, aim_down, client.me != nil && client.me.active && client.mouse_state.locked && !client.freecam_enabled)
 	inspect_down := client_action_down(client, .INSPECT)
@@ -1404,7 +1410,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 		inspect_cancel = input.shoot || input.scope || input.reload || input.swap != 0
 
-		if client.mouse_state.locked && client.freecam_enabled {
+		if client.mouse_state.locked && client.freecam_enabled && !client.chat.open {
 			client_update_freecam(client, mouse_delta, delta)
 		}
 
@@ -1487,6 +1493,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)
+	chat_tick(&client.chat, delta)
 	client_tick_projectiles(client)
 	krunker_client_tick_explosions(client, delta)
 
@@ -1514,6 +1521,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		hud_render(client, delta, debug_pointer)
 	} else {
 		overlay_render(client, delta)
+		chat_render(client)
 	}
 	fps_render(client)
 	build_status_banner_render(client.ui)

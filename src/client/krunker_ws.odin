@@ -71,7 +71,12 @@ Krunker_WS_State :: struct {
 	snapshots_received: int,
 	server_error: string,
 	auth_rejected: bool,
+	// Chat messages waiting for the socket, sent in order after control packets.
+	chat_outbox: [dynamic]Krunker_Chat_Outgoing,
 }
+
+Krunker_Chat_Outgoing :: struct { text: string, team: bool }
+Krunker_Send_Result :: enum { SENT, AGAIN, FAILED }
 
 krunker_ws_set_status :: proc(client: ^Client, text: string) {
 	delete(client.join_status)
@@ -368,6 +373,47 @@ krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
 	return krunker_ws_send_internal(state, opcode, true)
 }
 
+// One complete binary frame. AGAIN means nothing was sent; retry later.
+krunker_ws_send_bytes :: proc(state: ^Krunker_WS_State, packet: []byte) -> Krunker_Send_Result {
+	sent: c.size_t
+	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
+	if code == .E_AGAIN && sent == 0 { return .AGAIN }
+	if code != .E_OK || int(sent) != len(packet) {
+		kproto.network_log("chat", fmt.tprintf("ERROR ct curl=%v sent=%d expected=%d", code, sent, len(packet)))
+		return .FAILED
+	}
+	return .SENT
+}
+
+krunker_ws_queue_chat :: proc(state: ^Krunker_WS_State, text: string, team: bool) {
+	clean := kproto.krunker_chat_clean_outgoing(text)
+	if len(clean) == 0 { return }
+	append(&state.chat_outbox, Krunker_Chat_Outgoing{strings.clone(clean), team})
+}
+
+// Sends queued chat as CHAT_MESSAGE ["ct", tab, text]. Control packets queued
+// earlier go first, and each send takes the next shared trailer counter only
+// once it is fully written. Only lengths are logged, never chat text.
+krunker_ws_flush_chat :: proc(state: ^Krunker_WS_State, send: proc(^Krunker_WS_State, []byte) -> Krunker_Send_Result = krunker_ws_send_bytes) -> bool {
+	for len(state.chat_outbox) > 0 {
+		if len(state.pending) > 0 || !state.connected { return true }
+		item := state.chat_outbox[0]
+		next := kproto.krunker_msgpack_counter_next(state.ah_num, kproto.KRUNKER_CHAT_SEND_OPCODE)
+		packet, ok := kproto.krunker_chat_encode(item.text, item.team, next)
+		if ok {
+			result := send(state, packet)
+			delete(packet)
+			if result == .AGAIN { return true }
+			if result == .FAILED { return false }
+			state.ah_num = next
+			kproto.network_log("chat", fmt.tprintf("SENT ct tab=%d text_bytes=%d counter=%d", item.team ? 1 : 0, len(item.text), next))
+		}
+		delete(item.text)
+		ordered_remove(&state.chat_outbox, 0)
+	}
+	return true
+}
+
 krunker_ws_flush_pending :: proc(state: ^Krunker_WS_State) -> bool {
 	for len(state.pending) > 0 {
 		opcode := state.pending[0]
@@ -521,6 +567,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				client_selection_status(client, reason)
 				kproto.network_log("spawn", fmt.tprintf("entry rejected; server_args=%v", packet[1:]))
 				krunker_ws_set_status(client, reason)
+			case "ch":
+				krunker_client_receive_chat(client, packet)
 			case "chi":
 				// Localized server chat can explain a subsequent argumentless fe.
 				kproto.network_log("server-notice", fmt.tprintf("localized_args=%v", packet[1:]))
@@ -601,6 +649,7 @@ krunker_ws_poll :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected do return
 	if !krunker_ws_flush_pending(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
+	if !krunker_ws_flush_chat(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
 	buffer: [4096]byte
 	// Drain bursts promptly instead of imposing an eight-chunk-per-frame lag.
 	// A time budget and chunk ceiling still leave time for prediction/rendering.
@@ -665,6 +714,8 @@ krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
 	delete(state.input_commands)
 	delete(state.last_server_message)
 	delete(state.server_error)
+	for item in state.chat_outbox { delete(item.text) }
+	delete(state.chat_outbox)
 	state^ = {}
 }
 

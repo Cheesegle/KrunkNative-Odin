@@ -126,9 +126,9 @@ when ODIN_TEST {
 		testing.expect_value(t, again, text)
 		defaults := menuui.krunker_settings_export({fov = 100, sensitivity = 1, mouse_dpi = 800, audio_volumes = {0.8, 1, 1, 1, 0.3}, bindings = #partial {.FORWARD = {'W', 0}, .BACKWARD = {'S', 0}, .LEFT = {'A', 0}, .RIGHT = {'D', 0}, .FIRE = {-1, 220}, .AIM = {-2, 221}},
 			visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = {values = #partial {.WEAPON_FOV = 95, .BOBBING = 0.7, .LEANING = 0.6, .OFFSET_X = 1, .OFFSET_Y = 1.3, .OFFSET_Z = 1, .ADS_OFFSET_Y = 1, .SWAP_Y = 1, .RELOAD_Y = 1, .ADS_FOV_POWER = 1},
-			toggles = #partial {.AIM_ANIMATION = true, .SHOW_HANDS = true, .SHOW_PRIMARY = true, .SHOW_SECONDARY = true, .SHOW_MELEE = true}}, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS})
+			toggles = #partial {.AIM_ANIMATION = true, .SHOW_HANDS = true, .SHOW_PRIMARY = true, .SHOW_SECONDARY = true, .SHOW_MELEE = true}}, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hud = {chat = menuui.DEFAULT_CHAT_SETTINGS}})
 		defer delete(defaults)
-		testing.expect_value(t, defaults, `{"crosshairSho":5,"controls":{"jumpKey":-1,"crouchKey":-1,"reloadKey":-1,"swapKey":-1,"meleeKey":-1,"inspKey":-1}}`)
+		testing.expect_value(t, defaults, `{"crosshairSho":5,"controls":{"jumpKey":-1,"crouchKey":-1,"reloadKey":-1,"swapKey":-1,"meleeKey":-1,"inspKey":-1,"chatKey":-1}}`)
 	}
 
 	@(test)
