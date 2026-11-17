@@ -324,6 +324,8 @@ Weapon :: struct {
 	jump_mlt:              f32,
 	damage:                f32,
 	headshot_mlt:          f32,
+	// Krunker lsMlt: damage multiplier for a legshot (0 = Krunker's default 0.5).
+	legshot_mlt:           f32,
 	pierce:                f32,
 	range:                 f32,
 	drop_start:            f32,
@@ -383,6 +385,15 @@ Weapon :: struct {
 }
 
 Player :: struct {
+	// Native server lag compensation (hitbox.odin): this player's pose after
+	// each recent server tick, and the view stamp (Input.view_*) of the command
+	// being simulated, which says which tick its shots were aimed at.
+	lag_history:  [LAG_HISTORY_MAX]Lag_Sample,
+	lag_count:    i32,
+	lag_next:     i32,
+	view_stamped: bool,
+	view_tick:    u32,
+	view_frac:    f32,
 	game:                            ^Game,
 	uid:                             i32,
 	is_you:                          bool,
@@ -563,6 +574,9 @@ Game_Config :: struct {
 	health_mlt:         f32,
 	// Krunker's hurtboxScale lobby setting (1..2): scales every complexHitbox.
 	hurtbox_scale:      f32,
+	// Krunker's hitBoxPad lobby setting ("Hitbox Padding", -2..2, default 0.6):
+	// widens and heightens the melee box (players.melee).
+	hitbox_pad:         f32,
 	fire_rate:          f32,
 	reload_speed:       f32,
 	objective_rotation_time: f32,
@@ -772,6 +786,7 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	team2_damage    = 1.0,
 	health_mlt      = 1.0,
 	hurtbox_scale   = 1.0,
+	hitbox_pad      = 0.6,
 	fire_rate       = 1.0,
 	reload_speed    = 1.0,
 	objective_rotation_time = 60.0,

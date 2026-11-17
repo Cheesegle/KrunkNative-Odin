@@ -128,7 +128,10 @@ test_weapon_impulses :: proc() -> bool {
 	shared.game_players_add(&game, target)
 	shared.player_spawn(target, 0)
 	target.team, player.team = 0, 0
-	target.position, target.height, target.scale = {0, -50, -20}, 100, 50
+	// Shots test Krunker's hurtboxes, which a player's scale/height do not
+	// grow (it used to be a 100-unit tall, 100-wide box): stand the target
+	// 20 ahead with the shooter's eye level (9.5) at its chest.
+	target.position = {0, 3, -20}
 	target.health = 10000
 	player.velocity, player.recoil_anim_y = {}, 0
 	player.ammo[0] = 2
@@ -142,7 +145,7 @@ test_weapon_impulses :: proc() -> bool {
 	player.weapon = &no_probe
 	shared.player_shoot(player)
 	if with_probe_damage <= 0 || abs(with_probe_damage-(10000-target.health)) > 1e-4 || player.velocity != (shared.Vec3{}) {
-		fmt.eprintln("Impulse probes must not hit players or duplicate shotgun damage")
+		fmt.eprintln("Impulse probes must not hit players or duplicate shotgun damage:", with_probe_damage, 10000-target.health, player.velocity)
 		return false
 	}
 	fmt.println("Shotgun/Sawed Off/RPG boost direction, distance falloff, surface flags, multiplier and damage isolation OK")

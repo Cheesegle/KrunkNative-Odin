@@ -24,6 +24,8 @@ secondary_weapon_id :: proc(weapons: []^Weapon, requested: i32) -> i32 {
 
 player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = -1) {
 	player.active = true
+	// A spawn is a teleport: shots never rewind into the previous life.
+	player.lag_count, player.lag_next = 0, 0
 	player.frozen, player.speed_boost = false, 0
 	player.class_index = class_index
 	player.respawn_timer = 0
@@ -836,6 +838,9 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 
 	player.direction.x = clamp(input.x_dir, -math.PI / 2.0, math.PI / 2.0)
 	player.direction.y = input.y_dir
+	// The tick this command's view showed: the native server rewinds the
+	// targets of its shots to it (player_shot_target).
+	player.view_stamped, player.view_tick, player.view_frac = input.view_stamped, input.view_tick, input.view_frac
 	if player.frozen {
 		player.velocity = {}
 		return
@@ -1285,16 +1290,11 @@ player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 						continue
 					}
 
-					body, head := player_hitboxes(target, .MELEE)
-					body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body.origin, body.scale)
-					head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head.origin, head.scale)
-
-					hit_t := body_t
-					if head_hit && (!body_hit || head_t <= body_t) {
-						hit_t = head_t
-					} else if !body_hit {
-						continue
-					}
+					// Krunker's players.melee tests one padded AABB per player,
+					// not the complexHitboxes, and has no headshots.
+					box := krunker_melee_box(player_shot_target(player, target, true))
+					hit_t, _, hit := ray_box_hit(shot_origin, shot_dir, box.origin, box.scale)
+					if !hit { continue }
 
 					if hit_t < nearest_t {
 						nearest_t = hit_t
@@ -1306,6 +1306,8 @@ player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 
 		if nearest_player != nil {
 			damage := player.weapon.damage > 0 ? player.weapon.damage : 50.0
+			// Krunker: `h.canThrow||(ve=35)`, bare fists after the knife is thrown.
+			if !player.can_throw { damage = 35 }
 			player_apply_damage(nearest_player, player, damage, player.loadout[player.loadout_index], false)
 		}
 	}
@@ -1364,7 +1366,7 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 			nearest_normal := Vec3{}
 			nearest_object_index: i32 = -1
 			nearest_player: ^Player
-			headshot := false
+			nearest_hit_type: Krunker_Hit_Type
 
 			for object, object_index in player.game.map_inst.objects {
 				if !map_object_blocks_shots(object) {
@@ -1404,27 +1406,21 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 					continue
 				}
 
-				body, head := player_hitboxes(target, .SHOT)
-				body_t, _, body_hit := ray_box_hit(shot_origin, shot_dir, body.origin, body.scale)
-				head_t, _, head_hit := ray_box_hit(shot_origin, shot_dir, head.origin, head.scale)
-
-				hit_t := body_t
-				is_head := false
-				if head_hit && (!body_hit || head_t <= body_t) {
-					hit_t = head_t
-					is_head = true
-				} else if !body_hit {
-					continue
-				}
+				// Krunker's server test (players.shoot -> n1e): the target as
+				// the shooter saw it (fetchState), the prefilter box, then its
+				// complexHitboxes as oriented boxes.
+				hit_t, hit_type := krunker_shot_target_test(player_shot_target(player, target, !presentation_only), shot_origin, shot_dir)
+				if hit_type == .NONE { continue }
 
 				if hit_t < nearest_t {
 					nearest_t = hit_t
 					nearest_player = target
 					nearest_normal = {}
 					nearest_object_index = -1
-					headshot = is_head
+					nearest_hit_type = hit_type
 				}
 			}
+			headshot := nearest_hit_type == .HEADSHOT
 
 			if nearest_player != nil && !presentation_only {
 				distance := range * nearest_t
@@ -1433,13 +1429,13 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 					drop_progress := clamp((distance - player.weapon.drop_start) / (player.weapon.range - player.weapon.drop_start), 0.0, 1.0)
 					damage = max(0.0, damage - player.weapon.damage_drop * drop_progress)
 				}
-				if headshot {
-					damage *= player.weapon.headshot_mlt
-				}
+				damage *= krunker_hit_damage_mlt(player.weapon, nearest_hit_type)
 				player_apply_damage(nearest_player, player, damage, player.loadout[player.loadout_index], headshot)
 			}
 
-			trace_hit := nearest_t <= 1.0
+			// n1e's ray is unbounded, so a hit just past the shot's range (its
+			// prefilter box was within range) still counts and ends the trace.
+			trace_hit := nearest_t <= 1.0 || nearest_player != nil
 			impact := Bullet_Impact{
 				origin   = shot_origin,
 				position = shot_origin + shot_dir * (trace_hit ? nearest_t : 1.0),
