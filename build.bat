@@ -3,6 +3,8 @@ rem Build helper for Windows (requires Odin compiler in PATH).
 rem
 rem Usage:
 rem   build.bat client            build the client      -> bin\krodin_client.exe
+rem   build.bat vulkan            client on the Vulkan backend (needs the Vulkan
+rem                               SDK's glslc) -> bin\krodin_client_vk.exe
 rem   build.bat dev               developer client with debug tools (F3 window)
 rem                                                     -> bin\krodin_client_dev.exe
 rem                               never packaged; package-windows.ps1 uses krodin_client.exe
@@ -43,7 +45,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client dev browser inspect server bots symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client vulkan dev browser inspect server bots symbolicate tests check all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -85,6 +87,20 @@ exit /b %errorlevel%
 call :browser
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% build src/client -out:%BIN_DIR%\krodin_client.exe -o:%PROFILE% %CLIENT_SYMBOLS%
+exit /b %errorlevel%
+
+:vulkan
+rem The Vulkan backend (src/client/gpu_vk.odin) embeds SPIR-V built from
+rem assets/shaders by tools/build-spirv.ps1.
+call :spirv
+if errorlevel 1 exit /b %errorlevel%
+call :browser
+if errorlevel 1 exit /b %errorlevel%
+%ODIN% build src/client -out:%BIN_DIR%\krodin_client_vk.exe -o:%PROFILE% -define:KRODIN_VULKAN=true %CLIENT_SYMBOLS%
+exit /b %errorlevel%
+
+:spirv
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-spirv.ps1
 exit /b %errorlevel%
 
 :dev
@@ -132,6 +148,10 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client -define:KRODIN_DEV=true
 if errorlevel 1 exit /b %errorlevel%
+call :spirv
+if errorlevel 1 exit /b %errorlevel%
+%ODIN% check src/client -define:KRODIN_VULKAN=true
+if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/server
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check tools/netbot
@@ -155,6 +175,8 @@ if exist "%BIN_DIR%\krodin_client.pdb" del "%BIN_DIR%\krodin_client.pdb"
 if exist "%BIN_DIR%\krodin_client_dev.pdb" del "%BIN_DIR%\krodin_client_dev.pdb"
 if exist "%BIN_DIR%\krodin_symbolicate.exe" del "%BIN_DIR%\krodin_symbolicate.exe"
 if exist "%BIN_DIR%\krodin_client_dev.exe" del "%BIN_DIR%\krodin_client_dev.exe"
+if exist "%BIN_DIR%\krodin_client_vk.exe" del "%BIN_DIR%\krodin_client_vk.exe"
+if exist "%BIN_DIR%\krodin_client_vk.pdb" del "%BIN_DIR%\krodin_client_vk.pdb"
 if exist "%BIN_DIR%\krodin_server.exe" del "%BIN_DIR%\krodin_server.exe"
 if exist "%BIN_DIR%\krodin_tests.exe" del "%BIN_DIR%\krodin_tests.exe"
 echo Cleaned %BIN_DIR%\
@@ -172,7 +194,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| dev ^| browser ^| inspect ^| server ^| bots ^| symbolicate ^| tests] [level]
+echo Usage: build.bat [client ^| vulkan ^| dev ^| browser ^| inspect ^| server ^| bots ^| symbolicate ^| tests] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).

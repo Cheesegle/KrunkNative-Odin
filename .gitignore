@@ -104,3 +104,4 @@ Krodin-Linux/
 
 # Downloaded official WebView2 SDK (restored with a pinned SHA-256).
 tools/webview2/
+src/client/spirv/*.spv

@@ -1692,6 +1692,13 @@ main :: proc() {
 	if len(options.bench_maps) > 0 {
 		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
 	}
+	when KRODIN_VULKAN {
+		// The world renderer runs on Vulkan; the HUD, menus and window
+		// presentation are still OpenGL-only (Vulkan port plan, Phase 2).
+		fmt.eprintln("This Vulkan build runs the renderer benchmark only: krodin_client_vk --bench <maps> <seconds>.")
+		fmt.eprintln("Play with krodin_client.exe (OpenGL) until the interface is ported.")
+		os.exit(1)
+	}
 	diagnostics_name_thread("Krodin main")
 
 	if !bool(glfw.Init()) {

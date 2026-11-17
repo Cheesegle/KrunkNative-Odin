@@ -32,6 +32,14 @@ client:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client -o:$(PROFILE)
 
+# Client on the Vulkan backend; the SPIR-V comes from tools/build-spirv.sh.
+vulkan: spirv
+	mkdir -p $(BIN_DIR)
+	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client_vk -o:$(PROFILE) -define:KRODIN_VULKAN=true
+
+spirv:
+	sh tools/build-spirv.sh
+
 # Developer client with debug tools (KRODIN_DEV, F3 window). Separate file
 # name so it is never packaged for testers.
 dev:
