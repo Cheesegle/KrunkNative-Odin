@@ -95,15 +95,18 @@ server_start_match :: proc(server: ^Server, slot: i32) -> bool {
 	return ready
 }
 
-// server_step runs exactly one server tick: network input, simulation, match
-// lifecycle and (every SNAPSHOT_RATE_DIVISOR ticks) the snapshot broadcast.
+// server_step runs exactly one server tick: network input (every received
+// command simulated with its own duration), the world update, match lifecycle
+// and (every SNAPSHOT_RATE_DIVISOR ticks) the snapshot broadcast.
 server_step :: proc(server: ^Server) {
 	server.tick += 1
 	server.now += server.fixed_delta
 
 	if server.net_ok {
 		net_server_poll(&server.net, &server.game)
-		net_server_queue_inputs(&server.net, server.fixed_delta)
+		// Damage and kills inside these commands are stamped with this tick.
+		if server.game.ready { server.game.now = server.now }
+		net_server_run_commands(&server.net, &server.game)
 	}
 
 	shared.game_tick(&server.game, server.now, server.fixed_delta)

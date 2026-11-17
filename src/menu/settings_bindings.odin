@@ -99,6 +99,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 		for level in ([4]f32{2, 4, 8, 16}) { if level <= view.max_anisotropy { count += 1 } }
 		labels, anchor, action = anisotropy_labels[:count], "Anisotropy", .ANISOTROPY
 	case .MENU_FPS_LIMIT: labels, anchor, action = MENU_FPS_LIMIT_LABELS[:], "MenuFpsLimit", .MENU_FPS_LIMIT
+	case .NET_RATE: labels, anchor, action = NET_RATE_LABELS[:], "NetRate", .NET_RATE
 	case .RANKED_REGION: labels, anchor, action = RANKED_REGION_CHOICES[:], "RankedRegion", .RANKED_REGION
 	}
 	// While open, Tab and arrow keys navigate the popup, not controls behind it.

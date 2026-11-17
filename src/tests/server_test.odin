@@ -555,12 +555,17 @@ test_server_soak :: proc() -> bool {
 	TICKS :: 128 * 10
 	dt := server.fixed_delta
 	sum_ms, max_ms: f64
+	// Each bot's commands go through a server command stream, as a client's do.
+	streams: [BOTS]ded.Command_Stream
+	for &cs in streams { ded.command_stream_init(&cs, 0) }
+	defer for &cs in streams { ded.command_stream_destroy(&cs) }
+	remainders: [BOTS]f64
 	for tick in 0 ..< TICKS {
 		for bot, i in bots {
-			if !bot.active { continue }
 			input := shared.Input{
 				seq      = i32(tick),
-				delta    = dt,
+				// One 128 Hz command per tick: whole-ms durations, fraction carried.
+				delta    = shared.input_command_duration_ms(128, 1, &remainders[i]) / 1000,
 				move_dir = i32((tick / 64 + i) % 8),
 				y_dir    = f32(tick) * 0.01 + f32(i),
 				x_dir    = 0.1 * math.sin(f32(tick) * 0.05),
@@ -568,9 +573,11 @@ test_server_soak :: proc() -> bool {
 				jump     = (tick + i * 13) % 96 == 0,
 				reload   = (tick + i) % 400 == 0,
 			}
-			shared.player_queue_input(bot, &input)
+			ded.command_stream_push(&streams[i], input)
 		}
 		work_start := time.tick_now()
+		game.now = server.now + dt
+		for &cs, i in streams { ded.command_stream_run(&cs, bots[i], game, f64(tick + 1) * f64(dt)) }
 		ded.server_step(server)
 		ms := time.duration_milliseconds(time.tick_since(work_start))
 		sum_ms += ms

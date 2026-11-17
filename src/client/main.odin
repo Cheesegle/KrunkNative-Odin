@@ -88,6 +88,7 @@ Client :: struct {
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	game_fps_limit: i32, // menuui.game_fps_limit_validate: 0 = unlimited (Krunker's Frame Cap default).
+	net_rate: i32, // Krunker's netRate: input commands per second on the native server (shared.NET_RATES).
 	game_frame_deadline: f64, // As idle_frame_deadline, for the game FPS limit.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
@@ -744,6 +745,8 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	shared.player_update_spread(player, 0, 0, 0)
 	player.slide_timer = state.slide_timer
 	player.jump_timer = state.jump_timer
+	player.can_slide_timer = state.can_slide_timer
+	player.x_vel_cylinder, player.z_vel_cylinder = state.cylinder_velocity.x, state.cylinder_velocity.y
 	shared.player_update_height(player)
 
 	if !state.on_ramp {
@@ -751,23 +754,43 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	}
 }
 
+// Snaps to the server's state after the acknowledged command, drops the
+// acknowledged commands and replays the rest with the same durations. When
+// prediction agrees with the server the replay lands exactly where the player
+// already was, and the correction is zero.
 client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool) {
+	predicted_position, predicted_direction := player.position, player.direction
+	// Player snapshots omit the ramp snap target; take the value predicted
+	// after the acknowledged command (as the live path does).
+	ramp_fix, has_ramp_fix := player.ramp_fix, false
+	for input in client.predicted_inputs {
+		if input.seq > state.ack_seq { break }
+		ramp_fix, has_ramp_fix = input.predicted_ramp_fix, input.predicted_has_ramp_fix
+	}
 	client_discard_acked_inputs(client, state.ack_seq)
 	player.interpolate = false
 	player.position = state.position
 	player.velocity = state.velocity
 	client_apply_movement_state(player, state)
+	if state.on_ramp { player.ramp_fix, player.has_ramp_fix = ramp_fix, has_ramp_fix }
 
 	if !was_active {
 		player.direction = {state.x_dir, state.y_dir}
+		native_client_reset_prediction(client)
+		return
 	}
 
 	// Reapply inputs the server had not processed when it produced this
 	// snapshot. `recon=true` runs deterministic movement/collision code while
 	// suppressing duplicate shots, reloads, and recoil effects.
+	player.direction = client.net.commands.command_direction
 	for &input in client.predicted_inputs {
 		shared.player_proc_input(player, &input, true, client.game.move_lock)
+		input.predicted_ramp_fix, input.predicted_has_ramp_fix = player.ramp_fix, player.has_ramp_fix
 	}
+	// Replay leaves the last command's aim; the view keeps the live mouse look.
+	player.direction = predicted_direction
+	native_client_apply_correction(client, player.position - predicted_position, state.ack_seq)
 }
 
 client_apply_match_state :: proc(client: ^Client, state: ^shared.Packet_Match_State) {
@@ -826,7 +849,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		fmt.eprintf("[Net Client] Rejected invalid health state for player %d\n", state.player_id)
 		return
 	}
-	if state.crouch_val < 0 || state.crouch_val > 1 || state.aim_val < 0 || state.aim_val > 1 || state.slide_timer < 0 || state.jump_timer < 0 {
+	if state.crouch_val < 0 || state.crouch_val > 1 || state.aim_val < 0 || state.aim_val > 1 || state.slide_timer < 0 || state.jump_timer < 0 || state.can_slide_timer < 0 {
 		fmt.eprintf("[Net Client] Rejected invalid movement state for player %d\n", state.player_id)
 		return
 	}
@@ -1414,10 +1437,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
-			append(&client.predicted_inputs, input)
-			client_cap_predicted_inputs(client, MAX_PREDICTED_INPUTS)
-			shared.player_proc_input(client.me, &input, true, client.game.move_lock, true)
-			net_client_send_input(&client.net, &input)
+			scroll_pending = native_client_predict_frame(client, &input, after_scroll)
+			native_client_send_commands(client)
 		} else {
 			shared.player_queue_input(client.me, &input)
 		}
@@ -1463,6 +1484,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client.krunker.connected {
 			sample := krunker_client_render_sample(client)
 			view_position, view_aim = sample.position, sample.aim
+		} else if client.net.connected {
+			view_position = native_client_render_position(client)
 		}
 		third_person := player_uses_third_person_camera(client.me)
 		if third_person {
@@ -1616,6 +1639,7 @@ main :: proc() {
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
 	client.menu_fps_limit = preferences.menu_fps_limit
 	client.game_fps_limit = preferences.game_fps_limit
+	client.net_rate = preferences.net_rate
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse

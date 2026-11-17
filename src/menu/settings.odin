@@ -106,6 +106,9 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_trails(state)
 		settings_crosshair(state)
 		settings_hitmarker(state)
+		settings_section(state, "Network")
+		settings_net_rate_row(state)
+		settings_note(state, "Net rate (Krunker's netRate) is how many input commands per second the game sends to a Krodin server. Higher rates track your aim and movement more finely and use a little more upload; Krunker's default is 144.")
 	case .AUDIO:
 		settings_section(state, "Volume")
 		// Display order; audio_volumes is indexed master, effects, footsteps, UI, weapons.
@@ -281,7 +284,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
-		draft.hitmarker = defaults.hitmarker
+		draft.hitmarker, draft.net_rate = defaults.hitmarker, defaults.net_rate
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 		draft.spatial_audio, draft.distance_falloff = defaults.spatial_audio, defaults.distance_falloff

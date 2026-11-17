@@ -23,6 +23,8 @@ param(
     [ValidateRange(1, 15)] [int] $Bots = 6,
     # How well the bots aim: easy (default), normal or hard.
     [ValidateSet("easy", "normal", "hard")] [string] $Difficulty = "easy",
+    # Input commands per second each bot sends (a player's netRate).
+    [ValidateRange(1, 360)] [int] $BotRate = 64,
     [ValidateRange(0, 1000)] [int] $MinLatency = 20,
     [ValidateRange(0, 1000)] [int] $MaxLatency = 60,
     [ValidateRange(0, 200)] [int] $Jitter = 2,
@@ -114,7 +116,7 @@ try {
         $name = "bot$i"
         $log = Join-Path $logDir "$name.log"
         $botArgs = @("--host", $HostName, "--port", $Port, "--latency", $latency, "--jitter", $Jitter,
-            "--seed", $random.Next(1, [int]::MaxValue), "--name", $name, "--report", 10, "--difficulty", $Difficulty)
+            "--seed", $random.Next(1, [int]::MaxValue), "--name", $name, "--report", 10, "--difficulty", $Difficulty, "--rate", $BotRate)
         $p = Start-Process -FilePath $botExe -ArgumentList $botArgs -WorkingDirectory $root -NoNewWindow -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logDir "$name.err.log")
         $started.Add($p)
@@ -123,7 +125,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Bots ($Difficulty, simulated round-trip latency):"
+    Write-Host "Bots ($Difficulty, $BotRate Hz commands, simulated round-trip latency):"
     $botInfo | ForEach-Object { Write-Host ("  {0}: {1} ms" -f $_.Name, $_.Latency) }
     Write-Host ""
     Write-Host "Join from Krodin: Join -> tcp://127.0.0.1:$Port  (other PCs: tcp://<this PC's LAN IP>:$Port)"

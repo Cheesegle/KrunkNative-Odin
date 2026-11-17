@@ -255,6 +255,12 @@ Input :: struct {
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,
 	krunker_shot_time, krunker_shot_progress: f64,
+	// Native protocol: the server tick the client was viewing (and 0..1
+	// progress to the next) when this command was sampled. Carried on the wire
+	// for lag compensation; nothing sets it yet.
+	view_stamped: bool,
+	view_tick: u32,
+	view_frac: f32,
 }
 
 Player_Skins :: struct {

@@ -15,6 +15,8 @@ Net_Client_State :: struct {
 	lobby: shared.Lobby_State,
 	send_queue: shared.Net_Send_Queue,
 	ping: shared.Net_Ping_State,
+	// Input commands for this connection (native_prediction.odin).
+	commands: Native_Command_State,
 }
 
 net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
@@ -72,20 +74,6 @@ net_client_connect :: proc(host: string, port: int) -> (nc: Net_Client_State, ok
 	nc.connected = true
 	fmt.printf("[Net Client] Connected to Dedicated Server at %s:%d!\n", host, port)
 	return nc, true
-}
-
-net_client_send_input :: proc(nc: ^Net_Client_State, input: ^shared.Input) {
-	if !nc.connected {
-		return
-	}
-
-	buf: [32]byte
-	n := shared.packet_serialize_input(buf[:], input)
-	if n > 0 {
-		if !net_client_send(nc, buf[:n]) {
-			nc.connected = false
-		}
-	}
 }
 
 net_client_send_spawn :: proc(nc: ^Net_Client_State, class_id: i32, secondary_id: i32 = 2) {
