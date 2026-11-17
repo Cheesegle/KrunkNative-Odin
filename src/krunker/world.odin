@@ -156,6 +156,10 @@ Krunker_World_State :: struct {
 	timer_received_at, objective_received_at, lockout_received_at: f64,
 	countdown: Krunker_Countdown,
 	countdown_remaining: f32,
+	// gmsg's countdown number (the big centre number and its cntd_N sound)
+	// and a counter that changes with every one received.
+	countdown_number: i32,
+	countdown_number_revision: u64,
 	countdown_received_at: f64,
 	respawn_available_at: f64,
 	final_round_counted: bool,

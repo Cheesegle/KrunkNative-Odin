@@ -40,6 +40,7 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	kproto.krunker_world_reset(&client.krunker_world)
 	client_clear_players(client)
 	kill_feed_clear(&client.kill_feed)
+	client.round_countdown = {}
 	client.lobby_team = 0
 	client.requested_team = 0
 	client.team_pending = false

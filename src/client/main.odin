@@ -53,6 +53,7 @@ Client :: struct {
 	hud_settings: menuui.HUD_Settings,
 	kill_feed: Kill_Feed,
 	kill_cam: Kill_Cam,
+	round_countdown: Round_Countdown,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -1500,6 +1501,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_kill_cam_update(client, delta)
+	client_round_countdown_update(client, glfw.GetTime())
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)
@@ -1531,6 +1533,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	} else {
 		overlay_render(client, delta)
 	}
+	// Krunker draws it on the overlay canvas, under the menu's panels too.
+	if !end_screen_visible { round_countdown_render(client, glfw.GetTime()) }
 	fps_render(client)
 	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
