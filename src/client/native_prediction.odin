@@ -114,7 +114,10 @@ native_client_predict_frame :: proc(client: ^Client, frame: ^shared.Input, after
 		} else {
 			command.swap = 0
 		}
-		command.view_stamped = false
+		// The server tick (and fraction to the next) remote players are drawn
+		// at this frame, Krunker's inputSTime/inputSTPrg: lag compensation
+		// (phase 5) rewinds targets to it. Unset until a snapshot arrives.
+		command.view_tick, command.view_frac, command.view_stamped = native_view_clock_tick(&client.net.view)
 		me.direction = state.command_direction
 		// Predict combat too, as the live path does: reload, swap and fire
 		// timers, ammo and the shot's presentation run locally at once. Hits

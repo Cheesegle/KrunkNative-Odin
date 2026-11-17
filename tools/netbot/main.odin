@@ -1,7 +1,8 @@
 // krodin_netbot: a headless test bot for Krodin's dedicated server.
 //
 // It connects like a real client (same TCP protocol, CONNECT + batches of
-// fixed-duration input commands at --rate Hz, 64 by default), wanders, aims
+// fixed-duration input commands at --rate Hz, 64 by default, and
+// acknowledged delta snapshots), wanders, aims
 // at the nearest enemy and shoots, and holds every
 // packet in each direction for half of a simulated round trip, so the server
 // sees a player at roughly --latency ms ping. tools/server-bot-test.ps1 starts
@@ -105,8 +106,13 @@ Bot :: struct {
 	outgoing:    Delay_Line,
 	incoming:    Delay_Line,
 	send_buf:    [dynamic]byte, // bytes released by the delay line, not yet accepted by the socket
-	recv_buf:    [8192]byte,
+	recv_buf:    []byte, // a whole SNAPSHOT fits (shared.SNAPSHOT_MAX_PACKET)
 	recv_len:    int,
+	// Snapshot baselines and decode scratch (protocol 12).
+	snapshots:   ^shared.Snapshot_Ring,
+	frame:       ^shared.Snapshot_Frame,
+	impacts:     [dynamic]shared.Bullet_Impact,
+	snapshot_count, snapshot_bytes, snapshot_resets: int,
 	ping:        shared.Net_Ping_State,
 
 	me:          Seen_Player,
@@ -242,45 +248,66 @@ bot_receive :: proc(bot: ^Bot, now: f64) {
 bot_handle :: proc(bot: ^Bot, now: f64, packet: []byte) {
 	header, _ := shared.packet_deserialize_header(packet)
 	#partial switch header.packet_type {
-	case .GAME_STATE:
-		state, ok := shared.packet_deserialize_state(packet)
-		if !ok { return }
+	case .SNAPSHOT:
+		bot_snapshot(bot, now, packet)
+	case .PING:
+		if seq, ok := shared.packet_deserialize_ping(packet); ok { shared.net_ping_receive(&bot.ping, seq, now) }
+	case .DISCONNECT:
+		if reason, ok := shared.packet_deserialize_disconnect(packet); ok && reason == .SERVER_FULL {
+			bot.server_full = true
+		}
+	}
+}
+
+// Decodes a SNAPSHOT against the bot's baselines, acknowledges it, and
+// updates what the bot knows: the map, itself, the other players (a player
+// beyond view distance arrives culled, so inactive; one missing has left)
+// and its own impacts.
+bot_snapshot :: proc(bot: ^Bot, now: f64, packet: []byte) {
+	if bot.snapshots == nil { bot.snapshots = new(shared.Snapshot_Ring) }
+	if bot.frame == nil { bot.frame = new(shared.Snapshot_Frame) }
+	clear(&bot.impacts)
+	ack: [shared.SNAPSHOT_ACK_PACKET_SIZE]byte
+	if result := shared.snapshot_decode(packet, bot.snapshots, bot.frame, &bot.impacts); result != .OK {
+		bot.snapshot_resets += 1
+		bot_send(bot, now, ack[:shared.packet_serialize_snapshot_ack(ack[:], 0, shared.SNAPSHOT_ACK_RESET)])
+		return
+	}
+	frame := bot.frame
+	shared.snapshot_ring_store(bot.snapshots, frame)
+	bot_send(bot, now, ack[:shared.packet_serialize_snapshot_ack(ack[:], frame.tick)])
+	bot.snapshot_count += 1
+	bot.snapshot_bytes += len(packet)
+
+	// map_index is a slot in ROTATION_MAPS, as for the real client.
+	if slot := frame.match.map_index; (bot.map_inst == nil || slot != bot.map_slot) && slot >= 0 && int(slot) < len(shared.ROTATION_MAPS) {
+		bot.map_inst = shared.load_default_map(shared.ROTATION_MAPS[slot])
+		bot.map_slot = slot
+		clear(&bot.others)
+	}
+
+	clear(&bot.others)
+	for &entity in frame.entities[:frame.count] {
+		state := shared.snapshot_entity_to_state(&entity, entity.id == frame.you_id)
 		seen := Seen_Player{state.player_id, state.active, state.team, state.position, state.health, state.active_ammo}
 		if state.is_you {
 			if bot.have_me && bot.me.active && !state.active { bot.deaths += 1 }
 			if !state.active && (bot.dead_since < 0 || bot.me.active || !bot.have_me) { bot.dead_since = now }
 			if state.active { bot.dead_since = -1 }
 			bot.me, bot.have_me = seen, true
-			return
-		}
-		for &other in bot.others {
-			if other.id == seen.id { other = seen; return }
+			continue
 		}
 		append(&bot.others, seen)
-	case .BULLET_IMPACT:
-		impact, ok := shared.packet_deserialize_bullet_impact(packet)
-		if !ok || !bot.have_me || u32(impact.shooter_uid) != bot.me.id { return }
+	}
+
+	for impact in bot.impacts {
+		if !bot.have_me || u32(impact.shooter_uid) != bot.me.id { continue }
 		if bot.hits_player + bot.hits_world < bot.opts.debug {
 			fmt.printf("[%s] impact %v at %v from %v; me %v yaw %.3f pitch %.3f\n", bot.opts.name, impact.kind, impact.position, impact.origin, bot.me.position, bot.yaw, bot.pitch)
 		}
 		#partial switch impact.kind {
 		case .Player: bot.hits_player += 1
 		case .World:  bot.hits_world += 1
-		}
-	case .MATCH_STATE:
-		state, ok := shared.packet_deserialize_match_state(packet)
-		if !ok || (bot.map_inst != nil && state.map_index == bot.map_slot) { return }
-		// map_index is a slot in ROTATION_MAPS, as for the real client.
-		if state.map_index >= 0 && int(state.map_index) < len(shared.ROTATION_MAPS) {
-			bot.map_inst = shared.load_default_map(shared.ROTATION_MAPS[state.map_index])
-			bot.map_slot = state.map_index
-			clear(&bot.others)
-		}
-	case .PING:
-		if seq, ok := shared.packet_deserialize_ping(packet); ok { shared.net_ping_receive(&bot.ping, seq, now) }
-	case .DISCONNECT:
-		if reason, ok := shared.packet_deserialize_disconnect(packet); ok && reason == .SERVER_FULL {
-			bot.server_full = true
 		}
 	}
 }
@@ -448,7 +475,7 @@ main :: proc() {
 	}
 	net.set_blocking(socket, false)
 	net.set_option(socket, .TCP_Nodelay, true)
-	bot := Bot{opts = opts, socket = socket, connected = true, dead_since = -1}
+	bot := Bot{opts = opts, socket = socket, connected = true, dead_since = -1, recv_buf = make([]byte, shared.SNAPSHOT_MAX_PACKET)}
 	fmt.printf("[%s] connected to %s:%d, simulated latency %.0f ms (+-%.0f jitter), difficulty %v, %.0f Hz commands\n", opts.name, opts.host, opts.port, opts.latency_ms, opts.jitter_ms, opts.difficulty, opts.rate)
 
 	start := time.tick_now()
@@ -493,8 +520,9 @@ main :: proc() {
 
 		if opts.report > 0 && now >= next_report {
 			next_report += opts.report
-			fmt.printf("[%s] ping %d ms (target %.0f), alive=%v hp=%.0f, deaths %d, trigger %d, hits %d player / %d wall, sees %d players\n",
-				opts.name, bot.ping.rtt_ms, opts.latency_ms, bot.me.active, bot.me.health, bot.deaths, bot.shots, bot.hits_player, bot.hits_world, len(bot.others))
+			fmt.printf("[%s] ping %d ms (target %.0f), alive=%v hp=%.0f, deaths %d, trigger %d, hits %d player / %d wall, sees %d players, %d snapshots %.0f B avg\n",
+				opts.name, bot.ping.rtt_ms, opts.latency_ms, bot.me.active, bot.me.health, bot.deaths, bot.shots, bot.hits_player, bot.hits_world, len(bot.others),
+				bot.snapshot_count, f64(bot.snapshot_bytes) / f64(max(1, bot.snapshot_count)))
 		}
 		bot_sleep(time.Millisecond)
 	}
@@ -508,5 +536,6 @@ main :: proc() {
 		if n := shared.packet_serialize_disconnect(buf[:]); n > 0 { net.send_tcp(bot.socket, buf[:n]) }
 	}
 	net.close(bot.socket)
-	fmt.printf("[%s] done: deaths %d, trigger %d, hits %d player / %d wall\n", opts.name, bot.deaths, bot.shots, bot.hits_player, bot.hits_world)
+	fmt.printf("[%s] done: deaths %d, trigger %d, hits %d player / %d wall, %d snapshots (%.0f B avg, %d resets)\n", opts.name, bot.deaths, bot.shots, bot.hits_player, bot.hits_world,
+		bot.snapshot_count, f64(bot.snapshot_bytes) / f64(max(1, bot.snapshot_count)), bot.snapshot_resets)
 }

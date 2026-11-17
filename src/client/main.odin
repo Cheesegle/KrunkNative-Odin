@@ -92,6 +92,9 @@ Client :: struct {
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	game_fps_limit: i32, // menuui.game_fps_limit_validate: 0 = unlimited (Krunker's Frame Cap default).
 	net_rate: i32, // Krunker's netRate: input commands per second on the native server (shared.NET_RATES).
+	// Remote player interpolation delay on a native server in ms, like
+	// cl_interp; 0 = Auto (2 snapshot intervals + measured jitter). Krodin's own.
+	net_interp: i32,
 	game_frame_deadline: f64, // As idle_frame_deadline, for the game FPS limit.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
@@ -719,6 +722,8 @@ client_clear_players :: proc(client: ^Client) {
 	}
 	clear(&client.game.players)
 	client.game.player_count = 0
+	delete(client.net.remotes)
+	client.net.remotes = nil
 	client.me = nil
 	client_kill_cam_stop(client)
 	client.in_game = false
@@ -856,6 +861,7 @@ client_reconcile_players :: proc(client: ^Client, state: ^shared.Packet_Match_St
 			scene_remove_player_mesh(player.render_you ? client.fps_scene : client.scene, cast(^Player_Mesh)player.mesh, int(player.loadout_size))
 			player_meshes_fini(player)
 		}
+		delete_key(&client.net.remotes, player.uid)
 		shared.player_destroy(player)
 		unordered_remove(&client.game.players, i)
 	}
@@ -935,35 +941,37 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		// the killer is frozen outright (Dr.interpolate = false).
 		if player.uid == client.kill_cam.killer_uid { player.interpolate = false }
 	} else if was_active {
-		// Interpolate from the previously displayed position toward the fresh
-		// authoritative one. Between snapshots the client lerps, so a moving
-		// player no longer steps/jerks and never desyncs visually.
+		// Buffer the snapshot; native_client_interpolate_remotes draws the
+		// player at the view time, between buffered samples (native_interp.odin).
+		track := native_client_track(client, player.uid)
+		native_remote_push(track, native_remote_sample_from_state(state, native_client_sample_time(client, track)))
 		player.interpolate = true
-		player.dt = 0
 		player.send_rate = send_rate
-		player.interp_pos_start = player.position
-		player.interp_pos_end = state.position
-		player.interp_dir_start = player.direction
-		player.interp_dir_end = {state.x_dir, state.y_dir}
-		player.velocity = state.velocity
-		was_grounded := player.on_ground
+		// The newest server pose: player collisions read interp_pos_end, and
+		// the legacy two-point lerp (not used on this path) stays put.
+		player.interp_pos_start, player.interp_pos_end = state.position, state.position
+		player.interp_dir_start, player.interp_dir_end = {state.x_dir, state.y_dir}, {state.x_dir, state.y_dir}
+		was_grounded := track.server_on_ground
 		client_apply_movement_state(player, state)
+		track.server_on_ground = state.on_ground
 		// Snapshots carry no landing; a remote player who comes down plays one
 		// like the live path's interpolated landing (krunker_presentation.odin).
-		if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
+		if shared.player_remote_landed(was_grounded, state.on_ground) { shared.player_emit_presentation(player, .LAND) }
 	} else {
-		// Fresh spawn or re-appearance: snap, then interpolate from here.
+		// Fresh spawn or re-appearance (respawn, or back within view
+		// distance): snap and start a new buffered path from here.
 		player.position = state.position
+		player.last_position = state.position
 		player.direction = {state.x_dir, state.y_dir}
 		player.interpolate = true
-		player.dt = 0
 		player.send_rate = send_rate
-		player.interp_pos_start = player.position
-		player.interp_pos_end = state.position
-		player.interp_dir_start = player.direction
-		player.interp_dir_end = player.direction
-		player.velocity = state.velocity
+		player.interp_pos_start, player.interp_pos_end = state.position, state.position
+		player.interp_dir_start, player.interp_dir_end = player.direction, player.direction
+		track := native_client_track(client, player.uid)
+		native_remote_reset(track)
+		native_remote_push(track, native_remote_sample_from_state(state, native_client_sample_time(client, track)))
 		client_apply_movement_state(player, state)
+		track.server_on_ground = state.on_ground
 	}
 	if state.health < player.health { shared.player_emit_presentation(player, .DAMAGE) }
 	player.health = state.health
@@ -1345,6 +1353,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	if client.net.connected {
 		net_client_poll(client, glfw.GetTime())
+		// The server time remote players are drawn at this frame; commands
+		// built below report it (view_tick/view_frac).
+		native_view_clock_update(&client.net.view, glfw.GetTime(), client.net_interp)
 	}
 	if client.krunker.connected {
 		krunker_ws_poll(client)
@@ -1519,12 +1530,13 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
 		if client.krunker.connected { krunker_client_interpolate_remotes(client, f64(now), delta) }
+		if client.net.connected { native_client_interpolate_remotes(client, delta) }
 		for player in client.game.players {
 			if player.active {
 				player.idle_anim += shared.GAME_CONSTANTS.idle_anim_speed * delta
 				shared.player_update_visual_animations(player, delta)
 				shared.player_update_recoil(player, delta)
-				if player != client.me {
+				if player != client.me && !client.net.connected {
 					shared.player_interpolate(player, delta)
 				}
 				if player.mesh != nil && (player != client.me || client.freecam_enabled) {
@@ -1711,6 +1723,7 @@ main :: proc() {
 	client.menu_fps_limit = preferences.menu_fps_limit
 	client.game_fps_limit = preferences.game_fps_limit
 	client.net_rate = preferences.net_rate
+	client.net_interp = preferences.net_interp
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse

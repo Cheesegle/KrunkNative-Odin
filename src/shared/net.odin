@@ -4,15 +4,17 @@ import "core:encoding/endian"
 
 PACKET_MAGIC :: 0x4B52554E // 'KRUN'
 PACKET_HEADER_SIZE :: 7
-PROTOCOL_VERSION :: 11 // 11: PLAYER_INPUT carries a batch of fixed-duration commands (net_input.odin)
+// 11: PLAYER_INPUT carries a batch of fixed-duration commands (net_input.odin).
+// 12: one tick-numbered, delta-encoded SNAPSHOT per client per snapshot
+//     replaces GAME_STATE/MATCH_STATE/LOBBY_STATE/BULLET_IMPACT/KILL_FEED
+//     broadcasts, acknowledged with SNAPSHOT_ACK (net_snapshot.odin).
+PROTOCOL_VERSION :: 12
 PACKET_PLAYER_STATE_PAYLOAD_SIZE :: 122 // 11: + can_slide_timer and the cylinder push velocity
 PACKET_BULLET_IMPACT_PAYLOAD_SIZE :: 49
 // victim, killer, weapon (i32 each) + flags. Older clients skip the unknown
 // packet type by its payload length, so this needs no PROTOCOL_VERSION bump.
 PACKET_KILL_FEED_PAYLOAD_SIZE :: 13
 MAX_PLAYERS_PER_MATCH :: 32
-// The server broadcasts one snapshot per N simulation ticks.
-SNAPSHOT_RATE_DIVISOR :: 2
 NET_SEND_QUEUE_CAPACITY :: 64 * 1024
 
 // TCP may accept only a prefix before a non-blocking socket reports
@@ -77,6 +79,8 @@ Packet_Type :: enum u8 {
 	TEAM_REQUEST = 9,
 	LOBBY_STATE = 10,
 	KILL_FEED = 11,
+	SNAPSHOT = 12,     // server -> client, net_snapshot.odin
+	SNAPSHOT_ACK = 13, // client -> server, net_snapshot.odin
 }
 
 Packet_Header :: struct {
@@ -120,6 +124,9 @@ Packet_Player_State :: struct {
 	player_id: u32,
 	active:    bool,
 	is_you:    bool,
+	// Snapshot only: beyond the recipient's view distance (then not active);
+	// the pose is stale and the client hides the player.
+	culled:    bool,
 	team:      i32,
 	class_id:  i32,
 	secondary_id: i32,

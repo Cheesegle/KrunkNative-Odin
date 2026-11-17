@@ -307,7 +307,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
 		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
-		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, net_rate = client.net_rate, bindings = client.bindings, hud = client.hud_settings,
+		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, net_rate = client.net_rate, net_interp = client.net_interp, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings,
 		remember_secondary = client.remember_secondary,
@@ -381,6 +381,7 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.menu_fps_limit = menuui.menu_fps_limit_validate(values.menu_fps_limit)
 	client.game_fps_limit = menuui.game_fps_limit_validate(values.game_fps_limit)
 	client.net_rate = shared.net_rate_validate(values.net_rate)
+	client.net_interp = menuui.net_interp_validate(values.net_interp)
 	client.bindings, client.hud_settings = values.bindings, values.hud
 	client.visual_settings, client.quality_settings = menuui.visual_settings_validate(values.visuals), menuui.quality_settings_validate(values.quality)
 	client.viewmodel_settings = menuui.viewmodel_settings_validate(values.viewmodel)
@@ -417,7 +418,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .NET_RATE, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .REMEMBER_SECONDARY, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .NET_RATE, .NET_INTERP, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .REMEMBER_SECONDARY, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)

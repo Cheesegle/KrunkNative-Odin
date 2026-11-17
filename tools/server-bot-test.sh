@@ -12,7 +12,7 @@
 # bin/ and assets/ (the repo root, or a deployed server folder).
 set -euo pipefail
 
-BOTS=6 MIN_LATENCY=20 MAX_LATENCY=60 JITTER=2 TICK_RATE=64 PORT=21015
+BOTS=6 MIN_LATENCY=20 MAX_LATENCY=60 JITTER=2 TICK_RATE=64 PORT=21015 SNAPSHOT_RATE=0 VIEW_DISTANCE=0
 HOST=127.0.0.1 SEED="" DURATION=0 BUILD=0 NO_SERVER=0 DIFFICULTY=easy BOT_RATE=64
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
@@ -22,6 +22,8 @@ Options:
   --max-latency MS  highest simulated round trip (default 60)
   --jitter MS       +- jitter per packet (default 2)
   --tick-rate N     server tick rate, 30-128 (default 64)
+  --snapshot-rate N snapshots per second, 10..tick rate (default 0 = every tick)
+  --view-distance U leave out players further away, 100-10000 (default 0 = off)
   --port N          server port (default 21015)
   --host H          where the bots connect (default 127.0.0.1)
   --seed N          random seed for the bot latencies
@@ -40,6 +42,8 @@ while [ $# -gt 0 ]; do
         --max-latency) MAX_LATENCY=$2; shift 2 ;;
         --jitter) JITTER=$2; shift 2 ;;
         --tick-rate) TICK_RATE=$2; shift 2 ;;
+        --snapshot-rate) SNAPSHOT_RATE=$2; shift 2 ;;
+        --view-distance) VIEW_DISTANCE=$2; shift 2 ;;
         --port) PORT=$2; shift 2 ;;
         --host) HOST=$2; shift 2 ;;
         --seed) SEED=$2; shift 2 ;;
@@ -92,7 +96,7 @@ if [ "$NO_SERVER" = 0 ] && (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; the
 fi
 
 if [ "$NO_SERVER" = 0 ]; then
-    "$SERVER" --bind 0.0.0.0 --port "$PORT" --tick-rate "$TICK_RATE" --max-players $((BOTS + 2)) --stats-interval 10 \
+    "$SERVER" --bind 0.0.0.0 --port "$PORT" --tick-rate "$TICK_RATE" --snapshot-rate "$SNAPSHOT_RATE" --view-distance "$VIEW_DISTANCE" --max-players $((BOTS + 2)) --stats-interval 10 \
         >"$LOG_DIR/server.log" 2>&1 &
     SERVER_PID=$!
     PIDS+=("$SERVER_PID")

@@ -9,8 +9,17 @@ name = "Krodin Server"     # up to 32 bytes
 port = 21015
 bind = "0.0.0.0"           # "127.0.0.1" accepts local connections only
 
-# Simulation tick rate in Hz, 30..128. Snapshots go out every 2nd tick.
+# Simulation tick rate in Hz, 30..128.
 tick_rate = 64
+
+# Snapshots per second, 10..tick_rate. 0 sends one every tick (the default).
+# Krunker's equivalent is snf/sendR (10 Hz by default, 5 in some modes).
+snapshot_rate = 0
+
+# Leave players further than this many units away out of each client's
+# snapshots, 100..10000; 0 turns it off. Krunker's modes use viewDis 500,
+# 1000 or 2000; Hardpoint and FFA set none.
+view_distance = 0
 
 # Connection limit, 1..16. (Krunker custom games stop at 10.)
 max_players = 8

@@ -15,7 +15,13 @@ Net_Client :: struct {
 	// Received input commands, simulated in order each tick (input_commands.odin).
 	commands:   Command_Stream,
 	malformed_inputs: int,
-	initial_match_sent: bool,
+	// The snapshots sent to this client (possible baselines) and the newest
+	// one it acknowledged (SNAPSHOT_ACK). Without a usable ack the next
+	// snapshot is a full one.
+	snapshots:  ^shared.Snapshot_Ring,
+	acked_tick: u32,
+	has_ack:    bool,
+	snapshot_stats: Snapshot_Stats,
 	recv_buffer: [4096]byte,
 	recv_len:    int,
 	send_queue:  shared.Net_Send_Queue,
@@ -34,6 +40,17 @@ Net_Server :: struct {
 	// Real time for the input time bank; ticks can stall or be skipped, so
 	// simulated server time is not used for it.
 	clock_start:   time.Tick,
+	// Players further than this from a recipient are left out of its
+	// snapshots (Krunker viewDis); 0 sends everyone.
+	view_distance: f32,
+	snapshot_buf:  []byte,                 // one encoded SNAPSHOT, reused
+	frame:         ^shared.Snapshot_Frame, // the snapshot being built, reused
+	snapshot_stats: Snapshot_Stats,        // clients dropped since the last budget log
+}
+
+Snapshot_Stats :: struct {
+	snapshots, full, bytes: u64,
+	culled: u64, // entities sent culled (beyond view distance)
 }
 
 // Real seconds since the listener opened.
@@ -133,6 +150,7 @@ net_server_refuse :: proc(socket: net.TCP_Socket, reason: shared.Disconnect_Reas
 // ns.clients.
 net_server_drop_client :: proc(ns: ^Net_Server, game: ^shared.Game, client: ^Net_Client) {
 	client.active = false
+	snapshot_stats_add(&ns.snapshot_stats, client.snapshot_stats)
 	if client.player != nil {
 		if client.joined {
 			shared.game_players_remove(game, client.player)
@@ -142,6 +160,7 @@ net_server_drop_client :: proc(ns: ^Net_Server, game: ^shared.Game, client: ^Net
 	}
 	net.close(client.socket)
 	command_stream_destroy(&client.commands)
+	free(client.snapshots)
 	free(client)
 }
 
@@ -165,6 +184,7 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 		client.active = true
 		client.player = shared.player_init(game)
 		client.player.uid = i32(client.id)
+		client.snapshots = new(shared.Snapshot_Ring)
 		command_stream_init(&client.commands, net_server_now(ns))
 
 		append(&ns.clients, client)
@@ -250,6 +270,10 @@ net_server_poll :: proc(ns: ^Net_Server, game: ^shared.Game) {
 						if _, ping_ok := shared.packet_deserialize_ping(packet); ping_ok && !net_server_send(client, packet) {
 							client.active = false
 						}
+					case .SNAPSHOT_ACK:
+						if tick, flags, ack_ok := shared.packet_deserialize_snapshot_ack(packet); ack_ok {
+							net_server_snapshot_ack(client, tick, flags)
+						}
 					case .CHAT:
 						net_server_chat(ns, client, packet)
 					case .DISCONNECT:
@@ -308,79 +332,117 @@ net_server_run_commands :: proc(ns: ^Net_Server, game: ^shared.Game) {
 	}
 }
 
-net_server_broadcast_match :: proc(ns: ^Net_Server, game: ^shared.Game) {
-	state := shared.packet_match_state_from_game(game)
-	state.send_rate = f32(game.config.tick_rate) / f32(shared.SNAPSHOT_RATE_DIVISOR)
-	// Largest packet here is MATCH_STATE with a full roster: 7 header + 42 + 32*4.
-	match_buf: [256]byte
-	match_size := shared.packet_serialize_match_state(match_buf[:], &state)
-	if match_size == 0 {
+// net_server_snapshot_ack records a client's acknowledgement. Only snapshots
+// still in its ring count, and never one older than the current ack (a
+// reordered or replayed ack). RESET drops the baseline: the next snapshot is
+// a full one.
+net_server_snapshot_ack :: proc(client: ^Net_Client, tick: u32, flags: u8) {
+	if flags & shared.SNAPSHOT_ACK_RESET != 0 {
+		client.has_ack = false
 		return
 	}
-	player_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE]byte
-	impact_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_BULLET_IMPACT_PAYLOAD_SIZE]byte
-	kill_buf: [shared.PACKET_HEADER_SIZE + shared.PACKET_KILL_FEED_PAYLOAD_SIZE]byte
+	if shared.snapshot_ring_find(client.snapshots, tick) == nil { return }
+	if !client.has_ack || shared.snapshot_tick_after(tick, client.acked_tick) {
+		client.acked_tick, client.has_ack = tick, true
+	}
+}
+
+// net_server_build_snapshot fills `frame` with what `client` gets for `tick`:
+// match and lobby state and, once it has joined, every player. Players
+// beyond view_distance are culled (net_snapshot.odin); `baseline` supplies
+// their frozen pose.
+net_server_build_snapshot :: proc(ns: ^Net_Server, game: ^shared.Game, client: ^Net_Client, frame: ^shared.Snapshot_Frame, baseline: ^shared.Snapshot_Frame, tick: u64, tick_rate: int, match: shared.Snapshot_Match) {
+	frame^ = {}
+	frame.tick = u32(tick)
+	frame.server_time_ms = shared.snapshot_server_time_ms(tick, tick_rate)
+	frame.you_id = client.joined ? client.id : 0
+	frame.match = match
+	lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = i32(ns.team_capacity), select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
+	for other in ns.clients {
+		if !other.active || other.player == nil || lobby.count >= shared.MAX_PLAYERS_PER_MATCH { continue }
+		lobby.players[lobby.count] = {id = other.id, team = other.player.team, class_id = other.joined ? other.player.class_index : -1}
+		lobby.count += 1
+	}
+	frame.lobby_len = shared.packet_serialize_lobby(frame.lobby[:], &lobby)
+	if !client.joined { return }
+	me := client.player
+	for player in game.players {
+		if frame.count >= shared.SNAPSHOT_MAX_ENTITIES { break }
+		own := player == me
+		state := net_server_player_state(player, own)
+		entity := shared.snapshot_entity_from_state(&state, own)
+		// Krunker culls only for a living (not spectating) recipient.
+		if !own && me.active && player.active && shared.snapshot_beyond_view(player.position, me.position, ns.view_distance) {
+			old: ^shared.Snapshot_Entity
+			if baseline != nil {
+				for &e in baseline.entities[:baseline.count] { if e.id == entity.id { old = &e; break } }
+			}
+			entity = shared.snapshot_entity_culled(&entity, old)
+			client.snapshot_stats.culled += 1
+		}
+		frame.entities[frame.count] = entity
+		frame.count += 1
+	}
+}
+
+// net_server_broadcast_snapshot sends every client one SNAPSHOT for `tick`,
+// delta-encoded against the snapshot it acknowledged, with the impacts and
+// kills since the last snapshot. send_rate is the snapshot rate in Hz.
+net_server_broadcast_snapshot :: proc(ns: ^Net_Server, game: ^shared.Game, tick: u64, tick_rate: int, send_rate: f32) {
+	if ns.snapshot_buf == nil { ns.snapshot_buf = make([]byte, shared.SNAPSHOT_MAX_PACKET) }
+	if ns.frame == nil { ns.frame = new(shared.Snapshot_Frame) }
+	match_state := shared.packet_match_state_from_game(game)
+	match_state.send_rate = send_rate
+	match := shared.snapshot_match_from_state(&match_state, tick_rate)
 
 	for client in ns.clients {
-		if !client.active {
-			continue
+		if !client.active { continue }
+		frame := ns.frame
+		frame.you_id = client.joined ? client.id : 0
+		frame.tick = u32(tick)
+		baseline := client.has_ack ? shared.snapshot_usable_baseline(frame, shared.snapshot_ring_find(client.snapshots, client.acked_tick)) : nil
+		net_server_build_snapshot(ns, game, client, frame, baseline, tick, tick_rate, match)
+		impacts: []shared.Bullet_Impact
+		kills: []shared.Kill_Event
+		if client.joined { impacts, kills = game.impacts[:], game.kill_events[:] }
+		size := shared.snapshot_encode(ns.snapshot_buf, frame, baseline, impacts, kills)
+		if size == 0 {
+			fmt.printf("[Net Server] Client #%d: snapshot %d did not fit; its events are dropped\n", client.id, tick)
+			size = shared.snapshot_encode(ns.snapshot_buf, frame, baseline)
 		}
-		// Keep the match frame immutable across recipients. Player snapshots are
-		// recipient-specific (`is_you`) and use a separate serialization buffer.
-		if !net_server_send(client, match_buf[:match_size]) {
+		if size == 0 || !net_server_send(client, ns.snapshot_buf[:size]) {
 			client.active = false
 			continue
 		}
-		client.initial_match_sent = true
-		lobby := shared.Lobby_State{local_id = client.id, team = client.player.team, capacity = i32(ns.team_capacity), select_team = game.config.select_team, team_result = client.team_result, team_names = {game.config.team1_name, game.config.team2_name}}
-		for other in ns.clients {
-			if !other.active || other.player == nil || lobby.count >= shared.MAX_PLAYERS_PER_MATCH { continue }
-			lobby.players[lobby.count] = {id = other.id, team = other.player.team, class_id = other.joined ? other.player.class_index : -1}
-			lobby.count += 1
-		}
-		lobby_buf: [512]byte
-		lobby_size := shared.packet_serialize_lobby(lobby_buf[:], &lobby)
-		if !net_server_send(client, lobby_buf[:lobby_size]) { client.active = false; continue }
+		shared.snapshot_ring_store(client.snapshots, frame)
 		client.team_result = 0
-		if !client.joined {
-			continue
-		}
-
-		for player in game.players {
-			player_state := net_server_player_state(player, player == client.player)
-			state_size := shared.packet_serialize_state(player_buf[:], &player_state)
-			if state_size > 0 {
-				if !net_server_send(client, player_buf[:state_size]) {
-					client.active = false
-					break
-				}
-			}
-		}
-		if !client.active {
-			continue
-		}
-		for &impact in game.impacts {
-			impact_size := shared.packet_serialize_bullet_impact(impact_buf[:], &impact)
-			if impact_size > 0 && !net_server_send(client, impact_buf[:impact_size]) {
-				client.active = false
-				break
-			}
-		}
-		if !client.active {
-			continue
-		}
-		for &event in game.kill_events {
-			kill_size := shared.packet_serialize_kill_feed(kill_buf[:], &event)
-			if kill_size > 0 && !net_server_send(client, kill_buf[:kill_size]) {
-				client.active = false
-				break
-			}
-		}
+		client.snapshot_stats.snapshots += 1
+		client.snapshot_stats.bytes += u64(size)
+		if baseline == nil { client.snapshot_stats.full += 1 }
 	}
 	// Impacts and kills are reliable TCP events. Once every active joined client
 	// has had them queued, retain only new ones generated before the next snapshot.
 	clear(&game.impacts)
 	clear(&game.kill_events)
+}
+
+snapshot_stats_add :: proc(total: ^Snapshot_Stats, s: Snapshot_Stats) {
+	total.snapshots += s.snapshots
+	total.full += s.full
+	total.bytes += s.bytes
+	total.culled += s.culled
+}
+
+// net_server_take_snapshot_stats sums and resets every client's snapshot
+// counters (for the budget log line).
+net_server_take_snapshot_stats :: proc(ns: ^Net_Server) -> (total: Snapshot_Stats) {
+	for client in ns.clients {
+		snapshot_stats_add(&total, client.snapshot_stats)
+		client.snapshot_stats = {}
+	}
+	snapshot_stats_add(&total, ns.snapshot_stats)
+	ns.snapshot_stats = {}
+	return
 }
 
 // The GAME_STATE snapshot of one player; is_you marks the recipient's own.
@@ -449,8 +511,11 @@ net_server_close :: proc(ns: ^Net_Server, reason := shared.Disconnect_Reason.NON
 			shared.player_destroy(client.player)
 		}
 		command_stream_destroy(&client.commands)
+		free(client.snapshots)
 		free(client)
 	}
 	delete(ns.clients)
+	delete(ns.snapshot_buf)
+	free(ns.frame)
 	net.close(ns.listener)
 }

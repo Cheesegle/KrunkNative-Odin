@@ -23,11 +23,58 @@ when ODIN_TEST {
 		ticks:       int,
 		snapshots:   int,
 		corrections: int,
+		link:        Native_Test_Snapshots,
+	}
+
+	// The snapshot codec between a test server and client for the local
+	// player: each snapshot is delta-encoded against the newest one the client
+	// decoded (acknowledged at once on arrival), exactly as on the wire.
+	Native_Test_Snapshots :: struct {
+		server_ring, client_ring: ^shared.Snapshot_Ring,
+		acked:   u32,
+		has_ack: bool,
+		full, delta, bytes: int,
+	}
+
+	native_test_snapshots_init :: proc(link: ^Native_Test_Snapshots) {
+		link.server_ring, link.client_ring = new(shared.Snapshot_Ring), new(shared.Snapshot_Ring)
+	}
+
+	native_test_snapshots_destroy :: proc(link: ^Native_Test_Snapshots) {
+		free(link.server_ring)
+		free(link.client_ring)
+	}
+
+	native_test_snapshot_encode :: proc(link: ^Native_Test_Snapshots, tick: u32, player: ^shared.Player, buf: []byte) -> int {
+		state := ded.net_server_player_state(player, true)
+		if state.player_id == 0 { state.player_id = 1 }
+		frame := new(shared.Snapshot_Frame)
+		defer free(frame)
+		frame.tick, frame.you_id = tick, state.player_id
+		frame.match.tick_rate = 64
+		frame.entities[0] = shared.snapshot_entity_from_state(&state, true)
+		frame.count = 1
+		baseline := link.has_ack ? shared.snapshot_ring_find(link.server_ring, link.acked) : nil
+		size := shared.snapshot_encode(buf, frame, baseline)
+		shared.snapshot_ring_store(link.server_ring, frame)
+		if shared.snapshot_usable_baseline(frame, baseline) == nil { link.full += 1 } else { link.delta += 1 }
+		link.bytes += size
+		return size
+	}
+
+	native_test_snapshot_decode :: proc(link: ^Native_Test_Snapshots, data: []byte) -> (state: shared.Packet_Player_State, ok: bool) {
+		frame := new(shared.Snapshot_Frame)
+		defer free(frame)
+		if shared.snapshot_decode(data, link.client_ring, frame) != .OK || frame.count != 1 { return }
+		shared.snapshot_ring_store(link.client_ring, frame)
+		link.acked, link.has_ack = frame.tick, true
+		return shared.snapshot_entity_to_state(&frame.entities[0], true), true
 	}
 
 	native_session_init :: proc(s: ^Native_Session, rate: i32, tick_rate: int, latency: f64) {
 		native_test_world_init(&s.w, rate)
 		ded.command_stream_init(&s.cs, 0)
+		native_test_snapshots_init(&s.link)
 		s.tick_dt, s.latency = 1 / f64(tick_rate), latency
 		s.w.client.net.connected = true // only selects the native path; nothing touches a socket
 	}
@@ -35,6 +82,7 @@ when ODIN_TEST {
 	native_session_destroy :: proc(s: ^Native_Session) {
 		s.w.client.net.connected = false
 		ded.command_stream_destroy(&s.cs)
+		native_test_snapshots_destroy(&s.link)
 		delete(s.to_server)
 		delete(s.to_client)
 		native_test_world_destroy(&s.w)
@@ -70,15 +118,13 @@ when ODIN_TEST {
 			ded.command_stream_run(&s.cs, s.w.server_player, &s.w.server_game, s.server_now)
 			shared.game_tick(&s.w.server_game, f32(s.server_now), f32(s.tick_dt))
 			clear(&s.w.server_game.impacts)
-			if s.ticks % shared.SNAPSHOT_RATE_DIVISOR == 0 {
-				state := ded.net_server_player_state(s.w.server_player, true)
-				p := Native_Test_Packet{at = s.server_now + s.latency}
-				p.size = shared.packet_serialize_state(p.data[:], &state)
-				append(&s.to_client, p)
-			}
+			// One snapshot per tick (the server default), through the codec.
+			p := Native_Test_Packet{at = s.server_now + s.latency}
+			p.size = native_test_snapshot_encode(&s.link, u32(s.ticks), s.w.server_player, p.data[:])
+			append(&s.to_client, p)
 		}
 		for len(s.to_client) > 0 && s.to_client[0].at <= s.now {
-			state, ok := shared.packet_deserialize_state(s.to_client[0].data[:s.to_client[0].size])
+			state, ok := native_test_snapshot_decode(&s.link, s.to_client[0].data[:s.to_client[0].size])
 			ordered_remove(&s.to_client, 0)
 			if !testing.expect(t, ok, "snapshots must decode") { continue }
 			me := client.me

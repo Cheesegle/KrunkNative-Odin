@@ -101,6 +101,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 		labels, anchor, action = anisotropy_labels[:count], "Anisotropy", .ANISOTROPY
 	case .MENU_FPS_LIMIT: labels, anchor, action = MENU_FPS_LIMIT_LABELS[:], "MenuFpsLimit", .MENU_FPS_LIMIT
 	case .NET_RATE: labels, anchor, action = NET_RATE_LABELS[:], "NetRate", .NET_RATE
+	case .NET_INTERP: labels, anchor, action = NET_INTERP_LABELS[:], "NetInterp", .NET_INTERP
 	case .RANKED_REGION: labels, anchor, action = RANKED_REGION_CHOICES[:], "RankedRegion", .RANKED_REGION
 	case .CHAT_MODE: labels, anchor, action = chat_mode_labels[:], "ChatMode", .CHAT_MODE
 	}

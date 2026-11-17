@@ -66,7 +66,8 @@ when ODIN_TEST {
 	}
 
 	// Commands go through the wire codec to a server command stream that runs
-	// at tick_rate; snapshots go back through the GAME_STATE codec and the real
+	// at tick_rate; snapshots go back through the SNAPSHOT codec (delta against
+	// the acknowledged one, the local player unquantised) and the real
 	// client_reconcile_local_player. 40 ms each way.
 	native_test_replay :: proc(t: ^testing.T, rate: i32, tick_rate: int) -> (result: Native_Replay_Result) {
 		w: Native_Test_World
@@ -76,6 +77,9 @@ when ODIN_TEST {
 		cs: ded.Command_Stream
 		ded.command_stream_init(&cs, 0)
 		defer ded.command_stream_destroy(&cs)
+		link: Native_Test_Snapshots
+		native_test_snapshots_init(&link)
+		defer native_test_snapshots_destroy(&link)
 
 		Packet :: struct { at: f64, data: [shared.INPUT_BATCH_MAX_PACKET]byte, size: int }
 		to_server, to_client: [dynamic]Packet
@@ -122,15 +126,13 @@ when ODIN_TEST {
 				ded.command_stream_run(&cs, w.server_player, &w.server_game, server_now)
 				shared.game_tick(&w.server_game, f32(server_now), f32(tick_dt))
 				clear(&w.server_game.impacts)
-				if server_ticks % shared.SNAPSHOT_RATE_DIVISOR == 0 {
-					state := ded.net_server_player_state(w.server_player, true)
-					p := Packet{at = server_now + LATENCY}
-					p.size = shared.packet_serialize_state(p.data[:], &state)
-					append(&to_client, p)
-				}
+				p := Packet{at = server_now + LATENCY}
+				p.size = native_test_snapshot_encode(&link, u32(server_ticks), w.server_player, p.data[:])
+				testing.expect(t, p.size > 0, "every snapshot must encode")
+				append(&to_client, p)
 			}
 			for len(to_client) > 0 && to_client[0].at <= now {
-				state, ok := shared.packet_deserialize_state(to_client[0].data[:to_client[0].size])
+				state, ok := native_test_snapshot_decode(&link, to_client[0].data[:to_client[0].size])
 				ordered_remove(&to_client, 0)
 				if !testing.expect(t, ok, "snapshots must decode") { continue }
 				corrections := client.net.commands.corrections
@@ -155,14 +157,17 @@ when ODIN_TEST {
 			ded.command_stream_run(&cs, w.server_player, &w.server_game, server_now)
 			shared.game_tick(&w.server_game, f32(server_now), f32(tick_dt))
 		}
-		final := ded.net_server_player_state(w.server_player, true)
+		final_buf: [shared.INPUT_BATCH_MAX_PACKET]byte
+		final_size := native_test_snapshot_encode(&link, u32(server_ticks + 1), w.server_player, final_buf[:])
+		final, final_ok := native_test_snapshot_decode(&link, final_buf[:final_size])
+		testing.expect(t, final_ok, "the final snapshot decodes")
 		corrections := client.net.commands.corrections
 		client_reconcile_local_player(client, client.me, &final, true)
 		if client.net.commands.corrections != corrections { result.corrections += 1 }
 		testing.expect(t, len(client.predicted_inputs) == 0, "every command is acked at the end")
 		result.exact = client.me.position == w.server_player.position && client.me.velocity == w.server_player.velocity && w.server_player.shot_seq > 0
-		fmt.printf("  native replay %3d Hz commands, %3d tick: %d commands, %d snapshots reconciled, %d corrections (max %.9f), server shots %d, |dpos| %.9f\n",
-			rate, tick_rate, result.commands, result.snapshots, result.corrections, result.max_correction, w.server_player.shot_seq,
+		fmt.printf("  native replay %3d Hz commands, %3d tick: %d commands, %d snapshots reconciled (%d full, %d delta, %.1f B avg), %d corrections (max %.9f), server shots %d, |dpos| %.9f\n",
+			rate, tick_rate, result.commands, result.snapshots, link.full, link.delta, f64(link.bytes) / f64(max(1, link.full + link.delta)), result.corrections, result.max_correction, w.server_player.shot_seq,
 			native_test_length(client.me.position - w.server_player.position))
 		return
 	}

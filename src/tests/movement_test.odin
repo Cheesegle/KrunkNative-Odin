@@ -359,6 +359,9 @@ main :: proc() {
 	if !test_input_pipeline() {
 		os.exit(1)
 	}
+	if !test_snapshots() {
+		os.exit(1)
+	}
 	if !test_wall_jump() || !test_wall_jump_limit() || !test_movement_animation() || !test_walking_animation() {
 		os.exit(1)
 	}
