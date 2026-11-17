@@ -48,6 +48,9 @@ spawn_fixture :: proc(spawns: []shared.Spawn, objects: []shared.Object = nil, te
 	game.is_local = true
 	game.ready = true
 	game.match.phase = .LIVE
+	// A running clock: at 0 a 0:0 tie now ends the match as a draw (Krunker's
+	// endGame), and nobody respawns into an ended match.
+	game.match.time_remaining = 600
 	game.match.objective.active_object_index = -1
 	return {game, map_inst}
 }

@@ -141,6 +141,24 @@ client_end_screen :: proc(client: ^Client) -> End_Screen {
 	return screen
 }
 
+// Krunker's initNewGameAsync once the end timer runs out: a new game on a
+// random map from the list, with every player back at the menu to deploy
+// again. Local Practice rotates maps; the idle background game behind the
+// menu restarts on its current map so it never reloads one unseen.
+client_local_new_game :: proc(client: ^Client) {
+	game := &client.game
+	if !game.new_game_pending || !game.is_local || client.net.connected || client.krunker.connected { return }
+	next := game.current_map_index
+	if client.local_practice && game.map_count > 0 { next = shared.rand_map_index(game.map_count) }
+	changed := next >= 0 && next < game.map_count && game.maps_list[next] != game.map_inst
+	if changed { client_unload_map(client) }
+	client_clear_players(client)
+	kill_feed_clear(&client.kill_feed)
+	client.has_life = false
+	shared.game_init(game, next, -1, true)
+	if changed { client_load_current_map(client) }
+}
+
 client_match_ended :: proc(client: ^Client) -> bool {
 	if client.krunker.connected { return client.krunker_world.has_match && client.krunker_world.match.phase == .ENDED }
 	return (client.net.connected || client.local_practice) && client.game.ready && client.game.match.phase == .ENDED

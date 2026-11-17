@@ -706,6 +706,8 @@ Game :: struct {
 	server_hits_players: bool,
 	ready:        bool,
 	end_timer:    f32,
+	// Set when end_timer runs out; cleared by game_init.
+	new_game_pending: bool,
 	nuke_timer:   f32,
 	nuke_player:  ^Player,
 	vote_kick:    ^Vote_Kick,
