@@ -338,6 +338,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		}
 	}
 	view.class_pending = view.confirmed_class != view.selected_class && (view.spawn_pending || view.active && view.live_class_changes)
+	if view.presentation == .COMPETITIVE { menuui.competitive_roster_hide_enemy_classes(view.players, client.lobby_team) }
 	return view
 }
 
