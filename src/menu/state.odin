@@ -29,6 +29,9 @@ HUD_Settings :: struct {
 	nametag_scale: f32, // See nametag_scale; 0 (a file without the key) is 100%.
 	nametag_colors: Nametag_Colors,
 	kill_feed_size: f32,
+	// Inverts Krunker's scopeBorders ("Scope borders", mods category, default
+	// on): the black fill around the sniper scope image.
+	hide_scope_borders: bool,
 }
 // Nameplate healthbar fills, Krunker's healthColE ("Nametag Health Color E")
 // and healthColT ("Nametag Health Color Team"). A zero value predates these
@@ -661,6 +664,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 5: state.settings_draft.hud.hide_healthbars = !state.settings_draft.hud.hide_healthbars
 			case 6: state.settings_draft.hud.hide_kill_feed = !state.settings_draft.hud.hide_kill_feed
 			case 7: state.settings_draft.hud.healthbar_border = !state.settings_draft.hud.healthbar_border
+			case 8: state.settings_draft.hud.hide_scope_borders = !state.settings_draft.hud.hide_scope_borders
 			}
 			return {}
 		case .RESOLUTION:
