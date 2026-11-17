@@ -34,7 +34,7 @@ $extras = @("VERSION", "assets/css/fonts/Rajdhani-OFL.txt", "assets/hrtf/LICENSE
 # Only game data may come from the sweep manifest; anything else is a bug.
 $allowedRoots = @("assets/", "krunker-configs/")
 # User-specific, secret or test files that must never ship.
-$forbidden = @(".env", "client-settings.json", "audio-settings.json", "mod.zip", "*_tests.exe", "*_dev.exe", "*.ppm", "*.pdb")
+$forbidden = @(".env", "client-settings.json", "audio-settings.json", "mod.zip", "*_tests.exe", "*_dev.exe", "*_spectator.exe", "*.ppm", "*.pdb")
 
 $readme = @"
 Krodin $version ($sha) - tester build

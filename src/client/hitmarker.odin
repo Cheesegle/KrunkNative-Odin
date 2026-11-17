@@ -86,7 +86,9 @@ client_hit_marker_present :: proc(client: ^Client, event: shared.Presentation_Ev
 // are server bullet impacts on players fired by the local player.
 client_hit_marker_tick_live :: proc(client: ^Client) {
 	if !client.krunker.connected { return }
+	// Spectating: only the followed player's hits, see spectator_hits.
 	world := &client.krunker_world
+	if client_spectating(client) { client.hit_marker.revision = world.hit_revision; return }
 	if world.hit_revision == client.hit_marker.revision { return }
 	client.hit_marker.revision = world.hit_revision
 	if world.hit_revision > 0 { hit_marker_show(&client.hit_marker, client_hitmarker_values(client), world.hit_lethal, world.hit_headshot) }

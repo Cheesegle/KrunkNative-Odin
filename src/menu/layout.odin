@@ -23,6 +23,7 @@ class_selectable :: proc(view: View, class: Class) -> bool {
 
 play_label :: proc(view: View) -> string {
 	if !view.active && view.respawn_remaining > 0 { return fmt.tprintf("Respawn in %d", int(view.respawn_remaining+0.999)) }
+	if KRODIN_SPECTATOR { return view.active ? "Resume" : "Spectate" }
 	return view.active ? "Resume" : view.has_life ? "Respawn" : "Enter Game"
 }
 
@@ -33,6 +34,7 @@ play_reason :: proc(view: View) -> string {
 	if !view.ready { return "Waiting for lobby data..." }
 	if view.spawn_pending { return "Waiting for server spawn confirmation..." }
 	if view.team_pending { return "Waiting for team confirmation..." }
+	if KRODIN_SPECTATOR { return "" } // Any class: the server ignores it for spectators.
 	for class in view.classes {
 		if class.id != view.selected_class { continue }
 		if !class.available { return len(class.reason)>0 ? class.reason : "Choose an available class" }
@@ -44,6 +46,7 @@ play_reason :: proc(view: View) -> string {
 
 build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32) -> clay.ClayArray(clay.RenderCommand) {
 	clay.SetCurrentContext(state.ctx)
+	if KRODIN_SPECTATOR && state.page == .RANKED { state.page = .HOME }
 	prepare_settings(state, view)
 	clay.SetLayoutDimensions({width, height})
 	clay.SetPointerState(input.pointer, input.down)
@@ -82,7 +85,10 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 		}
 		if clay.UI(clay.ID("Footer"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(200*s)}}}) { button(state, "Session / Invite", "Session", {index = i32(Page.SESSION)}) }
-			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Ranked", "Ranked", {kind = .RANKED_OPEN}) }
+			// Ranked forbids spectators: the spectator build has no Ranked entry.
+			if !KRODIN_SPECTATOR {
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Ranked", "Ranked", {kind = .RANKED_OPEN}) }
+			}
 			spacer()
 			text("Tab  Navigate     Enter  Select     Esc  Back", 16, s, MUTED)
 			spacer()
@@ -108,7 +114,7 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 					case .SETTINGS, .CONTROLS:
 					case .CLASSES: class_picker(state, view)
 					case .LOADOUT: class_loadout(state, view)
-					case .RANKED: ranked_page(state, view)
+					case .RANKED: if !KRODIN_SPECTATOR { ranked_page(state, view) }
 					case .SESSION:
 						text("Session / Invite", 32, s)
 						text(view.lobby_name, 20, s, MUTED)

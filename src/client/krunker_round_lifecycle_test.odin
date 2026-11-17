@@ -113,7 +113,7 @@ when ODIN_TEST {
 		testing.expect(t, abs(krunker_client_respawn_remaining(&client, world.received_at)-1.8) < 0.001, "duplicate deaths must not restart the cooldown")
 		testing.expect(t, krunker_client_respawn_remaining(&client, world.received_at+2) == 0)
 		view.respawn_remaining = 0
-		testing.expect(t, menuui.play_label(view) == "Respawn" && menuui.play_reason(view) == "")
+		testing.expect(t, menuui.play_label(view) == (KRODIN_SPECTATOR ? "Spectate" : "Respawn") && menuui.play_reason(view) == "")
 		world.respawn_available_at = 0
 		peer := kproto.krunker_world_upsert_player(world, 8); peer.active = true
 		gameplay_packet(world, "3", i64(8), i64(1))

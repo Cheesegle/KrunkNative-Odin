@@ -83,7 +83,7 @@ when ODIN_TEST {
 		testing.expect(t, menuui.binding_visible(.DEBUG_OVERLAY) == KRODIN_DEV, "the debug overlay bind is listed only in developer builds")
 		testing.expect(t, menuui.KRODIN_DEV == KRODIN_DEV, "client and menu agree on the developer flag")
 		for action in menuui.Binding_Action {
-			if action != .DEBUG_OVERLAY { testing.expect(t, menuui.binding_visible(action), "every other bind stays listed") }
+			if action != .DEBUG_OVERLAY && action != .SPECTATOR_DOWN { testing.expect(t, menuui.binding_visible(action), "every other bind stays listed") }
 		}
 	}
 

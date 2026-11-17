@@ -2,13 +2,15 @@ package menu
 
 import "core:fmt"
 
-Binding_Action :: enum { FORWARD, BACKWARD, LEFT, RIGHT, JUMP, CROUCH, AIM, FIRE, RELOAD, SECONDARY, MELEE, MENU, FULLSCREEN, INSPECT, LEADERBOARD, DEBUG_OVERLAY, CHAT }
+Binding_Action :: enum { FORWARD, BACKWARD, LEFT, RIGHT, JUMP, CROUCH, AIM, FIRE, RELOAD, SECONDARY, MELEE, MENU, FULLSCREEN, INSPECT, LEADERBOARD, DEBUG_OVERLAY, CHAT, SPECTATOR_DOWN }
 // Developer builds only (-define:KRODIN_DEV=true); must match the client's flag.
 KRODIN_DEV :: #config(KRODIN_DEV, false)
 
 // Whether an action is listed in Settings > Key binds. The debug overlay
 // toggle only exists in developer builds.
 binding_visible :: proc(action: Binding_Action) -> bool {
+	// The spectator build's free-cam descent (Krodin-only) is listed there only.
+	if action == .SPECTATOR_DOWN { return KRODIN_SPECTATOR }
 	return action != .DEBUG_OVERLAY || KRODIN_DEV
 }
 
@@ -22,7 +24,7 @@ BINDING_SCROLL :: i32(20000)
 BINDING_NAMES := [Binding_Action]string{
 	.FORWARD = "Forward", .BACKWARD = "Backward", .LEFT = "Left", .RIGHT = "Right", .JUMP = "Jump", .CROUCH = "Crouch / slide",
 	.AIM = "Aim down sights", .FIRE = "Fire", .RELOAD = "Reload", .SECONDARY = "Secondary / primary", .MELEE = "Melee / primary", .MENU = "Menu / resume", .FULLSCREEN = "Fullscreen",
-	.INSPECT = "Inspect weapon", .LEADERBOARD = "Leaderboard", .DEBUG_OVERLAY = "Debug overlay", .CHAT = "Chat",
+	.INSPECT = "Inspect weapon", .LEADERBOARD = "Leaderboard", .DEBUG_OVERLAY = "Debug overlay", .CHAT = "Chat", .SPECTATOR_DOWN = "Spectator: free cam down",
 }
 
 default_bindings :: proc() -> Bindings {
@@ -33,7 +35,10 @@ default_bindings :: proc() -> Bindings {
 		// The debug performance window toggles with F3 (GLFW key 292).
 		.DEBUG_OVERLAY = {292, 0},
 		// Krunker binds.chat (chatKey) defaults to Enter, keyCode 13.
-		.CHAT = {257, 0}}
+		.CHAT = {257, 0},
+		// Spectator build: free cam down, Left or Right Ctrl (Krodin-only;
+		// Krunker's spectator uses Q, which also still works).
+		.SPECTATOR_DOWN = {341, 345}}
 }
 
 binding_valid :: proc(code: i32) -> bool {

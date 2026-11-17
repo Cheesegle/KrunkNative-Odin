@@ -539,6 +539,10 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 			if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
 		}
 		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, len(packet) > 3 && krunker_world_bool(packet[3]), len(packet) > 4 && krunker_world_bool(packet[4])
+		state.hit_victim_sid = -1
+		if len(packet) > 1 {
+			if sid, ok := krunker_world_bounded_number(packet[1], 0, 2147483647); ok { state.hit_victim_sid = i32(sid) }
+		}
 		state.hit_revision += 1
 		return true
 	case "6":

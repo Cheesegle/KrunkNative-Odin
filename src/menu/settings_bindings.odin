@@ -16,7 +16,7 @@ settings_bindings :: proc(state: ^State) {
 	// Display inspect with weapons and the leaderboard under Interface, as in
 	// Krunker's controls list, while preserving saved enum values. The debug
 	// overlay toggle sits beside the leaderboard.
-	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .CHAT, .DEBUG_OVERLAY, .MENU, .FULLSCREEN}) {
+	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .CHAT, .DEBUG_OVERLAY, .SPECTATOR_DOWN, .MENU, .FULLSCREEN}) {
 		if action == .FORWARD { settings_section(state, "Move") }
 		if action == .AIM { settings_section(state, "Weapon") }
 		if action == .LEADERBOARD { settings_section(state, "Interface") }
@@ -81,6 +81,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	spatial_labels := [3]string{SPATIAL_AUDIO_LABELS[.HRTF], SPATIAL_AUDIO_LABELS[.STEREO], spatial_audio_label(2, view.surround_channels)}
 	falloff_labels := [3]string{DISTANCE_FALLOFF_LABELS[.KRUNKER], DISTANCE_FALLOFF_LABELS[.REDUCED], DISTANCE_FALLOFF_LABELS[.OFF]}
 	chat_mode_labels := [3]string{CHAT_MODE_LABELS[.ALWAYS], CHAT_MODE_LABELS[.WHILE_FOCUSED], CHAT_MODE_LABELS[.OFF]}
+	spectator_on_death_labels := [3]string{SPECTATOR_ON_DEATH_LABELS[.RANDOM], SPECTATOR_ON_DEATH_LABELS[.KILLER], SPECTATOR_ON_DEATH_LABELS[.STAY]}
 	lighting_labels := [4]string{LIGHTING_LABELS[.LOW], LIGHTING_LABELS[.NORMAL], LIGHTING_LABELS[.HIGH], LIGHTING_LABELS[.PHYSICAL]}
 	labels: []string
 	anchor: string
@@ -103,6 +104,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .NET_RATE: labels, anchor, action = NET_RATE_LABELS[:], "NetRate", .NET_RATE
 	case .RANKED_REGION: labels, anchor, action = RANKED_REGION_CHOICES[:], "RankedRegion", .RANKED_REGION
 	case .CHAT_MODE: labels, anchor, action = chat_mode_labels[:], "ChatMode", .CHAT_MODE
+	case .SPECTATOR_ON_DEATH: labels, anchor, action = spectator_on_death_labels[:], "SpectatorOnDeath", .SPECTATOR_ON_DEATH
 	}
 	// While open, Tab and arrow keys navigate the popup, not controls behind it.
 	state.control_count = 0

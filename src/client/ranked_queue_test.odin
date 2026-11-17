@@ -344,6 +344,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_refuses_guest_and_missing_tokens :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		r: Ranked_Test
 		guest := ranked_test_jwt("guest", 3600, guest = true); defer delete(guest)
 		if !ranked_test_begin(t, &r, "guest", guest) { return }
@@ -366,6 +368,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_queue_matches_and_joins :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		r: Ranked_Test
 		token := ranked_test_jwt("account", 3600); defer delete(token)
 		if !ranked_test_begin(t, &r, "match", token) { return }
@@ -394,6 +398,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_queue_errors_cooldown_and_rejoin :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		r: Ranked_Test
 		token := ranked_test_jwt("errors", 3600); defer delete(token)
 		if !ranked_test_begin(t, &r, "errors", token) { return }
@@ -434,6 +440,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_leave_queue_and_server_close :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		r: Ranked_Test
 		token := ranked_test_jwt("leave", 3600); defer delete(token)
 		if !ranked_test_begin(t, &r, "leave", token) { return }
@@ -462,6 +470,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_connect_failure_and_running_match_check :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		r: Ranked_Test
 		token := ranked_test_jwt("check", 3600); defer delete(token)
 		if !ranked_test_begin(t, &r, "check", token) { return }
@@ -555,6 +565,8 @@ when ODIN_TEST {
 
 	@(test)
 	ranked_menu_renders :: proc(t: ^testing.T) {
+		// The spectator build has no ranked queue; spectator_ranked_test.odin covers that.
+		if KRODIN_SPECTATOR { return }
 		logger := context.logger
 		context = runtime.default_context()
 		context.logger = logger

@@ -115,6 +115,10 @@ Krunker_World_State :: struct {
 	is_ranked:   bool,
 	ready:       bool,
 	in_game:     bool,
+	// START's third argument (browser u3e(timer, team, spectating, ...),
+	// `window.spectating`): the server accepted ENTER_GAME with its spectate
+	// flag (en[6]) and this socket now watches instead of playing.
+	spectating:  bool,
 	move_lock:   bool,
 	game_config: shared.Game_Config,
 	has_game_config: bool,
@@ -176,6 +180,10 @@ Krunker_World_State :: struct {
 	hit_revision: u64,
 	hit_lethal: bool,
 	hit_headshot: bool,
+	// DO_DAMAGE's first value, the damaged player's SID (-1 when bare: an
+	// object, spawnable or nuke). A spectator gets it for the followed
+	// player's hits (spectator.odin).
+	hit_victim_sid: i32,
 	// CHANGE_HEALTH drops of the local player with the attacker's x/z, for
 	// Krunker's hit indicators (browser JP).
 	damage_revision: u64,
@@ -298,6 +306,7 @@ krunker_world_apply_init :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	clear(&state.shots)
 	clear(&state.kills)
 	state.in_game = false
+	state.spectating = false
 	krunker_world_init_match(state, packet)
 	state.mode_index = krunker_world_i32(packet[2], -1)
 	state.is_comp = false
@@ -315,7 +324,8 @@ krunker_world_apply_start :: proc(state: ^Krunker_World_State, packet: []Krunker
 	if len(packet) < 3 { return false }
 	if opcode, ok := packet[0].(string); !ok || opcode != "start" { return false }
 	// start(timer, team, spectating, challengeMode, moveLock, ... classIndex)
-	if len(packet) > 2 && state.local_sid >= 0 {
+	state.spectating = len(packet) > 3 && krunker_world_bool(packet[3])
+	if len(packet) > 2 && state.local_sid >= 0 && !state.spectating {
 		local := krunker_world_upsert_player(state, state.local_sid)
 		// START has no coordinates. A dead life's pose must not become the
 		// new spawn while we wait for its roster/snapshot. A roster received
@@ -420,6 +430,10 @@ krunker_world_apply_update_players :: proc(state: ^Krunker_World_State, packet: 
 		player.ping = krunker_world_i32(records[offset + 12], player.ping)
 		if len(packet) > 2 { player.send_rate = clamp(krunker_world_f32(packet[2], 10), 1, 128) }
 		krunker_world_buffer_pose(player, state.received_at)
+		if player.pose_count > 0 && state.has_server_time && state.sync_received_at == state.received_at {
+			player.poses[player.pose_count-1].server_time = state.server_time / 1000
+			player.poses[player.pose_count-1].has_server_time = true
+		}
 		player.active = true
 		player.has_position = true
 		player.revision += 1

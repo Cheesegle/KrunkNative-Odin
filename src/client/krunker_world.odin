@@ -86,6 +86,8 @@ krunker_client_sync_world :: proc(client: ^Client) {
 	if state.player_loadout_revisions == nil { state.player_loadout_revisions = make(map[i32]u64) }
 	for &source in world.players {
 		is_you := source.sid == world.local_sid
+		// A spectator has no body of its own to show or predict.
+		if is_you && world.spectating { continue }
 		if !source.has_position || is_you && !world.in_game && source.active do continue
 		if revision, found := state.player_revisions[source.sid]; found && revision == source.revision do continue
 		state.player_revisions[source.sid] = source.revision

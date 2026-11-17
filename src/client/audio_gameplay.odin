@@ -110,7 +110,8 @@ client_audio_tick :: proc(client: ^Client, delta: f32) {
 		world := &client.krunker_world
 		if world.hit_revision != client.audio.hit_revision {
 			client.audio.hit_revision = world.hit_revision
-			if world.hit_revision > 0 { audio_play_effect(client.audio, world.hit_headshot ? "crit_0" : "hit_0", gain = 0.7, priority = 4) }
+			// Spectating, spectator_hits plays the followed player's hits.
+			if world.hit_revision > 0 && !client_spectating(client) { audio_play_effect(client.audio, world.hit_headshot ? "crit_0" : "hit_0", gain = 0.7, priority = 4) }
 		}
 		if world.health_drop_revision != client.audio.health_drop_revision {
 			drop := world.health_drop_revision > client.audio.health_drop_revision

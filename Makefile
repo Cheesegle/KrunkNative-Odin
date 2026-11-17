@@ -9,7 +9,7 @@ PROFILE ?= none
 
 UNAME_S := $(shell uname -s)
 
-.PHONY: all client dev server check-server test check clean dist-windows
+.PHONY: all client dev spectator server check-server test check clean dist-windows
 
 all: client server
 
@@ -46,6 +46,12 @@ dev:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client_dev -o:$(PROFILE) -define:KRODIN_DEV=true
 
+# Experimental spectator client (KRODIN_SPECTATOR): joins Krunker lobbies as a
+# spectator only. Separate file name so it is never packaged.
+spectator:
+	mkdir -p $(BIN_DIR)
+	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_spectator -o:$(PROFILE) -define:KRODIN_SPECTATOR=true
+
 server:
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/server -out:$(BIN_DIR)/krodin_server -o:$(PROFILE)
@@ -64,10 +70,11 @@ test:
 check:
 	$(ODIN) check src/client
 	$(ODIN) check src/client -define:KRODIN_DEV=true
+	$(ODIN) check src/client -define:KRODIN_SPECTATOR=true
 	$(ODIN) check src/server
 
 clean:
-	rm -f $(BIN_DIR)/krodin_client $(BIN_DIR)/krodin_client_dev $(BIN_DIR)/krodin_server $(BIN_DIR)/krodin_tests
+	rm -f $(BIN_DIR)/krodin_client $(BIN_DIR)/krodin_client_dev $(BIN_DIR)/krodin_spectator $(BIN_DIR)/krodin_server $(BIN_DIR)/krodin_tests
 
 dist-windows: client
 	@echo "Windows builds statically by default (vendor links glfw3_mt.lib); no DLL needed."
