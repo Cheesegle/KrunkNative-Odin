@@ -77,7 +77,7 @@ client_diagnostics_check :: proc(client: ^Client) {
 		return
 	}
 	status: u32
-	when KRODIN_VULKAN { status = gpu_device_lost() ? GPU_RESET_DEVICE_LOST : 0 } else { status = u32(gl.GetGraphicsResetStatus()) }
+	if g_gpu_backend == .Vulkan { status = gpu_device_lost() ? GPU_RESET_DEVICE_LOST : 0 } else { status = u32(gl.GetGraphicsResetStatus()) }
 	reset := gpu_reset_poll(status)
 	if after_hang && reset == 0 {
 		crash_log_append(crash_hang_log_path(), g_diag.gl_reset_status == 0 ? "GPU reset check after the hang: none detected.\n" : "GPU reset check after the hang: a reset was reported earlier (see above).\n")

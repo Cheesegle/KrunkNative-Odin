@@ -94,9 +94,11 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Display")
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_toggle_row(state, "Vulkan Renderer", "Vulkan", values.vulkan, {kind = .GRAPHICS_API})
 		settings_game_fps_limit_row(state)
 		settings_menu_fps_limit_row(state)
 		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution.")
+		settings_note(state, "Vulkan Renderer draws with Vulkan instead of OpenGL; the change applies the next time Krodin starts. A GPU or driver without Vulkan 1.3 uses OpenGL.")
 		settings_note(state, "Game FPS limit (Krunker's Frame Cap) caps frames while you play; 0 is unlimited, Krunker's default. With V-Sync also on, the lower rate wins. Menu FPS limit caps menus, loading and the end screen.")
 		settings_quality(state, view)
 	case .VISUALS:
@@ -319,6 +321,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
 		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
 		draft.vsync, draft.menu_fps_limit, draft.game_fps_limit, draft.quality = defaults.vsync, defaults.menu_fps_limit, defaults.game_fps_limit, defaults.quality
+		draft.vulkan = defaults.vulkan
 	case .VISUALS:
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:

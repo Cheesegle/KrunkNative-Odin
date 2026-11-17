@@ -30,6 +30,7 @@ when ODIN_TEST {
 	g_test_gpu: ^Test_Gpu
 
 	test_gpu_open :: proc(width, height: i32, title: cstring = "Krodin test") -> (gpu: Test_Gpu) {
+		g_gpu_backend = KRODIN_VULKAN ? .Vulkan : .OpenGL
 		when KRODIN_VULKAN {
 			glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
 			glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)

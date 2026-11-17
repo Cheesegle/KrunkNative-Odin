@@ -9,7 +9,7 @@ PROFILE ?= none
 
 UNAME_S := $(shell uname -s)
 
-.PHONY: all client dev spectator server check-server test check clean dist-windows
+.PHONY: all client dev spectator spirv server check-server test check clean dist-windows
 
 all: client server
 
@@ -28,27 +28,22 @@ endif
 endif
 endif
 
-client:
+client: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client -o:$(PROFILE)
-
-# Client on the Vulkan backend; the SPIR-V comes from tools/build-spirv.sh.
-vulkan: spirv
-	mkdir -p $(BIN_DIR)
-	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client_vk -o:$(PROFILE) -define:KRODIN_VULKAN=true
 
 spirv:
 	sh tools/build-spirv.sh
 
 # Developer client with debug tools (KRODIN_DEV, F3 window). Separate file
 # name so it is never packaged for testers.
-dev:
+dev: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_client_dev -o:$(PROFILE) -define:KRODIN_DEV=true
 
 # Experimental spectator client (KRODIN_SPECTATOR): joins Krunker lobbies as a
 # spectator only. Separate file name so it is never packaged.
-spectator:
+spectator: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/krodin_spectator -o:$(PROFILE) -define:KRODIN_SPECTATOR=true
 
@@ -67,7 +62,7 @@ test:
 	$(ODIN) build src/tests -out:$(BIN_DIR)/krodin_tests -o:none
 	./$(BIN_DIR)/krodin_tests
 
-check:
+check: spirv
 	$(ODIN) check src/client
 	$(ODIN) check src/client -define:KRODIN_DEV=true
 	$(ODIN) check src/client -define:KRODIN_SPECTATOR=true

@@ -9,7 +9,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, RANKED }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, NET_INTERP, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE, REMEMBER_SECONDARY, CHAT_MODE, CHAT_VALUE, CHAT_TOGGLE, SPECTATOR_SMOOTHING, SPECTATOR_TOGGLE, SPECTATOR_ON_DEATH }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, JOIN_GUEST, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_IMPORT_EXCLUDE, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NET_RATE, NET_INTERP, GAME_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, KILL_FEED_SIZE, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, SPATIAL_AUDIO, DISTANCE_FALLOFF, LEVELLING_TOGGLE, LEVELLING_STRENGTH, NAMETAG_SIZE, RANKED_OPEN, RANKED_QUEUE, RANKED_REGION, RANKED_MAP, RANKED_POPUP_CLOSE, REMEMBER_SECONDARY, CHAT_MODE, CHAT_VALUE, CHAT_TOGGLE, SPECTATOR_SMOOTHING, SPECTATOR_TOGGLE, SPECTATOR_ON_DEATH, GRAPHICS_API }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, HUD }
 Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, NET_RATE, NET_INTERP, LIGHTING, SHADOW_QUALITY, SPATIAL_AUDIO, DISTANCE_FALLOFF, RANKED_REGION, CHAT_MODE, SPECTATOR_ON_DEATH }
@@ -148,6 +148,7 @@ Settings_Values :: struct {
 	levelling_strength: f32,
 	show_fps: bool,
 	vsync: bool,
+	vulkan: bool, // Graphics API: Vulkan, else OpenGL (applied at the next start)
 	menu_fps_limit: i32, // See MENU_FPS_LIMITS.
 	game_fps_limit: i32, // Krunker's Frame Cap: 0 unlimited, else 10-1200; see game_fps_limit_validate.
 	net_rate: i32, // Krunker's netRate in Hz, one of shared.NET_RATES.
@@ -217,6 +218,7 @@ View :: struct {
 	monitor_index: i32,
 	monitor_names: []string,
 	vsync: bool,
+	vulkan: bool,
 	menu_fps_limit: i32,
 	game_fps_limit: i32,
 	net_rate: i32,
@@ -350,7 +352,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, spatial_audio = view.spatial_audio, distance_falloff = view.distance_falloff, levelling = view.levelling, levelling_strength = view.levelling_strength, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
-			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), game_fps_limit = game_fps_limit_validate(view.game_fps_limit), net_rate = shared.net_rate_validate(view.net_rate), net_interp = net_interp_validate(view.net_interp), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
+			monitor_index = view.monitor_index, vsync = view.vsync, vulkan = view.vulkan, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), game_fps_limit = game_fps_limit_validate(view.game_fps_limit), net_rate = shared.net_rate_validate(view.net_rate), net_interp = net_interp_validate(view.net_interp), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
 			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage), remember_secondary = view.remember_secondary, spectator = spectator_settings_validate(view.spectator)}
 		state.settings_active = true
 	}
@@ -759,6 +761,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			state.settings_resolution_selected = true
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
+		case .GRAPHICS_API: state.settings_draft.vulkan = !state.settings_draft.vulkan; return {}
 		case .REMEMBER_SECONDARY: state.settings_draft.remember_secondary = !state.settings_draft.remember_secondary; return {}
 		case .SPECTATOR_SMOOTHING:
 			if value := control.action.value; value == value { state.settings_draft.spectator.smoothing = clamp(value, 0, 1) } // Skips NaN.
@@ -902,7 +905,7 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .HOME { container = "ClassStrip" }
 		if page == .CLASSES { container = "ClassPicker" }
 	}
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .REMEMBER_SECONDARY || control.action.kind == .SPECTATOR_TOGGLE || control.action.kind == .CHAT_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .LEVELLING_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .REMEMBER_SECONDARY || control.action.kind == .GRAPHICS_API || control.action.kind == .SPECTATOR_TOGGLE || control.action.kind == .CHAT_TOGGLE || control.action.kind == .UNBIND_KEY) { container = "SettingsPanel" }
 	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .NET_RATE || control.action.kind == .NET_INTERP || control.action.kind == .SPECTATOR_ON_DEATH || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY || control.action.kind == .SPATIAL_AUDIO || control.action.kind == .DISTANCE_FALLOFF || control.action.kind == .RANKED_REGION || control.action.kind == .CHAT_MODE { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }

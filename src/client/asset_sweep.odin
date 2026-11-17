@@ -23,10 +23,7 @@ asset_sweep_output_paths :: proc(manifest: string) -> (missing, optional: string
 }
 
 asset_sweep_run :: proc(manifest: string) -> int {
-	when KRODIN_VULKAN {
-		fmt.eprintln("[Sweep] --asset-sweep runs on the OpenGL client (krodin_client.exe)")
-		return ASSET_SWEEP_EXIT_FAILED
-	}
+	g_gpu_backend = .OpenGL // the sweep renders in its own hidden GL context
 	shared.asset_trace_begin()
 	defer shared.asset_trace_end()
 

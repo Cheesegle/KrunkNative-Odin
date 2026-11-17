@@ -89,6 +89,7 @@ Client :: struct {
 	batch_self_test_done: bool,
 	render_target: Gpu_Render_Target, // Target of the world pass; 0 (the window) except in benchmark mode.
 	settings_dirty, vsync: bool,
+	opengl: bool, // Settings > Video > Vulkan Renderer off: OpenGL from the next start.
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	game_fps_limit: i32, // menuui.game_fps_limit_validate: 0 = unlimited (Krunker's Frame Cap default).
@@ -451,6 +452,8 @@ Client_Options :: struct {
 	gpu_debug: bool, // GL: debug context + KHR_debug log (logs/gl-debug.log); Vulkan: validation (logs/gpu-debug.log).
 	no_gl_robustness: bool, // Create the context without GPU reset notification.
 	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
+	backend: Gpu_Backend, // --vulkan / --opengl, over the saved Graphics API setting
+	backend_set: bool,
 }
 
 print_client_help :: proc() {
@@ -480,6 +483,9 @@ print_client_help :: proc() {
 	fmt.println("                        logs/gl-debug.log, or Vulkan validation to")
 	fmt.println("                        logs/gpu-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
+	fmt.println("      --vulkan, --opengl")
+	fmt.println("                        Draw with this graphics API for this run (default:")
+	fmt.println("                        Settings > Video > Vulkan Renderer, which is on)")
 	fmt.println("      --no-cpu-pinning  Let the OS place threads instead of giving the game")
 	fmt.println("                        thread its own core (never core 0) and keeping")
 	fmt.println("                        networking and helper threads off it")
@@ -548,6 +554,10 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.gpu_debug = true
 		case "--no-gl-robustness":
 			options.no_gl_robustness = true
+		case "--vulkan":
+			options.backend, options.backend_set = .Vulkan, true
+		case "--opengl":
+			options.backend, options.backend_set = .OpenGL, true
 		case "--no-cpu-pinning":
 			options.no_cpu_pinning = true
 		case "-m", "--map":
@@ -1690,11 +1700,16 @@ client_render_world :: proc(client: ^Client) {
 	when KRODIN_DEV { debug_render_after_viewmodel(client) }
 }
 
+// The graphics API a run starts with: --vulkan / --opengl, else the saved
+// setting (Vulkan unless turned off).
+client_pick_backend :: proc(options: Client_Options, opengl_setting: bool) -> Gpu_Backend {
+	if options.backend_set { return options.backend }
+	return opengl_setting ? .OpenGL : .Vulkan
+}
+
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
 	if g_client == nil || g_client.window != window { return }
-	when !KRODIN_VULKAN {
-		if glfw.GetCurrentContext() != window { return }
-	}
+	if g_gpu_backend == .OpenGL && glfw.GetCurrentContext() != window { return }
 	context = runtime.default_context()
 	// Vulkan resizes the window target and swapchain at the next frame start.
 	gpu_set_target(g_client.render_target, width, height)
@@ -1726,6 +1741,7 @@ main :: proc() {
 	}
 	g_gl_robustness_wanted = !options.no_gl_robustness
 	if len(options.bench_maps) > 0 {
+		g_gpu_backend = client_pick_backend(options, client_settings_load().opengl)
 		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
 	}
 	diagnostics_name_thread("Krodin main")
@@ -1752,6 +1768,7 @@ main :: proc() {
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
+	client.opengl = preferences.opengl
 	client.menu_fps_limit = preferences.menu_fps_limit
 	client.game_fps_limit = preferences.game_fps_limit
 	client.net_rate = preferences.net_rate
@@ -1784,11 +1801,23 @@ main :: proc() {
 	defer crash_handler_uninstall()
 
 	window_title: cstring = KRODIN_SPECTATOR ? "Krodin Spectator" : "Krodin"
-	when KRODIN_VULKAN {
-		// No GL context: the window gets a Vulkan surface (gpu_vk_init).
+	backend := client_pick_backend(options, client.opengl)
+	if backend == .Vulkan {
+		// No GL context: the window gets a Vulkan surface. A GPU or driver that
+		// cannot run Vulkan 1.3 gets a fresh OpenGL window instead.
 		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
 		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
-	} else {
+		glfw.DefaultWindowHints()
+		g_vk_debug.wanted = options.gpu_debug
+		g_gpu_backend = .Vulkan
+		if client.window == nil || !gpu_vk_init(client.window) {
+			fmt.eprintln("[GPU] Vulkan is not available on this GPU or driver; using OpenGL")
+			if client.window != nil { glfw.DestroyWindow(client.window); client.window = nil }
+			backend = .OpenGL
+		}
+	}
+	g_gpu_backend = backend
+	if backend == .OpenGL {
 		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 		if options.gpu_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
@@ -1823,7 +1852,7 @@ main :: proc() {
 	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.SetWindowFocusCallback(client.window, client_window_focus_changed)
 	glfw.SetWindowIconifyCallback(client.window, client_window_iconify_changed)
-	when !KRODIN_VULKAN { glfw.MakeContextCurrent(client.window) }
+	if backend == .OpenGL { glfw.MakeContextCurrent(client.window) }
 
 	// The native Windows path owns raw mouse input (and decides whether GLFW's
 	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
@@ -1834,12 +1863,7 @@ main :: proc() {
 	}
 	defer client_mouse_fini()
 
-	when KRODIN_VULKAN {
-		g_vk_debug.wanted = options.gpu_debug
-		if !gpu_vk_init(client.window) {
-			fmt.eprintln("Vulkan initialization failed; play with krodin_client.exe (OpenGL)")
-			return
-		}
+	if backend == .Vulkan {
 		if g_vk_debug.log != nil { fmt.printfln("[Vulkan] Validation on; logging to %s", GPU_DEBUG_LOG_PATH) }
 		diagnostics_capture_gpu_info()
 		// System facts for crash and hang reports, gathered once, off the frame path.
@@ -1862,7 +1886,7 @@ main :: proc() {
 	}
 	// Deferred here, so the device outlives every GPU object freed below.
 	defer {
-		when KRODIN_VULKAN { gpu_vk_fini() } else { gl_debug_shutdown() }
+		if g_gpu_backend == .Vulkan { gpu_vk_fini() } else { gl_debug_shutdown() }
 	}
 	defer gpu_frames_fini()
 	// GL draws window frames into the default framebuffer (0); Vulkan into
@@ -1883,7 +1907,7 @@ main :: proc() {
 	client_apply_display_settings(client)
 	diagnostics_capture_monitors(client.window)
 	defer software_cursor_fini()
-	when !KRODIN_VULKAN { gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) }
+	if backend == .OpenGL { gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) }
 
 	client.scene = scene_init()
 	client.fps_scene = scene_init()
@@ -2088,9 +2112,10 @@ print_startup_info :: proc(client: ^Client) {
 	major, minor, rev := glfw.GetVersion()
 	fmt.printf("  Platform       : GLFW %d.%d.%d\n", major, minor, rev)
 
-	when KRODIN_VULKAN {
-		fmt.printf("  GPU            : %s\n", gpu_device_name())
-		fmt.printf("  Graphics API   : Vulkan\n")
+	if g_gpu_backend == .Vulkan {
+		info := gpu_device_info()
+		fmt.printf("  GPU            : %s (%s)\n", info.renderer, info.vendor)
+		fmt.printf("  Graphics API   : Vulkan %s\n", info.version)
 	} else {
 		vendor := cstring(gl.GetString(gl.VENDOR))
 		renderer := cstring(gl.GetString(gl.RENDERER))

@@ -1,10 +1,27 @@
 # GPU Compatibility
 
-Krodin requests an OpenGL 4.5 core context. Support depends on the operating system and
-installed driver, so the families below are practical examples rather than an exhaustive certified
-hardware list.
+The client has two renderers in one binary. It starts with **Vulkan 1.3** (with the
+`dynamicRendering`, `synchronization2` and `shaderDemoteToHelperInvocation` features) and falls
+back to an **OpenGL 4.5** core context when the GPU or driver cannot run Vulkan. Settings > Video >
+Vulkan Renderer, or `--opengl` / `--vulkan`, choose one explicitly. Support depends on the operating
+system and installed driver, so the families below are practical examples rather than an
+exhaustive certified hardware list.
 
-## Commonly compatible families
+## Vulkan 1.3
+
+With a current driver, these families generally run the Vulkan renderer:
+
+- **NVIDIA:** GeForce GTX 900 series (Maxwell) and newer, including GTX 10, RTX 20, RTX 30, RTX 40
+  and RTX 50 series.
+- **AMD:** Radeon RX 400/500 (Polaris) and newer, including RX 5000, RX 6000 and RX 7000 series, and
+  Ryzen APUs with Vega or newer graphics.
+- **Intel:** 6th-generation Core (Skylake, Gen9) integrated graphics and newer, Iris Xe and Arc.
+
+On a laptop with two GPUs, the Vulkan renderer picks the discrete one; `KRODIN_GPU=<index or part
+of the name>` overrides that (the client logs the GPUs it found). The choice is in the startup log
+and in crash reports.
+
+## OpenGL 4.5 (fallback)
 
 With a current vendor or Mesa driver, these families generally expose OpenGL 4.5 or newer:
 

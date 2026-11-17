@@ -1,8 +1,7 @@
 package main
 
-// Vulkan 1.3 backend for the gpu_* interface (see gpu.odin). Built with
-// -define:KRODIN_VULKAN=true (build.bat vulkan); the SPIR-V it embeds comes
-// from tools/build-spirv.ps1.
+// Vulkan 1.3 backend for the gpu_* interface (see gpu.odin: g_gpu_backend
+// picks it at startup). The SPIR-V it embeds comes from tools/build-spirv.ps1.
 //
 // Conventions that keep every caller identical to the GL backend:
 // - Images are rendered and stored in GL's orientation: no viewport flip, so
@@ -34,7 +33,6 @@ import "core:sync"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
 
-when KRODIN_VULKAN {
 
 @(private = "file") SPIRV_BASIC_VERT :: #load("spirv/basic.vert.spv")
 @(private = "file") SPIRV_BASIC_FRAG :: #load("spirv/basic.frag.spv")
@@ -389,7 +387,7 @@ GPU_DEBUG_LOG_PATH :: "logs/gpu-debug.log"
 @(private = "file")
 g_vk_device_lost: bool
 
-gpu_device_lost :: proc() -> bool { return sync.atomic_load(&g_vk_device_lost) }
+vk_gpu_device_lost :: proc() -> bool { return sync.atomic_load(&g_vk_device_lost) }
 
 @(private = "file")
 vk_ok :: proc(result: vk.Result, what: string, loc := #caller_location) -> bool {
@@ -633,12 +631,12 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 
 	far := transmute([4]u8)f32(1)
 	placeholder := Gpu_Sampler_Desc{filter = .Nearest, wrap = .Clamp, compare = true}
-	g_vk.placeholder_array = gpu_texture_create({width = 1, height = 1, format = .Depth, layers = 1, sampler = placeholder}, far[:])
-	g_vk.placeholder_2d = gpu_texture_create({width = 1, height = 1, format = .Depth, sampler = placeholder}, far[:])
+	g_vk.placeholder_array = vk_gpu_texture_create({width = 1, height = 1, format = .Depth, layers = 1, sampler = placeholder}, far[:])
+	g_vk.placeholder_2d = vk_gpu_texture_create({width = 1, height = 1, format = .Depth, sampler = placeholder}, far[:])
 	if window != nil {
 		g_vk.present.vsync = true
 		width, height := glfw.GetFramebufferSize(window)
-		g_vk.present.target = gpu_render_target_create(max(width, 1), max(height, 1))
+		g_vk.present.target = vk_gpu_render_target_create(max(width, 1), max(height, 1))
 		g_vk.default_target = g_vk.present.target
 		// Built by the first frame, after the caller's gpu_set_vsync.
 		g_vk.present.dirty = true
@@ -653,17 +651,17 @@ gpu_vk_fini :: proc() {
 	if g_vk.recording { vk_submit() }
 	vk.DeviceWaitIdle(g_vk.device)
 	device := g_vk.device
-	gpu_texture_destroy(&g_vk.placeholder_array)
-	gpu_texture_destroy(&g_vk.placeholder_2d)
-	gpu_render_target_destroy(&g_vk.present.target)
+	vk_gpu_texture_destroy(&g_vk.placeholder_array)
+	vk_gpu_texture_destroy(&g_vk.placeholder_2d)
+	vk_gpu_render_target_destroy(&g_vk.present.target)
 	vk_swapchain_release()
 	leaked: [6]int // textures, targets, inputs, buffers, programs, samplers
-	for live, i in g_vk.textures.live { if live { leaked[0] += 1; h := Gpu_Texture(i + 1); gpu_texture_destroy(&h) } }
-	for live, i in g_vk.targets.live { if live { leaked[1] += 1; h := Gpu_Render_Target(i + 1); gpu_render_target_destroy(&h) } }
-	for live, i in g_vk.inputs.live { if live { leaked[2] += 1; h := Gpu_Vertex_Input(i + 1); gpu_vertex_input_destroy(&h) } }
-	for live, i in g_vk.buffers.live { if live { leaked[3] += 1; h := Gpu_Buffer(i + 1); gpu_buffer_destroy(&h) } }
-	for live, i in g_vk.programs.live { if live { leaked[4] += 1; h := Gpu_Program(i + 1); gpu_program_destroy(&h) } }
-	for live, i in g_vk.sampler_objects.live { if live { leaked[5] += 1; h := Gpu_Sampler(i + 1); gpu_sampler_destroy(&h) } }
+	for live, i in g_vk.textures.live { if live { leaked[0] += 1; h := Gpu_Texture(i + 1); vk_gpu_texture_destroy(&h) } }
+	for live, i in g_vk.targets.live { if live { leaked[1] += 1; h := Gpu_Render_Target(i + 1); vk_gpu_render_target_destroy(&h) } }
+	for live, i in g_vk.inputs.live { if live { leaked[2] += 1; h := Gpu_Vertex_Input(i + 1); vk_gpu_vertex_input_destroy(&h) } }
+	for live, i in g_vk.buffers.live { if live { leaked[3] += 1; h := Gpu_Buffer(i + 1); vk_gpu_buffer_destroy(&h) } }
+	for live, i in g_vk.programs.live { if live { leaked[4] += 1; h := Gpu_Program(i + 1); vk_gpu_program_destroy(&h) } }
+	for live, i in g_vk.sampler_objects.live { if live { leaked[5] += 1; h := Gpu_Sampler(i + 1); vk_gpu_sampler_destroy(&h) } }
 	if total := leaked[0] + leaked[1] + leaked[2] + leaked[3] + leaked[4] + leaked[5]; total > 0 {
 		fmt.eprintfln("[Vulkan] %d GPU objects were still alive at shutdown: %d textures, %d targets, %d vertex inputs, %d buffers, %d programs, %d samplers",
 			total, leaked[0], leaked[1], leaked[2], leaked[3], leaked[4], leaked[5])
@@ -726,23 +724,23 @@ gpu_vk_fini :: proc() {
 	g_vk = {}
 }
 
-gpu_backend_name :: proc() -> string { return "Vulkan" }
+vk_gpu_backend_name :: proc() -> string { return "Vulkan" }
 
-gpu_device_info :: proc() -> Gpu_Device_Info {
+vk_gpu_device_info :: proc() -> Gpu_Device_Info {
 	return {api = "Vulkan", vendor = g_vk.vendor_name, renderer = g_vk.device_name, version = g_vk.version_text}
 }
-gpu_device_name :: proc() -> string { return g_vk.device_name }
-gpu_context_token :: proc() -> rawptr { return rawptr(g_vk.device) }
+vk_gpu_device_name :: proc() -> string { return g_vk.device_name }
+vk_gpu_context_token :: proc() -> rawptr { return rawptr(g_vk.device) }
 
-gpu_max_anisotropy :: proc() -> f32 {
+vk_gpu_max_anisotropy :: proc() -> f32 {
 	return g_vk.anisotropy ? max(g_vk.props.limits.maxSamplerAnisotropy, 1) : 1
 }
 
-gpu_max_texture_size :: proc() -> i32 {
+vk_gpu_max_texture_size :: proc() -> i32 {
 	return i32(g_vk.props.limits.maxImageDimension2D)
 }
 
-gpu_max_storage_buffer_size :: proc() -> i64 {
+vk_gpu_max_storage_buffer_size :: proc() -> i64 {
 	return i64(g_vk.props.limits.maxStorageBufferRange)
 }
 
@@ -966,7 +964,7 @@ vk_upload_end :: proc(up: ^Vk_Upload) {
 }
 
 // Immutable: `data` is the whole contents for the buffer's lifetime.
-gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
+vk_gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
 	if len(data) == 0 || !g_vk.ready { return 0 }
 	usage: vk.BufferUsageFlags = {.TRANSFER_DST}
 	switch kind {
@@ -983,7 +981,7 @@ gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
 	return Gpu_Buffer(vk_table_add(&g_vk.buffers, buffer))
 }
 
-gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
+vk_gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
 	b := vk_table_get(&g_vk.buffers, u32(buffer^))
 	if b == nil { buffer^ = 0; return }
 	vk_retire({buffer = b^})
@@ -992,25 +990,25 @@ gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
 	buffer^ = 0
 }
 
-gpu_buffer_bind_storage :: proc(binding: u32, buffer: Gpu_Buffer) {
+vk_gpu_buffer_bind_storage :: proc(binding: u32, buffer: Gpu_Buffer) {
 	if g_vk.objects == buffer { return }
 	g_vk.objects = buffer
 	g_vk.set0_dirty = true
 }
 
-gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
+vk_gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
 	if vertices == 0 || indices == 0 { return 0 }
 	return Gpu_Vertex_Input(vk_table_add(&g_vk.inputs, Vk_Input{layout = layout, vertices = vertices, indices = indices}))
 }
 
-gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
+vk_gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 	g_vk.input = input
 	g_vk.transient_active = false
 }
 
 // Copies this frame's vertices and indices into the frame's region of the
 // transient ring and makes them the next draws' input (see gpu_gl.odin).
-gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
+vk_gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
 	assert(layout == .UI || layout == .Debug_Line)
 	if !g_vk.ready { return false }
 	vk_cmd() // the region belongs to the frame being recorded
@@ -1032,11 +1030,11 @@ gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: [
 
 // Clips draws to `rect` (GL convention: x, y from the bottom row, which is
 // row 0 of a target here; see the orientation note at the top).
-gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
+vk_gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
 	g_vk.scissor_on, g_vk.scissor_rect = enabled, rect
 }
 
-gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
+vk_gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
 	if vk_table_get(&g_vk.inputs, u32(input^)) == nil { input^ = 0; return }
 	if g_vk.input == input^ { g_vk.input = 0 }
 	if g_vk.bound_input == input^ { g_vk.bound_input = 0 }
@@ -1131,7 +1129,7 @@ vk_sampler_get :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32) -> vk.Sampler {
 		addressModeU = wrap, addressModeV = wrap, addressModeW = wrap,
 		// Without mip selection GL samples only the base level.
 		maxLod = desc.mip_filter ? vk.LOD_CLAMP_NONE : 0,
-		anisotropyEnable = b32(anisotropy > 1 && g_vk.anisotropy), maxAnisotropy = clamp(anisotropy, 1, gpu_max_anisotropy()),
+		anisotropyEnable = b32(anisotropy > 1 && g_vk.anisotropy), maxAnisotropy = clamp(anisotropy, 1, vk_gpu_max_anisotropy()),
 		compareEnable = b32(desc.compare), compareOp = .LESS_OR_EQUAL,
 		borderColor = .FLOAT_OPAQUE_WHITE,
 	}
@@ -1157,7 +1155,7 @@ vk_retire_set :: proc(set: vk.DescriptorSet) {
 	if set != 0 { vk_retire({set = set}) }
 }
 
-gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
+vk_gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
 	if desc.width <= 0 || desc.height <= 0 || desc.layers < 0 || desc.layers > VK_MAX_LAYERS || !g_vk.ready { return 0 }
 	w, h := u32(desc.width), u32(desc.height)
 	mips: u32 = 1
@@ -1220,7 +1218,7 @@ vk_generate_mips :: proc(cmd: vk.CommandBuffer, img: ^Vk_Image) {
 	}
 }
 
-gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width, height: i32, pixels: []u8) {
+vk_gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width, height: i32, pixels: []u8) {
 	t := vk_table_get(&g_vk.textures, u32(texture))
 	size := int(width) * int(height) * gpu_format_bytes_per_pixel(format)
 	if t == nil || len(pixels) < size { return }
@@ -1235,7 +1233,7 @@ gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width
 	vk_upload_end(&up)
 }
 
-gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
+vk_gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
 	t := vk_table_get(&g_vk.textures, u32(texture))
 	if t == nil || t.desc.filter == filter { return }
 	t.desc.filter = filter
@@ -1249,7 +1247,7 @@ gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
 	g_vk.set0_dirty = true
 }
 
-gpu_texture_bind :: proc(unit: u32, texture: Gpu_Texture) {
+vk_gpu_texture_bind :: proc(unit: u32, texture: Gpu_Texture) {
 	switch unit {
 	case GPU_UNIT_COLOR: g_vk.color_texture = texture
 	case GPU_UNIT_SHADOW:
@@ -1259,7 +1257,7 @@ gpu_texture_bind :: proc(unit: u32, texture: Gpu_Texture) {
 	}
 }
 
-gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
+vk_gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 	t := vk_table_get(&g_vk.textures, u32(texture^))
 	if t == nil { texture^ = 0; return }
 	if g_active_texture == texture^ { g_active_texture = 0 }
@@ -1274,27 +1272,27 @@ gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 	texture^ = 0
 }
 
-gpu_sampler_create :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32 = 1) -> Gpu_Sampler {
+vk_gpu_sampler_create :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32 = 1) -> Gpu_Sampler {
 	object := Vk_Sampler_Object{desc = desc, anisotropy = anisotropy, version = 1}
 	object.sampler = vk_sampler_get(desc, anisotropy)
 	return Gpu_Sampler(vk_table_add(&g_vk.sampler_objects, object))
 }
 
-gpu_sampler_set_anisotropy :: proc(sampler: Gpu_Sampler, value: f32) {
+vk_gpu_sampler_set_anisotropy :: proc(sampler: Gpu_Sampler, value: f32) {
 	s := vk_table_get(&g_vk.sampler_objects, u32(sampler))
 	if s == nil { return }
-	value := clamp(value, 1, gpu_max_anisotropy())
+	value := clamp(value, 1, vk_gpu_max_anisotropy())
 	if s.anisotropy == value { return }
 	s.anisotropy = value
 	s.sampler = vk_sampler_get(s.desc, value)
 	s.version += 1
 }
 
-gpu_sampler_bind :: proc(unit: u32, sampler: Gpu_Sampler) {
+vk_gpu_sampler_bind :: proc(unit: u32, sampler: Gpu_Sampler) {
 	if unit == GPU_UNIT_COLOR { g_vk.color_override = sampler }
 }
 
-gpu_sampler_destroy :: proc(sampler: ^Gpu_Sampler) {
+vk_gpu_sampler_destroy :: proc(sampler: ^Gpu_Sampler) {
 	if g_vk.color_override == sampler^ { g_vk.color_override = 0 }
 	vk_table_remove(&g_vk.sampler_objects, u32(sampler^))
 	sampler^ = 0
@@ -1319,7 +1317,7 @@ vk_color_set :: proc() -> vk.DescriptorSet {
 // ---------------------------------------------------------------------------
 // Render targets.
 
-gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
+vk_gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
 	if !g_vk.ready || width <= 0 || height <= 0 { return 0 }
 	target: Vk_Target
 	vk_target_images_make(&target, u32(width), u32(height))
@@ -1335,7 +1333,7 @@ vk_target_images_make :: proc(target: ^Vk_Target, width, height: u32) {
 	// contents undefined until drawn, as with a new GL renderbuffer.
 }
 
-gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
+vk_gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
 	t := vk_table_get(&g_vk.textures, u32(depth))
 	if t == nil { return 0 }
 	target := Vk_Target{depth_only = true, texture = depth, layer = u32(max(layer, 0)), width = t.image.width, height = t.image.height}
@@ -1343,7 +1341,7 @@ gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> G
 	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
 }
 
-gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
+vk_gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 	t := vk_table_get(&g_vk.targets, u32(target^))
 	if t == nil { target^ = 0; return }
 	if t.depth_only {
@@ -1436,45 +1434,45 @@ vk_submit :: proc(wait: vk.Semaphore = 0, signal: vk.Semaphore = 0) {
 	g_vk.slot = (g_vk.slot + 1) % GPU_FRAMES_IN_FLIGHT
 }
 
-gpu_frame_wait :: proc() {
+vk_gpu_frame_wait :: proc() {
 	if !g_vk.recording { vk_collect(g_vk.slot) }
 }
 
-gpu_frame_begin :: proc() {
+vk_gpu_frame_begin :: proc() {
 	if g_vk.recording { vk_submit() }
 	if g_vk.present.window != nil { vk_window_sync() }
 	vk_begin_recording(true)
 }
 
-gpu_frame_end :: proc() {
+vk_gpu_frame_end :: proc() {
 	gpu_flush_deferred()
 	vk_submit()
 }
 
-gpu_frames_finish :: proc() {
+vk_gpu_frames_finish :: proc() {
 	if g_vk.recording { vk_submit() }
 	for i in 0 ..< GPU_FRAMES_IN_FLIGHT { vk_collect((g_vk.slot + i) % GPU_FRAMES_IN_FLIGHT) }
 }
 
-gpu_frames_take :: proc(gpu_ms: ^[dynamic]f64) {
+vk_gpu_frames_take :: proc(gpu_ms: ^[dynamic]f64) {
 	if gpu_ms != nil { append(gpu_ms, ..g_vk.completed[:]) }
 	clear(&g_vk.completed)
 }
 
-gpu_frames_fini :: proc() {
-	gpu_frames_finish()
+vk_gpu_frames_fini :: proc() {
+	vk_gpu_frames_finish()
 	clear(&g_vk.completed)
 }
 
-gpu_wait_idle :: proc() {
-	gpu_frames_finish()
+vk_gpu_wait_idle :: proc() {
+	vk_gpu_frames_finish()
 	vk.DeviceWaitIdle(g_vk.device)
 }
 
 // ---------------------------------------------------------------------------
 // Uniform data.
 
-gpu_uniform_push :: proc(binding: u32, data: []u8) {
+vk_gpu_uniform_push :: proc(binding: u32, data: []u8) {
 	if !g_vk.ready || len(data) == 0 { return }
 	vk_cmd() // the ring region belongs to the frame being recorded
 	offset := (g_vk.ring_cursor + g_vk.ring_align - 1) / g_vk.ring_align * g_vk.ring_align
@@ -1489,7 +1487,7 @@ gpu_uniform_push :: proc(binding: u32, data: []u8) {
 	if binding == GPU_BINDING_PASS { g_vk.pass_offset = u32(absolute) } else { g_vk.draw_offset = u32(absolute) }
 }
 
-gpu_uniforms_fini :: proc() {}
+vk_gpu_uniforms_fini :: proc() {}
 
 // ---------------------------------------------------------------------------
 // Programs, pipelines and draws.
@@ -1503,7 +1501,7 @@ vk_shader_module :: proc(code: []u8) -> (module: vk.ShaderModule) {
 	return
 }
 
-gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
+vk_gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	vert, frag: []u8
 	switch {
@@ -1546,19 +1544,19 @@ vk_program_add :: proc(program: Vk_Program) -> Gpu_Program {
 	return handle
 }
 
-gpu_program_create_debug_lines :: proc() -> Gpu_Program {
+vk_gpu_program_create_debug_lines :: proc() -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	program := Vk_Program{vert = vk_shader_module(SPIRV_DEBUG_LINE_VERT), frag = vk_shader_module(SPIRV_DEBUG_LINE_FRAG), layout = .Debug_Line}
 	return vk_program_add(program)
 }
 
-gpu_program_create_ui :: proc() -> Gpu_Program {
+vk_gpu_program_create_ui :: proc() -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	program := Vk_Program{vert = vk_shader_module(SPIRV_UI_VERT), frag = vk_shader_module(SPIRV_UI_FRAG), layout = .UI}
 	return vk_program_add(program)
 }
 
-gpu_program_destroy :: proc(program: ^Gpu_Program) {
+vk_gpu_program_destroy :: proc(program: ^Gpu_Program) {
 	p := vk_table_get(&g_vk.programs, u32(program^))
 	if p == nil { program^ = 0; return }
 	keys := make([dynamic]Vk_Pipeline_Key, context.temp_allocator)
@@ -1577,15 +1575,15 @@ gpu_program_destroy :: proc(program: ^Gpu_Program) {
 	program^ = 0
 }
 
-gpu_program_bind :: proc(program: Gpu_Program) {
+vk_gpu_program_bind :: proc(program: Gpu_Program) {
 	g_vk.program = program
 }
 
-gpu_draw_state_set :: proc(state: Gpu_Draw_State) {
+vk_gpu_draw_state_set :: proc(state: Gpu_Draw_State) {
 	g_vk.draw_state = state
 }
 
-gpu_draw_state_reset :: proc() {
+vk_gpu_draw_state_reset :: proc() {
 	gpu_flush_deferred()
 	g_vk.draw_state = GPU_DRAW_STATE_DEFAULT
 }
@@ -1747,7 +1745,7 @@ vk_resolve_target :: proc(target: Gpu_Render_Target) -> Gpu_Render_Target {
 	return target != 0 ? target : g_vk.default_target
 }
 
-gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
+vk_gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 	gpu_flush_deferred()
 	target := vk_resolve_target(target)
 	if target != g_vk.target {
@@ -1759,11 +1757,11 @@ gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 	g_vk.viewport = {width, height}
 }
 
-gpu_set_clear_color :: proc(color: [3]f32) {
+vk_gpu_set_clear_color :: proc(color: [3]f32) {
 	g_vk.clear_color = {color.r, color.g, color.b, 1}
 }
 
-gpu_clear :: proc(color, depth: bool) {
+vk_gpu_clear :: proc(color, depth: bool) {
 	gpu_flush_deferred()
 	if g_vk.in_pass && !g_vk.pass_depth_only {
 		attachments: [2]vk.ClearAttachment
@@ -1820,7 +1818,7 @@ vk_set0 :: proc() -> vk.DescriptorSet {
 	return set
 }
 
-gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
+vk_gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 	if !g_vk.ready || index_count <= 0 { return }
 	cmd := vk_cmd()
 	// Before the pass: making the texture's set may first create the blank
@@ -1906,7 +1904,7 @@ vk_depth_pass_finish :: proc() {
 	g_vk.set0_dirty = true
 }
 
-gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
+vk_gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
 	gpu_flush_deferred()
 	t := vk_table_get(&g_vk.targets, u32(target))
 	if t == nil || !t.depth_only { return }
@@ -1931,7 +1929,7 @@ gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: b
 	g_vk.set0_dirty = true
 }
 
-gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
+vk_gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
 	if g_vk.recording { vk_depth_pass_finish() }
 	g_vk.target = vk_resolve_target(restore)
 	g_vk.viewport = {viewport[2], viewport[3]}
@@ -1942,7 +1940,7 @@ gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
 
 // The target the game draws a window frame into (its size follows the
 // framebuffer). The handle stays the same across resizes.
-gpu_window_target :: proc() -> Gpu_Render_Target {
+vk_gpu_window_target :: proc() -> Gpu_Render_Target {
 	return g_vk.present.target
 }
 
@@ -1952,7 +1950,7 @@ gpu_window_target :: proc() -> Gpu_Render_Target {
 // presents on vblank (measured: 480 FPS uncapped against ~2500 with
 // IMMEDIATE on an RTX 4070, windowed). Applied by recreating the swapchain
 // before the next frame.
-gpu_set_vsync :: proc(on: bool) {
+vk_gpu_set_vsync :: proc(on: bool) {
 	if g_vk.present.vsync == on { return }
 	g_vk.present.vsync = on
 	g_vk.present.dirty = true
@@ -2077,7 +2075,7 @@ vk_window_sync :: proc() {
 // and presents it, ending the frame's command buffer. A frame that cannot be
 // presented (minimised, swapchain out of date) is still submitted by
 // gpu_frame_end.
-gpu_present :: proc(window: glfw.WindowHandle = nil) {
+vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 	gpu_flush_deferred()
 	sc := &g_vk.present
 	if sc.window == nil || sc.swapchain == 0 || sc.dirty { return }
@@ -2173,7 +2171,7 @@ vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: 
 }
 
 // RGB8, rows bottom-up like GL (see the orientation note at the top).
-gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
+vk_gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
 	if len(pixels) < int(width) * int(height) * 3 { return }
 	gpu_flush_deferred()
 	data, ok := vk_readback_copy(target, false, width, height)
@@ -2186,7 +2184,7 @@ gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels
 }
 
 // f32 depth bits; compare only with other reads on this backend.
-gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
+vk_gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
 	if len(depth) < int(width) * int(height) { return }
 	gpu_flush_deferred()
 	data, ok := vk_readback_copy(target, true, width, height)
@@ -2194,4 +2192,3 @@ gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u
 	mem.copy(raw_data(depth), data, int(width) * int(height) * 4)
 }
 
-} // when KRODIN_VULKAN

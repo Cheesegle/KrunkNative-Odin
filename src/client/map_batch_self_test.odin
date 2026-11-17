@@ -35,7 +35,7 @@ MAP_BATCH_SELF_TEST_HEIGHT :: 180
 
 // Returns "" when the current context offers what the batched shader needs.
 map_batch_limits_reason :: proc() -> string {
-	when KRODIN_VULKAN { return "" } // Vulkan 1.3 guarantees vertex storage buffers.
+	if g_gpu_backend == .Vulkan { return "" } // Vulkan 1.3 guarantees vertex storage buffers.
 	vertex_blocks, bindings: i32
 	block_size: i64 // May exceed 2^31.
 	gl.GetIntegerv(gl.MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertex_blocks)
@@ -56,7 +56,7 @@ map_batch_limits_reason :: proc() -> string {
 // Returns "" when the driver placed `objects` at offset 0 of binding 0 with a
 // 16-byte stride, as map_batch_build packs Batch_Object records.
 map_batch_program_layout_reason :: proc(program: u32) -> string {
-	when KRODIN_VULKAN { return "" } // SPIR-V layouts are fixed at compile time.
+	if g_gpu_backend == .Vulkan { return "" } // SPIR-V layouts are fixed at compile time.
 	block := gl.GetProgramResourceIndex(program, gl.SHADER_STORAGE_BLOCK, "Batch_Objects")
 	if block == gl.INVALID_INDEX {
 		return "batched shader has no Batch_Objects block"

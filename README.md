@@ -24,7 +24,10 @@ with the browser game.
 ## Requirements
 
 - The [Odin compiler](https://odin-lang.org/) and a system linker (MSVC or MinGW-w64 on Windows).
-- An OpenGL 4.5 GPU ([compatibility notes](doc/supported-gpus.md)).
+- A GPU with Vulkan 1.3 or OpenGL 4.5 ([compatibility notes](doc/supported-gpus.md)). The client
+  draws with Vulkan by default and falls back to OpenGL when Vulkan is not available.
+- To build the client: the [Vulkan SDK](https://vulkan.lunarg.com/)'s `glslc` on `PATH` (the build
+  compiles the shaders to SPIR-V; playing needs only a Vulkan or OpenGL driver).
 - Windows only: the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/),
   used for logging in to live lobbies.
 - Linux only: GLFW (`sudo apt install pkg-config libglfw3 libglfw3-dev`).
@@ -48,6 +51,13 @@ make client            # or: server, test, check
 
 An optimization level can follow the target (`none`, `minimal`, `size`, `speed`, or
 `aggressive`, the default), e.g. `.\build.bat client speed`.
+
+**Graphics API:** one client binary carries both renderers. Settings > Video > **Vulkan Renderer**
+(on by default) picks Vulkan or OpenGL for the next start; `--vulkan` / `--opengl` override it for
+one run. A GPU or driver without Vulkan 1.3 falls back to OpenGL automatically. `--gpu-debug` logs
+driver messages (OpenGL: `logs/gl-debug.log`; Vulkan: validation layers to `logs/gpu-debug.log`,
+needs the Vulkan SDK), and `KRODIN_GPU=<index or part of a name>` picks the Vulkan GPU on a
+multi-GPU machine.
 
 The first Windows client build needs internet access to fetch the WebView2 loader.
 
@@ -232,14 +242,15 @@ These are the default bindings. Rebind them in **Settings → Key binds**: selec
 
 ```bat
 .\build.bat tests                                                      :: headless simulation tests
-odin test src/client -o:none -define:ODIN_TEST_THREADS=1              :: client tests (needs a GPU)
+odin test src/client -o:none -define:ODIN_TEST_THREADS=1              :: client tests on OpenGL (needs a GPU)
+.\build.bat tests-vk                                                   :: client tests on Vulkan, validation on
 ```
 
 ## Project layout
 
 | Path | Contents |
 | --- | --- |
-| `src/client/` | OpenGL client, HUD, audio, input, live Krunker client |
+| `src/client/` | Client (Vulkan and OpenGL renderers behind `gpu.odin`), HUD, audio, input, live Krunker client |
 | `src/menu/` | Menus and settings |
 | `src/krunker/` | Krunker protocol: MessagePack, matchmaking, world state |
 | `src/server/` | Native dedicated server |

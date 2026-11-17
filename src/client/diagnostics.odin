@@ -294,7 +294,7 @@ diagnostics_capture_gpu_info :: proc() {
 	g_diag.gpu_vendor_len = copy(g_diag.gpu_vendor[:], info.vendor)
 	g_diag.gpu_renderer_len = copy(g_diag.gpu_renderer[:], info.renderer)
 	g_diag.gpu_version_len = copy(g_diag.gpu_version[:], info.version)
-	when KRODIN_VULKAN {
+	if g_gpu_backend == .Vulkan {
 		g_diag.gl_reset_detection = true // Vulkan always reports a lost device.
 	} else {
 		flags: i32
@@ -522,7 +522,7 @@ gl_error_name :: proc(error: u32) -> string {
 // threaded drivers may sync with their worker thread, so it stays rare. The
 // first error of each site is logged with its phase; later ones are counted.
 gl_check :: proc(site: string, per_phase := false) -> bool {
-	when KRODIN_VULKAN { return true }
+	if g_gpu_backend == .Vulkan { return true }
 	if g_diag.gl_debug_output || per_phase && !g_diag.gl_check_detailed { return true }
 	clean := true
 	for _ in 0 ..< 8 {
@@ -614,7 +614,7 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 		fmt.sbprintf(&b, "\n*** %s ***\n", gpu_reset_line(reset_buffer[:], g_diag.gl_reset_status))
 	} else if g_diag.gl_reset_detection {
 		fmt.sbprintf(&b, "GPU reset: none detected (%d checks, the last %.1f s before this report)\n", g_diag.gl_reset_checks, tick_seconds_before(now, g_diag.gl_reset_last_check))
-	} else if g_diag.gpu_vendor_len > 0 && !KRODIN_VULKAN {
+	} else if g_diag.gpu_vendor_len > 0 && g_gpu_backend == .OpenGL {
 		fmt.sbprintf(&b, "GPU reset: cannot be detected (the GL context has no reset notification)\n")
 	}
 
@@ -648,7 +648,7 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 	diagnostics_write_live_system(&b, info.live)
 	fmt.sbprintf(&b, "GPU: %s (vendor %s)\nGraphics API: %s %s\n", diagnostics_gpu_renderer(), string(g_diag.gpu_vendor[:g_diag.gpu_vendor_len]),
 		string(g_diag.gpu_api[:g_diag.gpu_api_len]), string(g_diag.gpu_version[:g_diag.gpu_version_len]))
-	when KRODIN_VULKAN {
+	if g_gpu_backend == .Vulkan {
 		fmt.sbprintf(&b, "Vulkan: validation %s (%d errors), --gpu-debug log %s\n",
 			g_vk_debug.validation ? "on" : "off", g_vk_validation_errors, g_vk_debug.log != nil ? "on" : "off")
 	} else {

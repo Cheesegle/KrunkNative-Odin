@@ -9,7 +9,6 @@ import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import shared "../shared"
 
-when !KRODIN_VULKAN {
 
 	@(private="file")
 	gl_texture_formats :: proc(format: Gpu_Format) -> (internal, upload, type: u32) {
@@ -45,7 +44,7 @@ when !KRODIN_VULKAN {
 	// `pixels` holds level 0 (layer 0 of an array), tightly packed,
 	// width*height*bytes-per-pixel bytes; nil leaves the contents undefined.
 	// Returns 0 on bad dimensions.
-	gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
+	gl_gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
 		if desc.width <= 0 || desc.height <= 0 || desc.layers < 0 { return 0 }
 		levels: i32 = 1
 		if desc.mipmaps {
@@ -77,7 +76,7 @@ when !KRODIN_VULKAN {
 
 	// Replaces a width*height region of level 0 of a 2D texture. `format` must be
 	// the format the texture was created with.
-	gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width, height: i32, pixels: []u8) {
+	gl_gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width, height: i32, pixels: []u8) {
 		if texture == 0 || len(pixels) < int(width) * int(height) * gpu_format_bytes_per_pixel(format) { return }
 		_, upload, type := gl_texture_formats(format)
 		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
@@ -87,19 +86,19 @@ when !KRODIN_VULKAN {
 
 	// Changes how the texture filters (wrap, comparison and mip selection are
 	// unchanged).
-	gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
+	gl_gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
 		if texture == 0 { return }
 		value: i32 = filter == .Linear ? gl.LINEAR : gl.NEAREST
 		gl.TextureParameteri(u32(texture), gl.TEXTURE_MIN_FILTER, value)
 		gl.TextureParameteri(u32(texture), gl.TEXTURE_MAG_FILTER, value)
 	}
 
-	gpu_texture_bind :: proc(unit: u32, texture: Gpu_Texture) {
+	gl_gpu_texture_bind :: proc(unit: u32, texture: Gpu_Texture) {
 		gl.BindTextureUnit(unit, u32(texture))
 	}
 
 	// Destroys the texture and zeroes the handle. Safe on 0.
-	gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
+	gl_gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 		if texture^ == 0 { return }
 		// GL reuses names; a stale cache entry could skip binding a new texture.
 		if g_active_texture == texture^ { g_active_texture = 0 }
@@ -108,7 +107,7 @@ when !KRODIN_VULKAN {
 		texture^ = 0
 	}
 
-	gpu_sampler_create :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32 = 1) -> Gpu_Sampler {
+	gl_gpu_sampler_create :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32 = 1) -> Gpu_Sampler {
 		name: u32
 		gl.CreateSamplers(1, &name)
 		wrap: i32 = desc.wrap == .Repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE
@@ -121,23 +120,23 @@ when !KRODIN_VULKAN {
 			gl.SamplerParameteri(name, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
 		}
 		sampler := Gpu_Sampler(name)
-		if anisotropy > 1 { gpu_sampler_set_anisotropy(sampler, anisotropy) }
+		if anisotropy > 1 { gl_gpu_sampler_set_anisotropy(sampler, anisotropy) }
 		return sampler
 	}
 
-	// `value` is clamped to [1, gpu_max_anisotropy()]; a no-op without support.
-	gpu_sampler_set_anisotropy :: proc(sampler: Gpu_Sampler, value: f32) {
-		limit := gpu_max_anisotropy()
+	// `value` is clamped to [1, gl_gpu_max_anisotropy()]; a no-op without support.
+	gl_gpu_sampler_set_anisotropy :: proc(sampler: Gpu_Sampler, value: f32) {
+		limit := gl_gpu_max_anisotropy()
 		if sampler == 0 || limit < 2 { return }
 		gl.SamplerParameterf(u32(sampler), 0x84FE, clamp(value, 1, limit)) // TEXTURE_MAX_ANISOTROPY_EXT
 	}
 
 	// 0 unbinds: the texture's own sampling applies again.
-	gpu_sampler_bind :: proc(unit: u32, sampler: Gpu_Sampler) {
+	gl_gpu_sampler_bind :: proc(unit: u32, sampler: Gpu_Sampler) {
 		gl.BindSampler(unit, u32(sampler))
 	}
 
-	gpu_sampler_destroy :: proc(sampler: ^Gpu_Sampler) {
+	gl_gpu_sampler_destroy :: proc(sampler: ^Gpu_Sampler) {
 		if sampler^ == 0 { return }
 		name := u32(sampler^)
 		gl.DeleteSamplers(1, &name)
@@ -146,7 +145,7 @@ when !KRODIN_VULKAN {
 
 	// 1 when anisotropic filtering is unsupported. Queried per call: callers
 	// cache it (client.max_anisotropy), and it must follow the current context.
-	gpu_max_anisotropy :: proc() -> f32 {
+	gl_gpu_max_anisotropy :: proc() -> f32 {
 		value: f32 = 1
 		if bool(glfw.ExtensionSupported("GL_EXT_texture_filter_anisotropic")) || bool(glfw.ExtensionSupported("GL_ARB_texture_filter_anisotropic")) {
 			gl.GetFloatv(0x84FF, &value) // MAX_TEXTURE_MAX_ANISOTROPY_EXT
@@ -154,7 +153,7 @@ when !KRODIN_VULKAN {
 		return max(value, 1)
 	}
 
-	gpu_max_texture_size :: proc() -> i32 {
+	gl_gpu_max_texture_size :: proc() -> i32 {
 		value: i32
 		gl.GetIntegerv(gl.MAX_TEXTURE_SIZE, &value)
 		return value
@@ -162,7 +161,7 @@ when !KRODIN_VULKAN {
 
 	// A depth-only target rendering into `depth`: layer `layer` of an array
 	// texture, or the whole 2D texture when layer < 0.
-	gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
+	gl_gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
 		if depth == 0 { return 0 }
 		fbo: u32
 		gl.CreateFramebuffers(1, &fbo)
@@ -177,7 +176,7 @@ when !KRODIN_VULKAN {
 	}
 
 	// Destroys a depth-only or colour target. Safe on 0.
-	gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
+	gl_gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 		if target^ == 0 { return }
 		fbo := u32(target^)
 		if t, ok := g_gl_color_targets[fbo]; ok {
@@ -193,11 +192,11 @@ when !KRODIN_VULKAN {
 	// Starts a depth-only pass over a size x size target: depth test and writes
 	// on, blending off, depth cleared to 1. cull_front culls front faces (shadow
 	// acne); otherwise nothing is culled.
-	gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
+	gl_gpu_depth_pass_begin :: proc(target: Gpu_Render_Target, size: i32, cull_front: bool) {
 		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target))
 		gl.Viewport(0, 0, size, size)
-		gpu_draw_state_reset()
+		gl_gpu_draw_state_reset()
 		gl.Clear(gl.DEPTH_BUFFER_BIT)
 		if cull_front {
 			gl.Enable(gl.CULL_FACE)
@@ -210,7 +209,7 @@ when !KRODIN_VULKAN {
 	// Ends a run of depth passes and rebinds the frame's target. The caller names
 	// the target and viewport to go back to (reading them back with glGet would
 	// stall threaded drivers).
-	gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
+	gl_gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
 		gl.Disable(gl.CULL_FACE)
 		gl.CullFace(gl.BACK)
 		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(restore))
@@ -219,7 +218,7 @@ when !KRODIN_VULKAN {
 
 	// Immutable: `data` (len(data) bytes) is the whole contents for the buffer's
 	// lifetime. `kind` matters to Vulkan's usage flags, not to GL.
-	gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
+	gl_gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
 		if len(data) == 0 { return 0 }
 		name: u32
 		gl.CreateBuffers(1, &name)
@@ -227,7 +226,7 @@ when !KRODIN_VULKAN {
 		return Gpu_Buffer(name)
 	}
 
-	gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
+	gl_gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
 		if buffer^ == 0 { return }
 		name := u32(buffer^)
 		gl.DeleteBuffers(1, &name)
@@ -235,17 +234,17 @@ when !KRODIN_VULKAN {
 	}
 
 	// Makes a storage buffer readable as `layout(std430, binding = binding)`.
-	gpu_buffer_bind_storage :: proc(binding: u32, buffer: Gpu_Buffer) {
+	gl_gpu_buffer_bind_storage :: proc(binding: u32, buffer: Gpu_Buffer) {
 		gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, binding, u32(buffer))
 	}
 
-	gpu_max_storage_buffer_size :: proc() -> i64 {
+	gl_gpu_max_storage_buffer_size :: proc() -> i64 {
 		value: i64
 		gl.GetInteger64v(gl.MAX_SHADER_STORAGE_BLOCK_SIZE, &value)
 		return value
 	}
 
-	gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
+	gl_gpu_vertex_input_create :: proc(layout: Gpu_Vertex_Layout, vertices, indices: Gpu_Buffer) -> Gpu_Vertex_Input {
 		// .UI data is per frame: gpu_transient_bind.
 		if vertices == 0 || indices == 0 || layout == .UI || layout == .Debug_Line { return 0 }
 		vao: u32
@@ -274,7 +273,7 @@ when !KRODIN_VULKAN {
 		return Gpu_Vertex_Input(vao)
 	}
 
-	gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
+	gl_gpu_vertex_input_bind :: proc(input: Gpu_Vertex_Input) {
 		gl.BindVertexArray(u32(input))
 		g_gl_index_base = 0
 		g_gl_topology = gl.TRIANGLES
@@ -290,7 +289,7 @@ when !KRODIN_VULKAN {
 	g_gl_index_base: uintptr
 
 	// Destroys only the input; its buffers are destroyed separately.
-	gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
+	gl_gpu_vertex_input_destroy :: proc(input: ^Gpu_Vertex_Input) {
 		if input^ == 0 { return }
 		vao := u32(input^)
 		gl.DeleteVertexArrays(1, &vao)
@@ -364,7 +363,7 @@ when !KRODIN_VULKAN {
 
 	// Uploads `data` and binds it as uniform block `binding` for the following
 	// draws. `data` must be laid out std140.
-	gpu_uniform_push :: proc(binding: u32, data: []u8) {
+	gl_gpu_uniform_push :: proc(binding: u32, data: []u8) {
 		ring := &g_uniform_ring
 		current := glfw.GetCurrentContext()
 		if ring.context_ != current {
@@ -382,7 +381,7 @@ when !KRODIN_VULKAN {
 
 	// Frees the current context's uniform and transient rings
 	// (resource_cache_fini).
-	gpu_uniforms_fini :: proc() {
+	gl_gpu_uniforms_fini :: proc() {
 		for ring in ([2]^Gl_Uniform_Ring{&g_uniform_ring, &g_transient_ring}) {
 			if ring.buffer != 0 && ring.context_ == glfw.GetCurrentContext() {
 				for fence in ring.fences { if fence != nil { gl.DeleteSync(fence) } }
@@ -398,7 +397,7 @@ when !KRODIN_VULKAN {
 	// transient ring and binds them for the following gpu_draw_indexed calls,
 	// whose first_index counts from the start of `indices`. .UI and
 	// .Debug_Line. False when the data does not fit (a quarter of the ring).
-	gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
+	gl_gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
 		assert(layout == .UI || layout == .Debug_Line)
 		ring := &g_transient_ring
 		current := glfw.GetCurrentContext()
@@ -447,18 +446,18 @@ when !KRODIN_VULKAN {
 	// ---------------------------------------------------------------------------
 	// Programs and draws.
 
-	gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
+	gl_gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
 		return Gpu_Program(basic_program_compile(batched, shadow_depth))
 	}
 
-	gpu_program_destroy :: proc(program: ^Gpu_Program) {
+	gl_gpu_program_destroy :: proc(program: ^Gpu_Program) {
 		if program^ == 0 { return }
 		if g_active_shader == u32(program^) { g_active_shader = 0 }
 		gl.DeleteProgram(u32(program^))
 		program^ = 0
 	}
 
-	gpu_program_bind :: proc(program: Gpu_Program) {
+	gl_gpu_program_bind :: proc(program: Gpu_Program) {
 		if g_active_shader == u32(program) { return }
 		gl.UseProgram(u32(program))
 		g_active_shader = u32(program)
@@ -494,33 +493,33 @@ when !KRODIN_VULKAN {
 		g_gl_draw = {state = state, known = true}
 	}
 
-	gpu_draw_state_set :: proc(state: Gpu_Draw_State) {
+	gl_gpu_draw_state_set :: proc(state: Gpu_Draw_State) {
 		gl_apply_draw_state(state, !g_gl_draw.known)
 	}
 
 	// Starts a run of world draws: depth test on and the default draw state,
 	// whatever other code (HUD, tests) left behind. Also called after one, so
 	// world state never leaks into the HUD.
-	gpu_draw_state_reset :: proc() {
+	gl_gpu_draw_state_reset :: proc() {
 		gpu_flush_deferred()
 		gl.Enable(gl.DEPTH_TEST)
 		gl.ActiveTexture(gl.TEXTURE0)
 		gl_apply_draw_state(GPU_DRAW_STATE_DEFAULT, true)
 	}
 
-	gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
+	gl_gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 		gl.DrawElements(g_gl_topology, index_count, gl.UNSIGNED_INT, rawptr(g_gl_index_base + uintptr(first_index) * size_of(u32)))
 	}
 
 	// Clips draws to `rect` (x, y, width, height in target pixels, y up from
 	// the bottom row: glScissor's convention) until disabled.
-	gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
+	gl_gpu_scissor :: proc(enabled: bool, rect: [4]i32 = {}) {
 		if !enabled { gl.Disable(gl.SCISSOR_TEST); return }
 		gl.Enable(gl.SCISSOR_TEST)
 		gl.Scissor(rect[0], rect[1], max(rect[2], 0), max(rect[3], 0))
 	}
 
-	gpu_program_create_debug_lines :: proc() -> Gpu_Program {
+	gl_gpu_program_create_debug_lines :: proc() -> Gpu_Program {
 		dir := shared.concat(shared.assets_path(), "shaders/")
 		defer delete(dir)
 		vert := shared.concat(dir, "debug_line.vert")
@@ -530,7 +529,7 @@ when !KRODIN_VULKAN {
 		return Gpu_Program(shader_compile(vert, frag))
 	}
 
-	gpu_program_create_ui :: proc() -> Gpu_Program {
+	gl_gpu_program_create_ui :: proc() -> Gpu_Program {
 		dir := shared.concat(shared.assets_path(), "shaders/")
 		defer delete(dir)
 		return Gpu_Program(shader_compile_ui(dir, "ui.vert", "ui.frag"))
@@ -548,7 +547,7 @@ when !KRODIN_VULKAN {
 	g_gl_color_targets: map[u32]Gl_Color_Target
 
 	// An RGBA8 colour + depth target (offscreen frames, tests, the benchmark).
-	gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
+	gl_gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
 		fbo: u32
 		target: Gl_Color_Target
 		gl.CreateFramebuffers(1, &fbo)
@@ -563,18 +562,18 @@ when !KRODIN_VULKAN {
 	}
 
 	// Draws go to `target` (0: the window) over a width x height viewport.
-	gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
+	gl_gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(target))
 		gl.Viewport(0, 0, width, height)
 	}
 
-	gpu_set_clear_color :: proc(color: [3]f32) {
+	gl_gpu_set_clear_color :: proc(color: [3]f32) {
 		gl.ClearColor(color.r, color.g, color.b, 1)
 	}
 
 	// Clears the current target's colour (to gpu_set_clear_color's) and/or depth.
-	gpu_clear :: proc(color, depth: bool) {
+	gl_gpu_clear :: proc(color, depth: bool) {
 		gpu_flush_deferred()
 		mask: u32
 		if color { mask |= gl.COLOR_BUFFER_BIT }
@@ -589,7 +588,7 @@ when !KRODIN_VULKAN {
 
 	// RGB8 pixels of `target`, rows bottom-up (GL's order; the Vulkan backend
 	// renders in the same orientation).
-	gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
+	gl_gpu_read_color_rgb :: proc(target: Gpu_Render_Target, width, height: i32, pixels: []u8) {
 		if len(pixels) < int(width) * int(height) * 3 { return }
 		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.READ_FRAMEBUFFER, u32(target))
@@ -601,7 +600,7 @@ when !KRODIN_VULKAN {
 
 	// Depth values of `target`, bottom-up. Only equality between two reads on the
 	// same backend is meaningful (GL: normalized u32; Vulkan: f32 bits).
-	gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
+	gl_gpu_read_depth :: proc(target: Gpu_Render_Target, width, height: i32, depth: []u32) {
 		if len(depth) < int(width) * int(height) { return }
 		gpu_flush_deferred()
 		gl.BindFramebuffer(gl.READ_FRAMEBUFFER, u32(target))
@@ -641,11 +640,11 @@ when !KRODIN_VULKAN {
 	// Waits until the frame that last used the next slot is done: at most
 	// GPU_FRAMES_IN_FLIGHT frames are ever queued. gpu_frame_begin does this too;
 	// calling it first lets a caller time the frame without the wait.
-	gpu_frame_wait :: proc() {
+	gl_gpu_frame_wait :: proc() {
 		gl_frame_collect(g_gl_frames.slot)
 	}
 
-	gpu_frame_begin :: proc() {
+	gl_gpu_frame_begin :: proc() {
 		frames := &g_gl_frames
 		if !frames.ready {
 			gl.GenQueries(GPU_FRAMES_IN_FLIGHT, &frames.queries[0])
@@ -655,7 +654,7 @@ when !KRODIN_VULKAN {
 		gl.BeginQuery(gl.TIME_ELAPSED, frames.queries[frames.slot])
 	}
 
-	gpu_frame_end :: proc() {
+	gl_gpu_frame_end :: proc() {
 		gpu_flush_deferred()
 		frames := &g_gl_frames
 		gl.EndQuery(gl.TIME_ELAPSED)
@@ -666,25 +665,25 @@ when !KRODIN_VULKAN {
 	}
 
 	// Waits for every frame in flight.
-	gpu_frames_finish :: proc() {
+	gl_gpu_frames_finish :: proc() {
 		for i in 0 ..< GPU_FRAMES_IN_FLIGHT { gl_frame_collect((g_gl_frames.slot + i) % GPU_FRAMES_IN_FLIGHT) }
 	}
 
 	// Appends the GPU times (ms, in frame order) of finished frames not taken
 	// yet; nil discards them.
-	gpu_frames_take :: proc(gpu_ms: ^[dynamic]f64) {
+	gl_gpu_frames_take :: proc(gpu_ms: ^[dynamic]f64) {
 		if gpu_ms != nil { append(gpu_ms, ..g_gl_frames.completed[:]) }
 		clear(&g_gl_frames.completed)
 	}
 
-	gpu_frames_fini :: proc() {
-		gpu_frames_finish()
+	gl_gpu_frames_fini :: proc() {
+		gl_gpu_frames_finish()
 		if g_gl_frames.ready { gl.DeleteQueries(GPU_FRAMES_IN_FLIGHT, &g_gl_frames.queries[0]) }
 		delete(g_gl_frames.completed)
 		g_gl_frames = {}
 	}
 
-	gpu_wait_idle :: proc() {
+	gl_gpu_wait_idle :: proc() {
 		gl.Finish()
 	}
 
@@ -692,20 +691,20 @@ when !KRODIN_VULKAN {
 	// Window.
 
 	// GL draws window frames straight into the default framebuffer.
-	gpu_window_target :: proc() -> Gpu_Render_Target { return 0 }
+	gl_gpu_window_target :: proc() -> Gpu_Render_Target { return 0 }
 
-	gpu_set_vsync :: proc(on: bool) {
+	gl_gpu_set_vsync :: proc(on: bool) {
 		glfw.SwapInterval(on ? 1 : 0)
 	}
 
-	gpu_present :: proc(window: glfw.WindowHandle) {
+	gl_gpu_present :: proc(window: glfw.WindowHandle) {
 		gpu_flush_deferred()
 		glfw.SwapBuffers(window)
 	}
 
-	gpu_backend_name :: proc() -> string { return "OpenGL" }
+	gl_gpu_backend_name :: proc() -> string { return "OpenGL" }
 
-	gpu_device_info :: proc() -> Gpu_Device_Info {
+	gl_gpu_device_info :: proc() -> Gpu_Device_Info {
 		gl_string :: proc(name: u32) -> string {
 			value := cstring(gl.GetString(name))
 			return value == nil ? "" : string(value)
@@ -714,16 +713,15 @@ when !KRODIN_VULKAN {
 	}
 
 	// GL reports resets through glGetGraphicsResetStatus (gpu_reset.odin).
-	gpu_device_lost :: proc() -> bool { return false }
+	gl_gpu_device_lost :: proc() -> bool { return false }
 
-	gpu_device_name :: proc() -> string {
+	gl_gpu_device_name :: proc() -> string {
 		renderer := cstring(gl.GetString(gl.RENDERER))
 		return renderer == nil ? "unknown GL renderer" : string(renderer)
 	}
 
 // What placeholder objects and per-context caches belong to.
-gpu_context_token :: proc() -> rawptr {
+gl_gpu_context_token :: proc() -> rawptr {
 	return rawptr(glfw.GetCurrentContext())
 }
 
-} // when !KRODIN_VULKAN

@@ -338,7 +338,7 @@ bench_gl_window :: proc() -> glfw.WindowHandle {
 
 bench_gpu_shutdown :: proc(window: glfw.WindowHandle) {
 	gpu_frames_fini()
-	when KRODIN_VULKAN {
+	if g_gpu_backend == .Vulkan {
 		if g_vk_validation_errors > 0 { fmt.eprintf("[Bench] %d Vulkan validation errors\n", g_vk_validation_errors) }
 		gpu_vk_fini()
 	} else {
@@ -353,9 +353,12 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	}
 	defer glfw.Terminate()
 	window: glfw.WindowHandle
-	when KRODIN_VULKAN {
-		// Offscreen only: no window or surface.
-		if !gpu_vk_init() { return 1 }
+	// Offscreen Vulkan (no window or surface), or a hidden OpenGL window.
+	if g_gpu_backend == .Vulkan && !gpu_vk_init() {
+		fmt.eprintln("[Bench] Vulkan is not available; benchmarking OpenGL")
+		g_gpu_backend = .OpenGL
+	}
+	if g_gpu_backend == .Vulkan {
 		fmt.printf("[Bench] Backend: Vulkan\n[Bench] Device: %s\n", gpu_device_name())
 	} else {
 		window = bench_gl_window()
