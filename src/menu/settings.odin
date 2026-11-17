@@ -106,6 +106,12 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_trails(state)
 		settings_crosshair(state)
 		settings_hitmarker(state)
+		settings_section(state, "Loadout")
+		settings_toggle_row(state, "Remember last secondary", "RememberSecondary", values.remember_secondary, {kind = .REMEMBER_SECONDARY})
+		settings_note(state, "Krodin's own (default Off). Picking a class reuses the secondary you last chose for it and skips the loadout prompt. To change it, choose the class you already have again to open its loadout.")
+		settings_section(state, "Network")
+		settings_net_rate_row(state)
+		settings_note(state, "Net rate (Krunker's netRate) is how many input commands per second the game sends to a Krodin server. Higher rates track your aim and movement more finely and use a little more upload; Krunker's default is 144.")
 	case .AUDIO:
 		settings_section(state, "Volume")
 		// Display order; audio_volumes is indexed master, effects, footsteps, UI, weapons.
@@ -162,6 +168,10 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_slider(state, "Killfeed size", "HudKillFeedSize", kill_feed_size(values.hud), KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE, {kind = .KILL_FEED_SIZE}, step = 0.1)
 		settings_chat(state)
 		settings_damage(state)
+		settings_section(state, "Scope")
+		// Krunker scopeBorders (Scope window, beside "Scope Border Color"; on by default).
+		settings_toggle_row(state, "Scope borders", "HudScopeBorders", !values.hud.hide_scope_borders, {kind = .HUD_TOGGLE, index = 8})
+		settings_note(state, "Scope borders fill the screen around the sniper scope with black. Off shows the scope image alone, as Krunker's Scope Borders switch does.")
 	}
 }
 
@@ -310,7 +320,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.visuals = defaults.visuals
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails, draft.crosshair = defaults.fov, defaults.viewmodel, defaults.trails, defaults.crosshair
-		draft.hitmarker = defaults.hitmarker
+		draft.hitmarker, draft.remember_secondary, draft.net_rate = defaults.hitmarker, defaults.remember_secondary, defaults.net_rate
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 		draft.spatial_audio, draft.distance_falloff = defaults.spatial_audio, defaults.distance_falloff

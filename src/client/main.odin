@@ -54,6 +54,8 @@ Client :: struct {
 	kill_feed: Kill_Feed,
 	chat: Chat,
 	kill_cam: Kill_Cam,
+	round_countdown: Round_Countdown,
+	death_screen: Death_Screen,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -89,6 +91,7 @@ Client :: struct {
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	game_fps_limit: i32, // menuui.game_fps_limit_validate: 0 = unlimited (Krunker's Frame Cap default).
+	net_rate: i32, // Krunker's netRate: input commands per second on the native server (shared.NET_RATES).
 	game_frame_deadline: f64, // As idle_frame_deadline, for the game FPS limit.
 	monitor_index: i32,
 	monitor_cache: Monitor_Cache,
@@ -98,6 +101,7 @@ Client :: struct {
 		locked:  bool,
 		last_pos: shared.Vec2,
 	},
+	cursor_focus: Cursor_Focus, // see cursor_focus.odin
 
 	windowed_rect: struct {
 		x, y, width, height: i32,
@@ -114,6 +118,10 @@ Client :: struct {
 	spawn_retry_timer: f32,
 	selected_class:    i32,
 	selected_secondary: i32,
+	// Krodin's own "Remember last secondary" (Settings > Gameplay > Loadout) and
+	// the secondary last picked per class index (0 = none yet).
+	remember_secondary: bool,
+	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
 	local_practice: bool,
 	has_life: bool,
 	lobby_team: i32,
@@ -232,6 +240,7 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 
 client_window_focus_changed :: proc "c" (window: glfw.WindowHandle, focused: i32) {
 	diag_event(focused != 0 ? .FOCUS_GAINED : .FOCUS_LOST)
+	if g_client != nil && g_client.window == window { cursor_focus_event(&g_client.cursor_focus, focused != 0) }
 }
 
 client_window_iconify_changed :: proc "c" (window: glfw.WindowHandle, iconified: i32) {
@@ -745,6 +754,8 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	shared.player_update_spread(player, 0, 0, 0)
 	player.slide_timer = state.slide_timer
 	player.jump_timer = state.jump_timer
+	player.can_slide_timer = state.can_slide_timer
+	player.x_vel_cylinder, player.z_vel_cylinder = state.cylinder_velocity.x, state.cylinder_velocity.y
 	shared.player_update_height(player)
 
 	if !state.on_ramp {
@@ -752,22 +763,55 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 	}
 }
 
+// Snaps to the server's state after the acknowledged command, drops the
+// acknowledged commands and replays the rest with the same durations. When
+// prediction agrees with the server the replay lands exactly where the player
+// already was, and the correction is zero.
 client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool) {
+	predicted_position, predicted_direction := player.position, player.direction
+	// Player snapshots omit the ramp snap target; take the value predicted
+	// after the acknowledged command (as the live path does).
+	ramp_fix, has_ramp_fix := player.ramp_fix, false
+	for input in client.predicted_inputs {
+		if input.seq > state.ack_seq { break }
+		ramp_fix, has_ramp_fix = input.predicted_ramp_fix, input.predicted_has_ramp_fix
+		commands := &client.net.commands
+		commands.acked_slot, commands.acked_ammo, commands.has_acked_ammo = input.predicted_slot, input.predicted_ammo, true
+	}
 	client_discard_acked_inputs(client, state.ack_seq)
 	player.interpolate = false
 	player.position = state.position
 	player.velocity = state.velocity
 	client_apply_movement_state(player, state)
+	if state.on_ramp { player.ramp_fix, player.has_ramp_fix = ramp_fix, has_ramp_fix }
 
 	if !was_active {
 		player.direction = {state.x_dir, state.y_dir}
+		// A fresh life: no predicted reload, burst or cooldown carries over.
+		player.reload_timer, player.did_shoot, player.burst_count = 0, false, 0
+		for &cooldown in player.reloads { cooldown = 0 }
+		native_client_reset_prediction(client)
+		return
 	}
 
 	// Reapply inputs the server had not processed when it produced this
 	// snapshot. `recon=true` runs deterministic movement/collision code while
 	// suppressing duplicate shots, reloads, and recoil effects.
+	player.direction = client.net.commands.command_direction
 	for &input in client.predicted_inputs {
 		shared.player_proc_input(player, &input, true, client.game.move_lock)
+		input.predicted_ramp_fix, input.predicted_has_ramp_fix = player.ramp_fix, player.has_ramp_fix
+	}
+	// Replay leaves the last command's aim; the view keeps the live mouse look.
+	player.direction = predicted_direction
+	correction := player.position - predicted_position
+	native_client_apply_correction(client, correction, state.ack_seq)
+	when KRODIN_DEV {
+		// One line per snapshot in dev builds, for diagnosing prediction in the field.
+		offset := client.net.commands.visual_offset
+		kproto.network_log("native", fmt.tprintf("ack=%d replayed=%d next_seq=%d correction=%.4f %v offset=%.4f ammo=%d reload=%.3f",
+			state.ack_seq, len(client.predicted_inputs), client.net.commands.next_seq, math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z), correction,
+			math.sqrt(offset.x*offset.x + offset.y*offset.y + offset.z*offset.z), state.active_ammo, player.reload_timer))
 	}
 }
 
@@ -827,7 +871,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		fmt.eprintf("[Net Client] Rejected invalid health state for player %d\n", state.player_id)
 		return
 	}
-	if state.crouch_val < 0 || state.crouch_val > 1 || state.aim_val < 0 || state.aim_val > 1 || state.slide_timer < 0 || state.jump_timer < 0 {
+	if state.crouch_val < 0 || state.crouch_val > 1 || state.aim_val < 0 || state.aim_val > 1 || state.slide_timer < 0 || state.jump_timer < 0 || state.can_slide_timer < 0 {
 		fmt.eprintf("[Net Client] Rejected invalid movement state for player %d\n", state.player_id)
 		return
 	}
@@ -902,7 +946,11 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		player.interp_dir_start = player.direction
 		player.interp_dir_end = {state.x_dir, state.y_dir}
 		player.velocity = state.velocity
+		was_grounded := player.on_ground
 		client_apply_movement_state(player, state)
+		// Snapshots carry no landing; a remote player who comes down plays one
+		// like the live path's interpolated landing (krunker_presentation.odin).
+		if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 	} else {
 		// Fresh spawn or re-appearance: snap, then interpolate from here.
 		player.position = state.position
@@ -930,6 +978,48 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	}
 	player.is_you = state.is_you
 	player.render_you = state.is_you
+	if !client_apply_weapon_state(client, player, state, was_active, previous_shot_seq) {
+		return
+	}
+
+	if state.active && (!was_active || player.mesh == nil) {
+		if player.mesh == nil {
+			player_generate_meshes(player, state.is_you)
+		}
+		scene_add_player_mesh(state.is_you ? client.fps_scene : client.scene, cast(^Player_Mesh)player.mesh, int(player.loadout_size))
+	} else if !state.active && was_active && player.mesh != nil {
+		scene_remove_player_mesh(player.render_you ? client.fps_scene : client.scene, cast(^Player_Mesh)player.mesh, int(player.loadout_size))
+	}
+
+	if state.is_you {
+		client.me = player
+		if state.active {
+			client.in_game = true
+			client.has_life = true
+			if client.spawn_pending && client.menu.page == .HOME && cursor_focus_may_capture(&client.cursor_focus) {
+				glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+				client.mouse_state.locked = true
+				x, y := glfw.GetCursorPos(client.window)
+				client.mouse_state.last_pos = {f32(x), f32(y)}
+			}
+			client.spawn_pending = false
+			client.spawn_retry_timer = 0
+		}
+	}
+	if player.mesh != nil && player.active {
+		player_update_meshes(player, false)
+	}
+}
+
+// The weapon, ammo and shot part of a GAME_STATE snapshot. False rejects the
+// snapshot (ammo over the magazine, or a weapon outside the loadout).
+client_apply_weapon_state :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool, previous_shot_seq: u32) -> bool {
+	// The local player predicts its own shots, ammo and weapon (combat runs in
+	// native_client_predict_frame). A snapshot is RTT old: keep the predicted
+	// weapon while a swap is unacked, correct ammo only by how far the server
+	// differs from the prediction for the acked command, and do not replay its
+	// shots a second time.
+	predicting := state.active && was_active && native_client_predicts(client, player)
 	weapon_found := false
 	for weapon_id, loadout_index in player.loadout {
 		if weapon_id == i32(state.weapon_id) {
@@ -937,27 +1027,34 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 			weapon := client.game.weapons[weapon_id]
 			if state.active_ammo > weapon.ammo {
 				fmt.eprintf("[Net Client] Rejected invalid ammo %d for player %d weapon %d\n", state.active_ammo, state.player_id, state.weapon_id)
-				return
+				return false
+			}
+			if predicting && native_client_unacked_swap(client) {
+				break
 			}
 			if player.loadout_index != i32(loadout_index) {
 				shared.player_swap_weapon(player, i32(loadout_index), true, true, true)
 			}
-			player.ammo[loadout_index] = state.active_ammo
+			if predicting {
+				player.ammo[loadout_index] = native_client_reconcile_ammo(client, player, i32(loadout_index), state.active_ammo, weapon.ammo)
+			} else {
+				player.ammo[loadout_index] = state.active_ammo
+			}
 			break
 		}
 	}
 	if !weapon_found {
 		fmt.eprintf("[Net Client] Rejected weapon %d outside player %d loadout\n", state.weapon_id, state.player_id)
-		return
+		return false
 	}
 	shared.player_update_spread(player, 0, 0, 0)
 	new_shots: u32
-	if was_active && state.active && state.shot_seq > previous_shot_seq {
+	if !predicting && was_active && state.active && state.shot_seq > previous_shot_seq {
 		// Cap a pathological jump while still preserving the authoritative
 		// sequence value, so a malformed snapshot cannot create an unbounded loop.
 		new_shots = min(state.shot_seq - previous_shot_seq, u32(16))
 	}
-	player.shot_seq = state.shot_seq
+	if !predicting { player.shot_seq = state.shot_seq }
 	for shot_index in 0 ..< int(new_shots) {
 		// Several rounds in one snapshot played their sounds as one loud stack;
 		// space them by the weapon's fire interval as they were actually fired.
@@ -984,35 +1081,8 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		}
 	}
 
-	player.projectile_shot_seq = state.projectile_shot_seq
-
-	if state.active && (!was_active || player.mesh == nil) {
-		if player.mesh == nil {
-			player_generate_meshes(player, state.is_you)
-		}
-		scene_add_player_mesh(state.is_you ? client.fps_scene : client.scene, cast(^Player_Mesh)player.mesh, int(player.loadout_size))
-	} else if !state.active && was_active && player.mesh != nil {
-		scene_remove_player_mesh(player.render_you ? client.fps_scene : client.scene, cast(^Player_Mesh)player.mesh, int(player.loadout_size))
-	}
-
-	if state.is_you {
-		client.me = player
-		if state.active {
-			client.in_game = true
-			client.has_life = true
-			if client.spawn_pending && client.menu.page == .HOME {
-				glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-				client.mouse_state.locked = true
-				x, y := glfw.GetCursorPos(client.window)
-				client.mouse_state.last_pos = {f32(x), f32(y)}
-			}
-			client.spawn_pending = false
-			client.spawn_retry_timer = 0
-		}
-	}
-	if player.mesh != nil && player.active {
-		player_update_meshes(player, false)
-	}
+	if !predicting { player.projectile_shot_seq = state.projectile_shot_seq }
+	return true
 }
 
 set_window_icon :: proc(client: ^Client) {
@@ -1156,6 +1226,12 @@ client_clear_impacts :: proc(client: ^Client) {
 // what the player's own view can't, so it's refused (and switched off) there.
 client_freecam_allowed :: proc(client: ^Client) -> bool {
 	return !client.krunker.connected && !client.net.connected
+}
+
+// The N noclip toggle is a developer tool: only dev builds (KRODIN_DEV) have
+// it, and never in a live Krunker lobby, where the server owns noclip.
+client_noclip_key_allowed :: proc(client: ^Client) -> bool {
+	return KRODIN_DEV && !client.krunker.connected
 }
 
 client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: f32) {
@@ -1329,6 +1405,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client_perf_overlay_toggle_update(client) { client.settings_dirty = true }
 	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
+	// Alt-tab leaves play like Escape, as losing pointer lock does in Krunker.
+	client_cursor_focus_update(client)
 
 	// Chat runs first: while its input is open no gameplay bind reads as held,
 	// and the Escape that closes it does not also open the menu.
@@ -1338,12 +1416,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	if chat_was_open || client.chat.open { client.last_escape_key = client.last_escape_key || escape_key }
 	if client.mouse_state.locked && escape_key && !client.last_escape_key {
 		audio_play_effect(client.audio, "menu_open", .UI, 0.35)
-		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-		client.mouse_state.locked = false
-		client.menu.page = .HOME
-		client.menu.pressed = 0
-		client.menu.previous.escape = true
-		client.menu.previous.down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+		client_pause_to_menu(client)
 	}
 
 	// The end screen replaces the menu until dismissed or the next match.
@@ -1357,7 +1430,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client.last_escape_key = escape_key
 
-	if client.mouse_state.locked && (client.me == nil || !client.me.active) {
+	// While the death screen runs, re-entry waits for Krunker's deathDelay
+	// or the authority's respawn timer (death_screen.odin).
+	if client.mouse_state.locked && (client.me == nil || !client.me.active) && client_death_screen_allows_respawn(client, glfw.GetTime()) {
 		client_enter_game(client)
 	}
 
@@ -1393,7 +1468,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		after_scroll = input
 
 		if client.mouse_state.locked && !client.freecam_enabled {
-			if noclip_key && !client.last_noclip_key && !client.krunker.connected {
+			if noclip_key && !client.last_noclip_key && client_noclip_key_allowed(client) {
 				client.me.noclip = !client.me.noclip
 			}
 
@@ -1418,12 +1493,11 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.net_input_seq += 1
 		if client.krunker.connected {
 			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
+			krunker_ws_ghost_watchdog(client, glfw.GetTime())
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
-			append(&client.predicted_inputs, input)
-			client_cap_predicted_inputs(client, MAX_PREDICTED_INPUTS)
-			shared.player_proc_input(client.me, &input, true, client.game.move_lock, true)
-			net_client_send_input(&client.net, &input)
+			scroll_pending = native_client_predict_frame(client, &input, after_scroll)
+			native_client_send_commands(client)
 		} else {
 			shared.player_queue_input(client.me, &input)
 		}
@@ -1440,6 +1514,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	if !client.net.connected && !client.krunker.connected {
 		shared.game_tick(&client.game, now, delta)
+		client_local_new_game(client)
 	} else {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
@@ -1469,6 +1544,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client.krunker.connected {
 			sample := krunker_client_render_sample(client)
 			view_position, view_aim = sample.position, sample.aim
+		} else if client.net.connected {
+			view_position = native_client_render_position(client)
 		}
 		third_person := player_uses_third_person_camera(client.me)
 		if third_person {
@@ -1490,6 +1567,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_kill_cam_update(client, delta)
+	client_round_countdown_update(client, glfw.GetTime())
+	client_death_screen_update(client, glfw.GetTime())
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)
@@ -1520,9 +1599,16 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	} else if !client.mouse_state.locked {
 		hud_render(client, delta, debug_pointer)
 	} else {
-		overlay_render(client, delta)
+		if !client_death_screen_hides_hud(client) { overlay_render(client, delta) }
+		else if client.scoreboard_open {
+			board := client_scoreboard(client)
+			scoreboard_render(client.ui, &board, 160*client.ui.scale)
+		}
+		death_screen_render(client, glfw.GetTime())
 		chat_render(client)
 	}
+	// Krunker draws it on the overlay canvas, under the menu's panels too.
+	if !end_screen_visible { round_countdown_render(client, glfw.GetTime()) }
 	fps_render(client)
 	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
@@ -1624,6 +1710,7 @@ main :: proc() {
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
 	client.menu_fps_limit = preferences.menu_fps_limit
 	client.game_fps_limit = preferences.game_fps_limit
+	client.net_rate = preferences.net_rate
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
 	client.advanced_sensitivity, client.invert_mouse = preferences.advanced_sensitivity, preferences.invert_mouse
@@ -1635,6 +1722,7 @@ main :: proc() {
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
 	client.ranked_prefs = preferences.ranked
+	client.remember_secondary, client.secondary_picks = preferences.remember_secondary, preferences.secondary_picks
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching

@@ -6,6 +6,7 @@ import "core:math"
 import "core:mem/virtual"
 import "core:strconv"
 import "core:strings"
+import shared "../shared"
 
 // Krunker's Settings > Export/Import text (krunkbox game.deob.js: settings
 // `this["export"]`/`this['import']` near line 214043, controls `this["export"]`
@@ -15,7 +16,7 @@ import "core:strings"
 // text to their defaults; binds missing from "controls" stay unchanged.
 
 Krunker_Key :: enum {
-	UPDATE_RATE,
+	NET_RATE, UPDATE_RATE,
 	SHOW_TRAILS, YOUR_TRAILS, SHOW_KILLS, SHOW_FPS, HEALTH_COL_T, HEALTH_COL_E,
 	CHAT_SHOW, CHAT_FILTER, CHAT_MESSAGES, CHAT_OPACITY, CHAT_BG_OPACITY, CHAT_TEXT_OUTLINE, CHAT_HEIGHT, CHAT_TIMER,
 	CROSSHAIR_TYPE, CROSSHAIR_OPACITY, CROSSHAIR_USE_OPACITY, CROSSHAIR_ALWAYS, CROSSHAIR_COLOR, CROSSHAIR_SHADOW,
@@ -25,7 +26,7 @@ Krunker_Key :: enum {
 	SOUND, GUNS_VOLUME, PLAYER_VOLUME, UI_VOLUME,
 	FOV, WEAPON_FOV, WEAPON_BOB, WEAPON_LEAN, WEAPON_ROT, WEAPON_OFF_X, WEAPON_OFF_Y, WEAPON_OFF_Z, WEAPON_ADS_OFF_Y, WEAPON_SWAP_Y, WEAPON_RELOAD_Y, ADS_FOV_MULT,
 	TOGGLE_ADS, AIM_ANIM, HIDE_ADS, SHOW_HANDS, SHOW_WEAPON, SHOW_WEAPON_SEC, SHOW_WEAPON_MEL, LEFT_HAND,
-	SATURATION, FEED_LIMIT,
+	SATURATION, FEED_LIMIT, SCOPE_BORDERS,
 	SHOW_HIT_INDICATORS, HIT_INDICATOR_COLOR, USE_DAMAGE_OVERLAY,
 }
 Krunker_Value_Kind :: enum { NUMBER, SWITCH, COLOR }
@@ -34,6 +35,9 @@ Krunker_Setting :: struct { key: string, kind: Krunker_Value_Kind, default, min,
 // Names, desktop defaults and ranges from Krunker's settings list (game.deob.js
 // `this["list"] = {` near line 209768), in its declaration (export) order.
 KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
+	// netRate (game.deob.js `'netRate': {`, before updateRate): the option
+	// index 0-5 into 30/60/120/144/240/360, desktop default 3 (144 Hz).
+	.NET_RATE = {"netRate", .NUMBER, KRUNKER_NET_RATE_DEFAULT_INDEX, 0, len(shared.NET_RATES) - 1},
 	// Frame Cap (krunkbox current.analysis.js near line 250731), the game FPS limit.
 	.UPDATE_RATE = {"updateRate", .NUMBER, GAME_FPS_LIMIT_UNLIMITED, 0, GAME_FPS_LIMIT_MAX},
 	.SHOW_TRAILS = {"showTrails", .SWITCH, 1, 0, 0},
@@ -104,12 +108,15 @@ KRUNKER_SETTINGS := [Krunker_Key]Krunker_Setting{
 	.LEFT_HAND = {"leftHand", .SWITCH, 0, 0, 0},
 	.SATURATION = {"saturationn", .NUMBER, 1, 0, 3}, // Krunker's spelling.
 	.FEED_LIMIT = {"feedLimit", .NUMBER, KILL_FEED_DEFAULT_LIMIT, 1, KILL_FEED_MAX_LIMIT},
+	// Scope window (krunkbox game.min.js `scopeBorders:{name:"settings.mods.borders"`, val:!0).
+	.SCOPE_BORDERS = {"scopeBorders", .SWITCH, 1, 0, 0},
 	// Damage feedback (krunkbox current.analysis.js near lines 251334 and 254710).
 	.SHOW_HIT_INDICATORS = {"showHitInd", .SWITCH, 1, 0, 0},
 	.HIT_INDICATOR_COLOR = {"hitColor", .COLOR, 0xff3f3f, 0, 0},
 	.USE_DAMAGE_OVERLAY = {"useDamageOverlay", .SWITCH, 1, 0, 0},
 }
 KRUNKER_CROSSHAIR_PRECISION :: 5
+KRUNKER_NET_RATE_DEFAULT_INDEX :: 3
 KRUNKER_VIEWMODEL := [Viewmodel_Control]Krunker_Key{
 	.WEAPON_FOV = .WEAPON_FOV, .BOBBING = .WEAPON_BOB, .LEANING = .WEAPON_LEAN, .ROTATION = .WEAPON_ROT,
 	.OFFSET_X = .WEAPON_OFF_X, .OFFSET_Y = .WEAPON_OFF_Y, .OFFSET_Z = .WEAPON_OFF_Z, .ADS_OFFSET_Y = .WEAPON_ADS_OFF_Y,
@@ -359,8 +366,10 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string, exclude:
 	draft.fov = fov_validate(f32(numbers[.FOV]))
 	draft.show_fps = switches[.SHOW_FPS]
 	draft.game_fps_limit = game_fps_limit_from_value(f32(numbers[.UPDATE_RATE]))
+	draft.net_rate = shared.NET_RATES[clamp(int(math.round(numbers[.NET_RATE])), 0, len(shared.NET_RATES) - 1)]
 	draft.trails = {hide_others = !switches[.SHOW_TRAILS], hide_yours = !switches[.YOUR_TRAILS]}
 	draft.hud.hide_kill_feed = !switches[.SHOW_KILLS]
+	draft.hud.hide_scope_borders = !switches[.SCOPE_BORDERS]
 	draft.hud.kill_feed_limit = i32(clamp(math.round(numbers[.FEED_LIMIT]), 1, KILL_FEED_MAX_LIMIT))
 	draft.hud.healthbar_colors = {enemy = colors[.HEALTH_COL_E], team = colors[.HEALTH_COL_T]}
 	draft.hud.chat = chat_settings_validate(Chat_Settings{
@@ -507,7 +516,9 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 	switches[.SHOW_TRAILS], switches[.YOUR_TRAILS] = !values.trails.hide_others, !values.trails.hide_yours
 	switches[.SHOW_FPS], switches[.INVERT_Y] = values.show_fps, values.invert_mouse
 	numbers[.UPDATE_RATE] = f64(game_fps_limit_validate(values.game_fps_limit))
+	numbers[.NET_RATE] = f64(net_rate_index(values.net_rate))
 	switches[.SHOW_KILLS], numbers[.FEED_LIMIT] = !values.hud.hide_kill_feed, f64(kill_feed_limit(values.hud))
+	switches[.SCOPE_BORDERS] = !values.hud.hide_scope_borders
 	healthbar_colors := healthbar_colors_validate(values.hud.healthbar_colors)
 	colors[.HEALTH_COL_E], colors[.HEALTH_COL_T] = healthbar_colors.enemy, healthbar_colors.team
 	chat := chat_settings_validate(values.hud.chat)

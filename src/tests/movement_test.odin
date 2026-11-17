@@ -356,6 +356,9 @@ main :: proc() {
 	if !test_client_physics() {
 		os.exit(1)
 	}
+	if !test_input_pipeline() {
+		os.exit(1)
+	}
 	if !test_wall_jump() || !test_wall_jump_limit() || !test_movement_animation() || !test_walking_animation() {
 		os.exit(1)
 	}
@@ -372,6 +375,9 @@ main :: proc() {
 		os.exit(1)
 	}
 	if !test_frontier_objective_sites() {
+		os.exit(1)
+	}
+	if !test_spawn_selection() || !test_spawn_selection_timing() {
 		os.exit(1)
 	}
 	if !test_player_hitboxes_match_inline() || !test_shot_paths_use_player_hitboxes() {

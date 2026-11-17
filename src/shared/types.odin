@@ -161,11 +161,14 @@ Object :: struct {
 	raw_data:       json.Value,
 }
 
+// Krunker map spawn: [x, y, z, team, dir, comp, teamOnly, spread].
 Spawn :: struct {
 	position:  Vec3,
 	team:      i32,
 	direction: i32,
-	comp:      i32,
+	comp:      i32,  // Competitive spawn: used only during comp waits / warmup reset.
+	team_only: bool, // Only players of `team` may use it, even in other checks.
+	spread:    f32,  // getPointSpread radius - 7, clamped 0..50 like Krunker.
 }
 
 Map_Config :: struct {
@@ -251,10 +254,20 @@ Input :: struct {
 	// so reconciliation restores it from the acknowledged command.
 	predicted_ramp_fix: f32,
 	predicted_has_ramp_fix: bool,
+	// Native client: active weapon slot and its ammo after this command, so a
+	// snapshot's ammo is compared with what was predicted for the same command.
+	predicted_slot: i32,
+	predicted_ammo: u32,
 	// Live Krunker lag compensation metadata, captured when a shot actually
 	// fires. The native server's explicit input serializer does not send these.
 	krunker_shot_timed: bool,
 	krunker_shot_time, krunker_shot_progress: f64,
+	// Native protocol: the server tick the client was viewing (and 0..1
+	// progress to the next) when this command was sampled. Carried on the wire
+	// for lag compensation; nothing sets it yet.
+	view_stamped: bool,
+	view_tick: u32,
+	view_frac: f32,
 }
 
 Player_Skins :: struct {
@@ -540,11 +553,16 @@ Game_Config :: struct {
 	// Lobby rule `config.kCams`, "Kill Cams" (Other, default on): when you are
 	// killed by another player the camera pans toward them (client kill_cam.odin).
 	kill_cams:          bool,
+	// Lobby rule `config.pColl`, "Player Collision" (Collision, default off):
+	// players block each other and can stand on each other's heads.
+	player_collision:   bool,
 	team1_name:         string,
 	team2_name:         string,
 	team1_damage:       f32,
 	team2_damage:       f32,
 	health_mlt:         f32,
+	// Krunker's hurtboxScale lobby setting (1..2): scales every complexHitbox.
+	hurtbox_scale:      f32,
 	fire_rate:          f32,
 	reload_speed:       f32,
 	objective_rotation_time: f32,
@@ -692,12 +710,27 @@ Game :: struct {
 	now:          f32,
 	move_lock:    bool,
 	is_local:     bool,
+	// Live Krunker lobby: only Krunker's server ray-tests players (against its
+	// rewound complexHitboxes). The browser's own shot ray never hits players,
+	// so predicted shots must pass through them here too.
+	server_hits_players: bool,
 	ready:        bool,
 	end_timer:    f32,
+	// Set when end_timer runs out; cleared by game_init.
+	new_game_pending: bool,
 	nuke_timer:   f32,
 	nuke_player:  ^Player,
 	vote_kick:    ^Vote_Kick,
 	server:       rawptr,
+	// Krunker sorts map.spawns in place on every getSpawnPoint; the order
+	// (and so tie-breaking) carries over between calls. See spawn.odin.
+	spawn_order:     [dynamic]Spawn_Rank,
+	spawn_order_map: ^Map,
+	// Krunker flippedSpawns: teams 1 and 2 swap spawns each round.
+	flipped_spawns:  bool,
+	// Krunker waitTimers[0].comp: a competitive wait (round intermission) is
+	// running, so spawns use comp spawns and getPointSpread(radius 10).
+	spawn_comp_wait: bool,
 }
 
 DEFAULT_GAME_CONFIG :: Game_Config {
@@ -738,6 +771,7 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	team1_damage    = 1.0,
 	team2_damage    = 1.0,
 	health_mlt      = 1.0,
+	hurtbox_scale   = 1.0,
 	fire_rate       = 1.0,
 	reload_speed    = 1.0,
 	objective_rotation_time = 60.0,

@@ -15,6 +15,8 @@ Net_Client_State :: struct {
 	lobby: shared.Lobby_State,
 	send_queue: shared.Net_Send_Queue,
 	ping: shared.Net_Ping_State,
+	// Input commands for this connection (native_prediction.odin).
+	commands: Native_Command_State,
 }
 
 net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
@@ -72,20 +74,6 @@ net_client_connect :: proc(host: string, port: int) -> (nc: Net_Client_State, ok
 	nc.connected = true
 	fmt.printf("[Net Client] Connected to Dedicated Server at %s:%d!\n", host, port)
 	return nc, true
-}
-
-net_client_send_input :: proc(nc: ^Net_Client_State, input: ^shared.Input) {
-	if !nc.connected {
-		return
-	}
-
-	buf: [32]byte
-	n := shared.packet_serialize_input(buf[:], input)
-	if n > 0 {
-		if !net_client_send(nc, buf[:n]) {
-			nc.connected = false
-		}
-	}
 }
 
 net_client_send_spawn :: proc(nc: ^Net_Client_State, class_id: i32, secondary_id: i32 = 2) {
@@ -167,10 +155,16 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				}
 			case .BULLET_IMPACT:
 				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
-					if len(client.game.impacts) >= 256 {
-						ordered_remove(&client.game.impacts, 0)
+					// The local player's own shots already drew their tracers and
+					// holes when they were predicted; the server's copy only
+					// confirms a hit.
+					own := client.me != nil && impact.shooter_uid == client.me.uid && client.me.active && native_client_predicts(client, client.me)
+					if !own {
+						if len(client.game.impacts) >= 256 {
+							ordered_remove(&client.game.impacts, 0)
+						}
+						append(&client.game.impacts, impact)
 					}
-					append(&client.game.impacts, impact)
 					client_hit_marker_native_impact(client, impact)
 				}
 			case .DISCONNECT:

@@ -725,7 +725,7 @@ test_objective_combat_state :: proc() -> bool {
 	}
 
 	state := shared.packet_match_state_from_game(&game)
-	buf: [128]byte
+	buf: [256]byte
 	packet_size := shared.packet_serialize_match_state(buf[:], &state)
 	decoded, decoded_ok := shared.packet_deserialize_match_state(buf[:packet_size])
 	if !decoded_ok || decoded.active_zone != state.active_zone || decoded.team1_score != state.team1_score || decoded.time_remaining != state.time_remaining {
@@ -771,6 +771,8 @@ test_objective_combat_state :: proc() -> bool {
 		kills = 11,
 		deaths = 4,
 		wall_jump_count = 2,
+		can_slide_timer = 0.05,
+		cylinder_velocity = {0.125, -0.5},
 	}
 	player_packet_size := shared.packet_serialize_state(buf[:], &player_state)
 	header_payload_size, _ := endian.get_u16(buf[5:7], .Little)
@@ -781,7 +783,9 @@ test_objective_combat_state :: proc() -> bool {
 	wire_projectile_seq, _ := endian.get_u32(buf[96:100], .Little)
 	wire_score, _ := endian.get_u32(buf[104:108], .Little)
 	wire_deaths, _ := endian.get_u32(buf[112:116], .Little)
-	if player_packet_size != 117 || buf[116] != player_state.wall_jump_count || wire_score != player_state.score || wire_deaths != player_state.deaths || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
+	wire_can_slide_timer, _ := endian.get_f32(buf[117:121], .Little)
+	wire_cylinder_z, _ := endian.get_f32(buf[125:129], .Little)
+	if player_packet_size != 129 || buf[116] != player_state.wall_jump_count || wire_can_slide_timer != player_state.can_slide_timer || wire_cylinder_z != player_state.cylinder_velocity.y || wire_score != player_state.score || wire_deaths != player_state.deaths || header_payload_size != shared.PACKET_PLAYER_STATE_PAYLOAD_SIZE || buf[79] != player_state.weapon_id || wire_ammo != player_state.active_ammo || wire_shot_seq != player_state.shot_seq || wire_ack != player_state.ack_seq || wire_spread_plus != player_state.spread_plus || wire_projectile_seq != player_state.projectile_shot_seq {
 		fmt.eprintln("Player-state fixed wire layout test failed")
 		return false
 	}

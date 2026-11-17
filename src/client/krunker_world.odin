@@ -37,6 +37,7 @@ krunker_client_load_world_map :: proc(client: ^Client) -> bool {
 	client.game.map_count = 1
 	if world.has_game_config { client.game.config = world.game_config }
 	shared.game_init(&client.game, 0, world.mode_index, false)
+	client.game.server_hits_players = true
 	if !client.game.ready { krunker_ws_set_status(client, "Could not initialize lobby map/mode; see logs/krunker-network.log"); return false }
 	client_load_current_map(client)
 	client.camera.position = map_inst.camera_position
@@ -75,8 +76,11 @@ krunker_client_sync_world :: proc(client: ^Client) {
 	if !world.in_game && (state.spawned || client.in_game) || world.has_match && world.match.phase == .ENDED && (state.spawned || client.in_game || client.spawn_pending) {
 		client.in_game, state.spawned, client.spawn_pending = false, false, false
 		krunker_client_reset_prediction(client)
-		if client.window != nil { glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL) }
-		client.mouse_state.locked = false
+		// KILL_PLAYER for you keeps the pointer for the death screen.
+		if !client_death_screen_begin(client, glfw.GetTime()) {
+			if client.window != nil { glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL) }
+			client.mouse_state.locked = false
+		}
 	}
 	if state.player_revisions == nil { state.player_revisions = make(map[i32]u64) }
 	if state.player_loadout_revisions == nil { state.player_loadout_revisions = make(map[i32]u64) }
@@ -151,7 +155,7 @@ krunker_client_sync_world :: proc(client: ^Client) {
 				client.spawn_pending = false
 				client.lobby_team = source.team
 				client.team_pending = false
-				if client.menu.page == .HOME {
+				if client.menu.page == .HOME && cursor_focus_may_capture(&client.cursor_focus) {
 					glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 					client.mouse_state.locked = true
 					x, y := glfw.GetCursorPos(client.window)
