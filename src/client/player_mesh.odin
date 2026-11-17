@@ -348,15 +348,19 @@ player_generate_meshes :: proc(player: ^shared.Player, render_you: bool) {
 		}
 
 		if third_person {
+			// Krunker builds legMeshes[pt] with genLeg(pt==1||pt==3, ...), whose
+			// first argument puts the leg at -x: leg 0 is the right (+x) leg and
+			// leg 1 the left, matching the stride signs below and the hurtbox
+			// legs (LegRightHolder first). Index 0 on the left mirrored the walk.
 			for i in 0 ..< 2 {
-				leg := generate_leg(i == 0, colors[2], colors[3])
+				leg := generate_leg(i == 1, colors[2], colors[3])
 
 				leg.transform.parent = player_mesh.anchor
 				player_mesh.legs[i] = leg
 			}
 
 			for i in 0 ..< 2 {
-				leg := generate_crouched_leg(i == 0, colors[2], colors[3])
+				leg := generate_crouched_leg(i == 1, colors[2], colors[3]) // legMeshes 2 (right), 3 (left)
 
 				leg.anchor.parent = player_mesh.anchor
 				player_mesh.crouched_legs[i] = leg
