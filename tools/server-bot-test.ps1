@@ -75,7 +75,20 @@ function Last-Line([string] $path, [string] $pattern) {
     if ($line) { return $line.Line.Trim() } else { return $null }
 }
 
+function Test-Listening([string] $hostName, [int] $port) {
+    $tcp = [System.Net.Sockets.TcpClient]::new()
+    try { $tcp.Connect($hostName, $port); return $true } catch { return $false } finally { $tcp.Dispose() }
+}
+
 try {
+    # A server already running on this port (e.g. one you started yourself)
+    # would make ours fail with "address in use": add the bots to it instead.
+    if (-not $NoServer -and (Test-Listening "127.0.0.1" $Port)) {
+        Write-Host "A server is already running on port $Port; adding the bots to it instead of starting another."
+        $NoServer = $true
+        $HostName = "127.0.0.1"
+    }
+
     if (-not $NoServer) {
         $serverLog = Join-Path $logDir "server.log"
         $serverArgs = @("--bind", "0.0.0.0", "--port", $Port, "--tick-rate", $TickRate, "--max-players", ($Bots + 2), "--stats-interval", 10)
@@ -88,9 +101,7 @@ try {
         $deadline = (Get-Date).AddSeconds(15)
         $ready = $false
         while ((Get-Date) -lt $deadline -and -not $server.HasExited) {
-            $tcp = [System.Net.Sockets.TcpClient]::new()
-            try { $tcp.Connect("127.0.0.1", $Port); $ready = $true } catch {} finally { $tcp.Dispose() }
-            if ($ready) { break }
+            if (Test-Listening "127.0.0.1" $Port) { $ready = $true; break }
             Start-Sleep -Milliseconds 250
         }
         if (-not $ready) { throw "The server did not start listening on port $Port. See $serverLog" }

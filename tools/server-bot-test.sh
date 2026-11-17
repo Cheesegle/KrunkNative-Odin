@@ -78,6 +78,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# A server already running on this port (e.g. one you started yourself)
+# would make ours fail with "address in use": add the bots to it instead.
+if [ "$NO_SERVER" = 0 ] && (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+    echo "A server is already running on port $PORT; adding the bots to it instead of starting another."
+    NO_SERVER=1
+    HOST=127.0.0.1
+fi
+
 if [ "$NO_SERVER" = 0 ]; then
     "$SERVER" --bind 0.0.0.0 --port "$PORT" --tick-rate "$TICK_RATE" --max-players $((BOTS + 2)) --stats-interval 10 \
         >"$LOG_DIR/server.log" 2>&1 &
