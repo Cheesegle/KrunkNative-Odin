@@ -108,6 +108,20 @@ Settings_Values :: struct {
 Class :: struct { id: i32, name, weapon: string, health: i32, speed: f32, wall_jump, available: bool, reason: string, used, limit: int, portrait, weapon_icon: rawptr }
 Secondary :: struct { id: i32, name: string, icon: rawptr }
 Player :: struct { name, class_name: string, team: i32, is_you: bool }
+
+// Krunker's competitive lobby list (krunkbox game.min.js ZW, `compPlListL`):
+// with l = your own team (`e.t||0`), a player on any other team
+// (`E=n&&l!=n.t`) shows "???" instead of the class name and no weapon icon.
+// Teammates and you keep theirs. Without a team (spectating) every player is
+// another team's, so all classes are hidden.
+COMPETITIVE_HIDDEN_CLASS :: "???"
+competitive_roster_hide_enemy_classes :: proc(players: []Player, fallback_team: i32) {
+	team := fallback_team
+	for player in players { if player.is_you { team = player.team; break } }
+	for &player in players {
+		if !player.is_you && player.team != team { player.class_name = COMPETITIVE_HIDDEN_CLASS }
+	}
+}
 Team :: struct { id: i32, name: string, capacity: int, available: bool, reason: string, score: u32 }
 View :: struct {
 	presentation: Lobby_Presentation,
