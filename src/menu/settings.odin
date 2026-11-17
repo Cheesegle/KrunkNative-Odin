@@ -163,12 +163,41 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
 		// Krodin's own: scales the whole feed, 1x is Krunker's CSS size.
 		settings_slider(state, "Killfeed size", "HudKillFeedSize", kill_feed_size(values.hud), KILL_FEED_MIN_SIZE, KILL_FEED_MAX_SIZE, {kind = .KILL_FEED_SIZE}, step = 0.1)
+		settings_chat(state)
 		settings_damage(state)
 		settings_section(state, "Scope")
 		// Krunker scopeBorders (Scope window, beside "Scope Border Color"; on by default).
 		settings_toggle_row(state, "Scope borders", "HudScopeBorders", !values.hud.hide_scope_borders, {kind = .HUD_TOGGLE, index = 8})
 		settings_note(state, "Scope borders fill the screen around the sniper scope with black. Off shows the scope image alone, as Krunker's Scope Borders switch does.")
 	}
+}
+
+// Krunker's Settings > Chat category, in its order (krunkbox current.analysis.js
+// near line 252040). Show Unboxings and Show Findings have nothing to show in Krodin.
+settings_chat :: proc(state: ^State) {
+	chat := chat_settings_validate(state.settings_draft.hud.chat)
+	settings_section(state, "Chat")
+	if settings_search_show(state, "Show chat box") {
+		if clay.UI(clay.ID("ChatModeRow"))(settings_row(state)) {
+			settings_label("Show chat box", state.scale)
+			spacer()
+			settings_dropdown_field(state, CHAT_MODE_LABELS[Chat_Mode(chat.mode)], "ChatMode", .CHAT_MODE)
+		}
+	}
+	settings_toggle_row(state, "Profanity filter", "ChatFilter", chat.filter, {kind = .CHAT_TOGGLE, index = i32(Chat_Toggle.FILTER)})
+	settings_toggle_row(state, "Show player messages", "ChatMessages", !chat.hide_messages, {kind = .CHAT_TOGGLE, index = i32(Chat_Toggle.SHOW_MESSAGES)})
+	labels := [Chat_Control]string{.OPACITY = "Chat opacity", .BACKGROUND = "Chat BG opacity", .HEIGHT = "Chat height", .TIMER = "Chat timer (s)"}
+	names := [Chat_Control]string{.OPACITY = "ChatOpacity", .BACKGROUND = "ChatBackground", .HEIGHT = "ChatHeight", .TIMER = "ChatTimer"}
+	for control in ([2]Chat_Control{.OPACITY, .BACKGROUND}) {
+		limits := CHAT_LIMITS[control]
+		settings_slider(state, labels[control], names[control], chat_control_value(chat, control), limits[0], limits[1], {kind = .CHAT_VALUE, index = i32(control)}, step = limits[2])
+	}
+	settings_toggle_row(state, "Chat text outline", "ChatOutline", chat.text_outline, {kind = .CHAT_TOGGLE, index = i32(Chat_Toggle.TEXT_OUTLINE)})
+	for control in ([2]Chat_Control{.HEIGHT, .TIMER}) {
+		limits := CHAT_LIMITS[control]
+		settings_slider(state, labels[control], names[control], chat_control_value(chat, control), limits[0], limits[1], {kind = .CHAT_VALUE, index = i32(control)}, step = limits[2], zero_label = control == .TIMER ? "No timer" : "")
+	}
+	settings_note(state, "Krunker's chat settings and defaults. Chat height is in hundreds of pixels (2.5 = 250 px); a chat timer of 0 keeps messages until 35 newer ones push them out. Key binds > Chat opens chat (Enter); Escape cancels.")
 }
 
 settings_set_message :: proc(state: ^State, message: string, is_error: bool) {

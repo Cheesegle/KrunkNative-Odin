@@ -43,7 +43,7 @@ Client_Settings :: struct {
 SECONDARY_PICK_SLOTS :: 32
 
 client_settings_defaults :: proc() -> Client_Settings {
-	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
+	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), hud = {chat = menuui.DEFAULT_CHAT_SETTINGS}, visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
 }
 
 // The menu draft for a missing settings file, which Settings > Reset restores:
@@ -85,6 +85,7 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.hud.healthbar_colors = menuui.healthbar_colors_validate(result.hud.healthbar_colors)
 	result.hud.nametag_scale = menuui.nametag_scale(result.hud)
 	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
+	result.hud.chat = menuui.chat_settings_validate(result.hud.chat)
 	result.ranked = menuui.ranked_preferences_validate(result.ranked)
 	// Weapon ids are checked against the loaded weapons when a pick is used.
 	for &pick in result.secondary_picks { if pick < 0 { pick = 0 } }
