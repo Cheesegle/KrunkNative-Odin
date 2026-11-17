@@ -315,4 +315,36 @@ when ODIN_TEST {
 		}
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)
 	}
+	// The tester zip only holds files the asset sweep traced. Headshot,
+	// wallbang and fists icons only load on those kills, so the sweep loads
+	// them explicitly; this checks it records all three.
+	@(test)
+	kill_feed_sweep_records_badge_icons :: proc(t: ^testing.T) {
+		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
+		defer glfw.Terminate()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+		window := glfw.CreateWindow(64, 64, "Kill feed sweep", nil, nil)
+		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
+		defer glfw.DestroyWindow(window)
+		glfw.MakeContextCurrent(window)
+		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		defer { kill_feed_fini(); resource_cache_fini() }
+
+		shared.asset_trace_begin()
+		kill_feed_sweep_icons()
+		used := make(map[string]bool, context.temp_allocator)
+		for path in shared.asset_trace_sorted(shared.g_asset_trace.used) { used[path] = true }
+		missing := len(shared.g_asset_trace.missing)
+		shared.asset_trace_end()
+
+		for relative in ([]string{KILL_FEED_ICON_HEADSHOT, KILL_FEED_ICON_WALLBANG, KILL_FEED_ICON_FISTS}) {
+			path := strings.concatenate({"assets/", relative}, context.temp_allocator)
+			testing.expectf(t, used[path], "the asset sweep records %s", path)
+		}
+		testing.expect_value(t, missing, 0)
+		testing.expect(t, kill_feed_icon_headshot != 0 && kill_feed_icon_wallbang != 0 && kill_feed_icon_fists != 0, "all three badge textures loaded")
+	}
 }

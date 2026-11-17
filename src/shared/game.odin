@@ -27,6 +27,12 @@ game_init_match :: proc(game: ^Game) {
 	game.match.time_remaining = max(0.0, f32(game.config.game_time) * 60.0)
 	game.match.objective.active_object_index = -1
 	game.match.objective.active_zone = -1
+	// Krunker starts every game with flippedSpawns=!1 and a freshly loaded
+	// map.spawns order.
+	game.flipped_spawns = false
+	game.spawn_comp_wait = false
+	clear(&game.spawn_order)
+	game.spawn_order_map = nil
 
 	if game.map_inst == nil {
 		return
@@ -106,11 +112,18 @@ game_resolve_round :: proc(game: ^Game, round_winner: i32) {
 
 	game_reset_objective(game)
 
+	// Krunker's round end flips the spawns (this.flippedSpawns=!this.flippedSpawns)
+	// and starts the intermission wait timer ({comp:!0, msg:"intermission "}),
+	// during which players respawn on comp spawns. Krodin respawns at once, so
+	// the comp wait covers just this respawn.
+	game.flipped_spawns = !game.flipped_spawns
+	game.spawn_comp_wait = true
 	for player in game.players {
 		if player != nil {
 			player_spawn(player, player.class_index)
 		}
 	}
+	game.spawn_comp_wait = false
 }
 
 game_rotate_objective :: proc(game: ^Game) {
@@ -191,6 +204,8 @@ game_update_match :: proc(game: ^Game, delta: f32) {
 	if game.match.phase == .WARMUP {
 		game.match.phase_remaining = max(0.0, game.match.phase_remaining - delta)
 		if game.match.phase_remaining == 0 {
+			// Krunker's warmup timer trigger: warmupReset() then IN_PROGRESS.
+			if game_is_authority(game) { game_warmup_reset(game) }
 			game.match.phase = .LIVE
 		}
 		return
@@ -238,6 +253,7 @@ game_configure :: proc(game: ^Game, config: ^Game_Config, maps: []^Map, modes: [
 game_init :: proc(game: ^Game, map_index, mode_index: i32, is_local: bool) {
 	game.ready = false
 	game.is_local = is_local
+	game.server_hits_players = false
 
 	game_clear_players(game)
 
@@ -387,6 +403,9 @@ game_destroy :: proc(game: ^Game) {
 	delete(game.presentation_events)
 	delete(game.projectiles)
 	delete(game.objective_indices)
+	delete(game.spawn_order)
+	game.spawn_order = nil
+	game.spawn_order_map = nil
 
 	if game.mode != nil {
 		mode_fini(game.mode)

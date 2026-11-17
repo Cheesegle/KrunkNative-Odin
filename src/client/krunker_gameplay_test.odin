@@ -110,6 +110,28 @@ when ODIN_TEST {
 		testing.expect(t, !client.hit_marker.active && world.players[0].health == 100, "hit UI must expire without applying damage locally")
 	}
 
+	// The browser's J4e shows a hitmarker and plays hit_0/crit_0 for every
+	// DO_DAMAGE, whatever its arguments. Krunker's server sends it bare for
+	// damaged objects/spawnables/nukes (h.send($e.DO_DAMAGE)) and with three
+	// arguments to spectators of the shooter (sid, damage, headshot).
+	@(test)
+	krunker_bare_hit_confirmations_show_hitmarker :: proc(t: ^testing.T) {
+		client := Client{krunker = {connected = true}}
+		world := &client.krunker_world
+		defer kproto.krunker_world_reset(world)
+		client.hitmarker_settings = menuui.DEFAULT_HITMARKER_SETTINGS
+		testing.expect(t, gameplay_packet(world, i64(4)) && world.hit_revision == 1 && !world.hit_lethal && !world.hit_headshot,
+			"a bare DO_DAMAGE (object or spawnable hit) is still a hit confirmation")
+		client_hit_marker_tick_live(&client)
+		testing.expect(t, client.hit_marker.active && client.hit_marker.color != 0xff0000, "a bare confirmation shows the normal hitmarker")
+		hit_marker_tick(&client.hit_marker, client.hitmarker_settings, 0.4)
+		testing.expect(t, gameplay_packet(world, "4", i64(3), f64(40), true) && world.hit_revision == 2 && world.hit_headshot && !world.hit_lethal,
+			"the spectator form (sid, damage, headshot) confirms a headshot")
+		client_hit_marker_tick_live(&client)
+		testing.expect(t, client.hit_marker.active)
+		testing.expect(t, !gameplay_packet(world, "4", i64(3), "x") && world.hit_revision == 2, "a malformed damage value is still rejected")
+	}
+
 	@(test)
 	krunker_control_flags_affect_prediction_and_reset_position_once :: proc(t: ^testing.T) {
 		client: Client

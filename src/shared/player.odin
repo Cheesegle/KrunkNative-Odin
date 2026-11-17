@@ -161,37 +161,13 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 	player_update_spread(player, 0, 0, 0)
 
 	if player.game != nil && player.game.map_inst != nil && len(player.game.map_inst.spawns) > 0 {
-		eligible: [dynamic]^Spawn
-		defer delete(eligible)
-		for spawn in player.game.map_inst.spawns {
-			if player.team != 0 && spawn.team != 0 && spawn.team != player.team {
-				continue
-			}
-			occupied := false
-			if player.game.players != nil {
-				for other in player.game.players {
-					if other != nil && other != player && other.active {
-						dx := other.position.x - spawn.position.x
-						dz := other.position.z - spawn.position.z
-						if dx * dx + dz * dz < 100.0 {
-							occupied = true
-							break
-						}
-					}
-				}
-			}
-			if !occupied {
-				append(&eligible, spawn)
-			}
-		}
-		spawn := player.game.map_inst.spawns[rand.int_max(len(player.game.map_inst.spawns))]
-		if len(eligible) > 0 {
-			spawn = eligible[rand.int_max(len(eligible))]
-		}
-
-		player.position = spawn.position
+		// Krunker getSpawnPoint (spawn.odin). Mirrors of a remote server (live
+		// Krunker, Krodin's net client) take the spawn position from the
+		// server right after this, so they skip the line-of-sight work.
+		pick := game_get_spawn_point(player.game, player.team, player, force_first = !game_is_authority(player.game))
+		player.position = pick.position
 		player.direction.x = 0.0
-		player.direction.y = -math.PI / 2.0 * (1.0 + f32(spawn.direction))
+		player.direction.y = spawn_yaw(pick.direction)
 	}
 }
 
@@ -1400,7 +1376,14 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 				continue
 			}
 
+			// Krunker's browser runs this same ray against players through
+			// fetchState, which finds no stateHistory on a client (only the
+			// server's storeState fills it), so its tracer passes through
+			// everyone. A presentation-only shot in a live lobby must not stop
+			// at (or report a hit on) Krodin's own player boxes either.
+			skip_players := presentation_only && player.game.server_hits_players
 			for target in player.game.players {
+				if skip_players { break }
 				if target == player || !target.active || target.team != 0 && target.team == player.team && !player.game.mode.config.dmg_team {
 					continue
 				}

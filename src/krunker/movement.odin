@@ -66,6 +66,7 @@ krunker_world_apply_game_config :: proc(state: ^Krunker_World_State, packet: []K
 		case "noSecondary": config.no_secondaries = krunker_world_bool(entry.value)
 		// "Kill Cams" (Other, def true). Absent keeps Krunker's default.
 		case "kCams": config.kill_cams = krunker_world_bool(entry.value)
+		case "hurtboxScale": config.hurtbox_scale = clamp(krunker_world_f32(entry.value, 1), 1, 2)
 		// "Player Collision" (Collision, def false).
 		case "pColl": config.player_collision = krunker_world_bool(entry.value)
 		}
