@@ -159,6 +159,12 @@ when ODIN_TEST {
 		return input
 	}
 
+	// Server ticks per snapshot in this model: the pre-protocol-12 32 Hz rate
+	// (shared.SNAPSHOT_RATE_DIVISOR before server snapshots). The model keeps
+	// its own state packets and remote interpolation (send_rate = 32 below)
+	// rather than the jitter buffer in native_interp.odin.
+	TRACK_SNAPSHOT_DIVISOR :: 2
+
 	// One display frame of the scripted human, then whatever the server and
 	// network do until then (Native_Session's frame, with the enemy added).
 	track_frame :: proc(t: ^testing.T, ts: ^Track_Session, dt: f32, fire: bool) {
@@ -227,7 +233,7 @@ when ODIN_TEST {
 			shared.game_tick(game, f32(s.server_now), f32(s.tick_dt))
 			clear(&game.impacts)
 			ts.server_bot.health = f32(ts.server_bot.max_health) // never dies, keeps strafing
-			if s.ticks % shared.SNAPSHOT_RATE_DIVISOR == 0 {
+			if s.ticks % TRACK_SNAPSHOT_DIVISOR == 0 {
 				state := ded.net_server_player_state(s.w.server_player, true)
 				p := Native_Test_Packet{at = s.server_now + s.latency}
 				p.size = shared.packet_serialize_state(p.data[:], &state)

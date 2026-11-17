@@ -225,7 +225,7 @@ when ODIN_TEST {
 			g_active_texture = 0
 			complete := gl.CheckFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE
 			testing.expect(t, complete)
-			client.render_framebuffer = framebuffer
+			client.render_target = Gpu_Render_Target(framebuffer) // a GL framebuffer name (GL-only test)
 			if complete {
 				// First person.
 				spec.mode = .FIRST_PERSON
@@ -272,7 +272,7 @@ when ODIN_TEST {
 				run(client, &now, &k_index, 1, delta, start, yaw, {free = true})
 				testing.expect(t, spec.mode == .FIRST_PERSON && spec.target_sid == 21, "F again returns to the player")
 			}
-			client.render_framebuffer = 0
+			client.render_target = 0
 			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 			gl.DeleteRenderbuffers(1, &depth)
 			gl.DeleteTextures(1, &color)
