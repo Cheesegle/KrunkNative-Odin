@@ -54,7 +54,7 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 		if player.on_ground && distance < 64 { shared.player_step(player, distance) }
 		if distance < 64 {
 			if was_grounded && !player.on_ground && displacement.y > 0 { shared.player_emit_presentation(player, .JUMP) }
-			if !was_grounded && player.on_ground { shared.player_emit_presentation(player, .LAND) }
+			if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 		}
 		player.step_chase += (player.step_val-player.step_chase)*min(1, delta*20)
 		for &cooldown in player.reloads { cooldown = max(0, cooldown-delta) }
