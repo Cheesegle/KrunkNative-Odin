@@ -2,7 +2,7 @@ package menu
 
 import "core:fmt"
 
-Binding_Action :: enum { FORWARD, BACKWARD, LEFT, RIGHT, JUMP, CROUCH, AIM, FIRE, RELOAD, SECONDARY, MELEE, MENU, FULLSCREEN, INSPECT, LEADERBOARD, DEBUG_OVERLAY }
+Binding_Action :: enum { FORWARD, BACKWARD, LEFT, RIGHT, JUMP, CROUCH, AIM, FIRE, RELOAD, SECONDARY, MELEE, MENU, FULLSCREEN, INSPECT, LEADERBOARD, DEBUG_OVERLAY, CHAT }
 // Developer builds only (-define:KRODIN_DEV=true); must match the client's flag.
 KRODIN_DEV :: #config(KRODIN_DEV, false)
 
@@ -22,7 +22,7 @@ BINDING_SCROLL :: i32(20000)
 BINDING_NAMES := [Binding_Action]string{
 	.FORWARD = "Forward", .BACKWARD = "Backward", .LEFT = "Left", .RIGHT = "Right", .JUMP = "Jump", .CROUCH = "Crouch / slide",
 	.AIM = "Aim down sights", .FIRE = "Fire", .RELOAD = "Reload", .SECONDARY = "Secondary / primary", .MELEE = "Melee / primary", .MENU = "Menu / resume", .FULLSCREEN = "Fullscreen",
-	.INSPECT = "Inspect weapon", .LEADERBOARD = "Leaderboard", .DEBUG_OVERLAY = "Debug overlay",
+	.INSPECT = "Inspect weapon", .LEADERBOARD = "Leaderboard", .DEBUG_OVERLAY = "Debug overlay", .CHAT = "Chat",
 }
 
 default_bindings :: proc() -> Bindings {
@@ -31,7 +31,9 @@ default_bindings :: proc() -> Bindings {
 		// Krunker binds.scoreBoard (sBoardKey) defaults to Tab, keyCode 9.
 		.LEADERBOARD = {258, 0},
 		// The debug performance window toggles with F3 (GLFW key 292).
-		.DEBUG_OVERLAY = {292, 0}}
+		.DEBUG_OVERLAY = {292, 0},
+		// Krunker binds.chat (chatKey) defaults to Enter, keyCode 13.
+		.CHAT = {257, 0}}
 }
 
 binding_valid :: proc(code: i32) -> bool {

@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:math"
 import "core:strings"
@@ -13,6 +14,11 @@ import kproto "../krunker"
 menu_portraits: map[i32]u32
 
 menu_character :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
+	if g_client != nil && g_client.chat.open {
+		context = runtime.default_context()
+		client_chat_character(g_client, codepoint)
+		return
+	}
 	if g_client == nil || g_client.mouse_state.locked || codepoint < 32 || codepoint >= 127 { return }
 	client := g_client
 	if client.menu_text_length < len(client.menu_text) {
@@ -40,6 +46,9 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	kproto.krunker_world_reset(&client.krunker_world)
 	client_clear_players(client)
 	kill_feed_clear(&client.kill_feed)
+	chat_clear(&client.chat)
+	chat_close(&client.chat, true)
+	client.chat.team = false
 	client.lobby_team = 0
 	client.requested_team = 0
 	client.team_pending = false
@@ -371,7 +380,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)
