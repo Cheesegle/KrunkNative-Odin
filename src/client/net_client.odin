@@ -1,6 +1,9 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
+import "core:sync"
+import "core:thread"
 import "core:net"
 import "core:strings"
 import shared "../shared"
@@ -141,6 +144,11 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 
 		if bytes_read > 0 {
 			nc.recv_len += bytes_read
+			// After a stall the buffer can hold several snapshots. Each replaces
+			// the last, so only the newest replays the local player's
+			// unacknowledged inputs: one replay per receive, not per snapshot.
+			newest_snapshot := net_client_newest_snapshot(nc.recv_buffer[:nc.recv_len])
+			consumed := 0
 			for nc.recv_len >= shared.PACKET_HEADER_SIZE {
 				header, h_ok := shared.packet_deserialize_header(nc.recv_buffer[:nc.recv_len])
 				if !h_ok {
@@ -158,7 +166,7 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 				packet := nc.recv_buffer[:packet_size]
 				#partial switch header.packet_type {
 				case .SNAPSHOT:
-					net_client_receive_snapshot(client, packet, now)
+					net_client_receive_snapshot(client, packet, now, replay = consumed >= newest_snapshot)
 				case .PING:
 					if seq, ping_ok := shared.packet_deserialize_ping(packet); ping_ok {
 						shared.net_ping_receive(&nc.ping, seq, now)
@@ -177,6 +185,7 @@ net_client_poll :: proc(client: ^Client, now: f64) {
 					}
 				}
 				nc.recv_len -= packet_size
+				consumed += packet_size
 				if nc.recv_len > 0 {
 					copy(nc.recv_buffer[:nc.recv_len], nc.recv_buffer[packet_size:packet_size + nc.recv_len])
 				}
@@ -244,7 +253,23 @@ net_client_disconnect :: proc(nc: ^Net_Client_State) {
 // baselines, keeps it as a baseline, applies it (lobby, match, players,
 // events) and marks it for acknowledgement. A delta whose baseline is gone
 // asks the server for a full snapshot instead.
-net_client_receive_snapshot :: proc(client: ^Client, packet: []byte, now: f64) -> shared.Snapshot_Decode_Result {
+// The offset of the last complete SNAPSHOT in `data`, or -1.
+net_client_newest_snapshot :: proc(data: []byte) -> int {
+	newest, offset := -1, 0
+	for len(data) - offset >= shared.PACKET_HEADER_SIZE {
+		header, ok := shared.packet_deserialize_header(data[offset:])
+		if !ok { break }
+		size := shared.PACKET_HEADER_SIZE + int(header.payload_len)
+		if len(data) - offset < size { break }
+		if header.packet_type == .SNAPSHOT { newest = offset }
+		offset += size
+	}
+	return newest
+}
+
+// replay is false when a newer snapshot in the same receive follows: only
+// that one replays the local player's unacknowledged inputs.
+net_client_receive_snapshot :: proc(client: ^Client, packet: []byte, now: f64, replay := true) -> shared.Snapshot_Decode_Result {
 	nc := &client.net
 	if nc.snapshots == nil { nc.snapshots = new(shared.Snapshot_Ring) }
 	if nc.frame == nil { nc.frame = new(shared.Snapshot_Frame) }
@@ -276,7 +301,7 @@ net_client_receive_snapshot :: proc(client: ^Client, packet: []byte, now: f64) -
 	if stale { return .OK }
 	nc.last_tick, nc.has_tick = frame.tick, true
 	nc.ack_pending, nc.ack_reset = true, false
-	net_client_apply_snapshot(client, frame, now)
+	net_client_apply_snapshot(client, frame, now, replay)
 	return .OK
 }
 
@@ -287,7 +312,7 @@ net_client_snapshot_time :: proc(frame: ^shared.Snapshot_Frame) -> f64 {
 	return f64(frame.server_time_ms) / 1000
 }
 
-net_client_apply_snapshot :: proc(client: ^Client, frame: ^shared.Snapshot_Frame, now: f64) {
+net_client_apply_snapshot :: proc(client: ^Client, frame: ^shared.Snapshot_Frame, now: f64, replay := true) {
 	nc := &client.net
 	server_time := net_client_snapshot_time(frame)
 	native_view_clock_observe(&nc.view, now, server_time, f64(frame.match.tick_rate), f64(frame.match.send_rate))
@@ -321,7 +346,7 @@ net_client_apply_snapshot :: proc(client: ^Client, frame: ^shared.Snapshot_Frame
 	nc.applying_snapshot, nc.applying_time = true, server_time
 	for &entity in frame.entities[:frame.count] {
 		state := shared.snapshot_entity_to_state(&entity, entity.id == frame.you_id)
-		client_apply_player_state(client, &state)
+		client_apply_player_state(client, &state, replay)
 	}
 	nc.applying_snapshot = false
 
@@ -353,4 +378,87 @@ net_client_send_ack :: proc(nc: ^Net_Client_State) {
 		return
 	}
 	nc.ack_pending = false
+}
+
+// Native server connects resolve DNS and dial TCP on a worker thread, so a
+// slow or unreachable host never stalls the frame loop.
+Net_Connect_Job :: struct {
+	host: string,
+	port: int,
+	thread: ^thread.Thread,
+	done: bool, // atomic; the worker has finished
+	result: Net_Client_State,
+	ok: bool,
+}
+
+// Jobs cancelled before their dial finished; freed once done.
+net_connect_reaper: [dynamic]^Net_Connect_Job
+
+net_client_connect_run :: proc(t: ^thread.Thread) {
+	cpu_pin_current_thread_off_game_core() // never the game thread's core (cpu_affinity.odin)
+	job := cast(^Net_Connect_Job)t.data
+	job.result, job.ok = net_client_connect(job.host, job.port)
+	sync.atomic_store(&job.done, true)
+	if context.temp_allocator.procedure == runtime.default_temp_allocator_proc {
+		runtime.default_temp_allocator_destroy(auto_cast context.temp_allocator.data)
+	}
+}
+
+net_client_connect_start :: proc(client: ^Client, host: string, port: int) {
+	net_client_connect_cancel(client)
+	job := new(Net_Connect_Job)
+	job.host, job.port = strings.clone(host), port
+	job.thread = thread.create(net_client_connect_run)
+	if job.thread == nil {
+		delete(job.host); free(job)
+		client.net, _ = net_client_connect(host, port)
+		krunker_ws_set_status(client, fmt.tprintf(client.net.connected ? "Connected to %s:%d." : "Could not connect to %s:%d; staying offline.", host, port))
+		return
+	}
+	job.thread.data = job
+	job.thread.init_context = context
+	thread.start(job.thread)
+	client.net_connect = job
+	krunker_ws_set_status(client, fmt.tprintf("Connecting to %s:%d…", host, port))
+}
+
+@(private = "file")
+net_connect_job_free :: proc(job: ^Net_Connect_Job, close_socket: bool) {
+	thread.join(job.thread)
+	thread.destroy(job.thread)
+	if close_socket && job.ok { net.close(job.result.socket) }
+	delete(job.host)
+	free(job)
+}
+
+// Applies a finished connect and frees finished cancelled ones. Never waits.
+net_client_connect_poll :: proc(client: ^Client) {
+	for i := 0; i < len(net_connect_reaper); {
+		if sync.atomic_load(&net_connect_reaper[i].done) {
+			net_connect_job_free(net_connect_reaper[i], true)
+			unordered_remove(&net_connect_reaper, i)
+			continue
+		}
+		i += 1
+	}
+	if len(net_connect_reaper) == 0 && net_connect_reaper != nil { delete(net_connect_reaper); net_connect_reaper = nil }
+	job := client.net_connect
+	if job == nil || !sync.atomic_load(&job.done) { return }
+	client.net_connect = nil
+	host, port := job.host, job.port
+	if job.ok { client.net = job.result }
+	krunker_ws_set_status(client, fmt.tprintf(job.ok ? "Connected to %s:%d." : "Could not connect to %s:%d; staying offline.", host, port))
+	job.host = ""
+	net_connect_job_free(job, false)
+	delete(host)
+}
+
+// Abandons a connect in progress without waiting for its dial.
+net_client_connect_cancel :: proc(client: ^Client) {
+	job := client.net_connect
+	if job == nil do return
+	client.net_connect = nil
+	if sync.atomic_load(&job.done) { net_connect_job_free(job, true); return }
+	if net_connect_reaper == nil { net_connect_reaper = make([dynamic]^Net_Connect_Job, runtime.heap_allocator()) }
+	append(&net_connect_reaper, job)
 }

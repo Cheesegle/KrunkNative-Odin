@@ -128,15 +128,10 @@ when ODIN_TEST {
 		defer { kproto.network_log_close(); os.remove("bin/chat-test-network.log"); kproto.network_log_path = saved_path }
 		defer chat_test_sent_clear()
 		state := Krunker_WS_State{connected = true, ah_num = 7}
-		defer { for item in state.chat_outbox { delete(item.text) }; delete(state.chat_outbox); for opcode in state.pending { delete(opcode) }; delete(state.pending) }
+		defer { for item in state.chat_outbox { delete(item.text) }; delete(state.chat_outbox) }
 
 		secret := "eyJhbGciOiJIUzI1NiJ9.secretpayload.signature"
 		krunker_ws_queue_chat(&state, secret, false)
-		// Behind a queued control packet the chat waits, keeping packet order.
-		append(&state.pending, strings.clone("po"))
-		chat_test_result = .SENT
-		testing.expect(t, krunker_ws_flush_chat(&state, chat_test_send) && len(chat_test_sent) == 0 && len(state.chat_outbox) == 1)
-		delete(state.pending[0]); clear(&state.pending)
 		// A would-block send keeps the message and the counter.
 		chat_test_result = .AGAIN
 		testing.expect(t, krunker_ws_flush_chat(&state, chat_test_send) && len(state.chat_outbox) == 1 && state.ah_num == 7)
@@ -270,8 +265,6 @@ when ODIN_TEST {
 		// Live lobbies queue a ct packet instead of echoing.
 		client.krunker.connected = true
 		defer krunker_ws_disconnect(&client.krunker)
-		client.krunker.pending = make([dynamic]string) // Keep the test send off the network.
-		append(&client.krunker.pending, strings.clone("po"))
 		send(&client, "glhf", 30)
 		testing.expect(t, client.chat.count == 0 && len(client.krunker.chat_outbox) == 1 && client.krunker.chat_outbox[0].text == "glhf")
 		// Ranked: a server link is never sent.

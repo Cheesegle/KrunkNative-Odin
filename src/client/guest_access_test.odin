@@ -234,6 +234,7 @@ when ODIN_TEST {
 		delete(client.access.token); delete(client.access.assignment_url)
 		client_guest_shutdown(client)
 		krunker_ws_disconnect(&client.krunker)
+		krunker_ws_reap(wait = true)
 		kproto.krunker_world_reset(&client.krunker_world)
 		delete(client.join_status); delete(client.selection_status)
 		shared.join_link_free(&client.join_link)
@@ -262,6 +263,24 @@ when ODIN_TEST {
 			if longest_ms != nil && client.guest.status == .PENDING { longest_ms^ = max(longest_ms^, time.duration_milliseconds(time.tick_since(tick))) }
 			if client.guest.job == nil && client.guest.status != .PENDING { return true }
 			time.sleep(2 * time.Millisecond)
+		}
+		return false
+	}
+
+	// Runs frames like client_tick (guest sign-in and the join thread's inbox)
+	// until neither a sign-in nor a join is in flight.
+	guest_test_settle :: proc(client: ^Client, connect: proc(^Client, ^shared.Join_Link) -> bool = guest_test_connect, seconds: f64 = 5) -> bool {
+		start := time.tick_now()
+		quiet := 0
+		for time.duration_seconds(time.tick_since(start)) < seconds {
+			client_guest_tick(client, connect, guest_test_persist)
+			krunker_ws_reap()
+			if client.krunker.transport != nil { krunker_ws_transport_receive(client.krunker.transport, &client.krunker.inbox) }
+			krunker_ws_process_inbox(client)
+			busy := client.guest.job != nil || client.guest.status == .PENDING || client.krunker.connecting
+			quiet = busy ? 0 : quiet + 1
+			if quiet >= 10 { return true }
+			time.sleep(5 * time.Millisecond)
 		}
 		return false
 	}
@@ -474,8 +493,7 @@ when ODIN_TEST {
 		seeks_before, auth_before := g.server.seeks, g.server.logins + g.server.refreshes
 		sync.mutex_unlock(&g.server.mutex)
 		client_guest_connect(client, &client.join_link, krunker_ws_connect_ready)
-		testing.expect(t, guest_test_wait(client, krunker_ws_connect_ready))
-		for _ in 0 ..< 20 { client_guest_tick(client, krunker_ws_connect_ready, guest_test_persist); time.sleep(10 * time.Millisecond) }
+		testing.expect(t, guest_test_settle(client, krunker_ws_connect_ready))
 		sync.mutex_lock(&g.server.mutex)
 		testing.expectf(t, g.server.seeks - seeks_before == 2 && g.server.logins + g.server.refreshes - auth_before == 1, "seeks=%d auth=%d", g.server.seeks - seeks_before, g.server.logins + g.server.refreshes - auth_before)
 		sync.mutex_unlock(&g.server.mutex)
@@ -506,19 +524,22 @@ when ODIN_TEST {
 			client.join_link, _ = shared.join_link_parse("https://krunker.io/?game=FRA:fixture")
 			g.server.seek_captcha = true
 			// No browser helper: a clear message instead of a silent failure.
+			// The join runs on its thread; the verdict arrives on a later frame.
 			krunker_captcha_start = guest_test_helper_missing
-			testing.expect(t, !krunker_ws_connect_ready(client, &client.join_link))
-			testing.expect(t, client.join_status == GUEST_CAPTCHA_HELPER_TEXT && client.guest.status != .PENDING)
+			testing.expect(t, krunker_ws_connect_ready(client, &client.join_link) && guest_test_settle(client))
+			testing.expectf(t, client.join_status == GUEST_CAPTCHA_HELPER_TEXT && client.guest.status != .PENDING && !client.krunker.connected, "status: %s", client.join_status)
 			// With the helper, the proof continues the guest join.
 			krunker_captcha_start = guest_test_helper_started
 			client.access.captcha_retried, client.access.status = false, .IDLE
-			testing.expect(t, krunker_ws_connect_ready(client, &client.join_link) && client.access.status == .PENDING && client.access.captcha_pending)
+			testing.expect(t, krunker_ws_connect_ready(client, &client.join_link) && guest_test_settle(client))
+			testing.expect(t, client.access.status == .PENDING && client.access.captcha_pending)
 			client_access_tick(client, access_test_captcha_poll, guest_test_proof_connect, access_test_persist)
 			testing.expect(t, guest_test_connects == 1 && client.guest.access_token == pair.access_token)
 			delete(client.access.captcha_token); client.access.captcha_token = ""
 			// A browser socket handoff carries the browser's own account: refused.
 			client.access.captcha_retried, client.access.status = false, .IDLE
-			testing.expect(t, krunker_ws_connect_ready(client, &client.join_link) && client.access.status == .PENDING)
+			testing.expect(t, krunker_ws_connect_ready(client, &client.join_link) && guest_test_settle(client))
+			testing.expect(t, client.access.status == .PENDING)
 			client_access_tick(client, access_test_assignment_poll, guest_test_proof_connect, access_test_persist)
 			testing.expect(t, client.access.status == .ERROR && client.join_status == GUEST_CAPTCHA_IDENTITY_TEXT && guest_test_connects == 1)
 			testing.expect(t, len(client.access.token) == 0 && client.guest.access_token == pair.access_token, "the guest identity is kept")

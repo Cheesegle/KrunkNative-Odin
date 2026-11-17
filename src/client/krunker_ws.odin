@@ -6,6 +6,7 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:math"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:time"
 import curl "vendor:curl"
@@ -15,9 +16,12 @@ import kproto "../krunker"
 import accessui "../browser_access"
 
 Krunker_WS_State :: struct {
-	handle:       ^curl.CURL,
 	connected:    bool,
-	global_ready: bool,
+	// The WebSocket thread is resolving the invite or upgrading; the result
+	// arrives as a CONNECTED or CONNECT_FAILED event.
+	connecting:   bool,
+	// The join uses a browser-selected socket after a CAPTCHA.
+	captcha_handoff: bool,
 	got_load:     bool,
 	bootstrapped: bool,
 	spawned:      bool,
@@ -28,17 +32,14 @@ Krunker_WS_State :: struct {
 	secondary_request_revision: u64,
 	q_index:      int,
 	ah_num:       u8,
-	recv_buffer:  [4096]byte,
-	ws_url:       string,
-	pending:      [dynamic]string,
+	// Runs the join and then owns the curl handle; nil when idle and in tests.
+	transport:    ^Krunker_WS_Transport,
+	// Received events not applied yet, oldest first.
+	inbox:        [dynamic]Krunker_WS_Event,
 	rx_logged:    int,
 	decode_errors: int,
-	send_blocked: bool,
 	input_blocked: bool,
 	recv_budget_hits: int,
-	error_buffer: [curl.ERROR_SIZE]byte,
-	upgrade_capture: kproto.Network_HTTP_Capture,
-	message: kproto.Krunker_WS_Message,
 	rendered_map_revision: u64,
 	render_map_ready: bool,
 	player_revisions: map[i32]u64,
@@ -63,6 +64,14 @@ Krunker_WS_State :: struct {
 	// command it acknowledged. Recorded for the debug window in developer builds.
 	last_correction: shared.Vec3,
 	last_correction_ack: i32,
+	// Set while krunker_ws_process_inbox applies one frame's messages: a
+	// fresh l then defers its replay, so several in one frame replay once.
+	batching: bool,
+	replay: Krunker_Deferred_Replay,
+	// The prediction cap dropped commands up to truncated_through before the
+	// server acknowledged them; replays before that ACK cannot be exact.
+	history_truncated: bool,
+	truncated_through: i32,
 	// Predicted ramp snap target after the newest acknowledged command.
 	acked_ramp_fix: f32,
 	acked_has_ramp_fix: bool,
@@ -279,7 +288,9 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	defer delete(resolved_key)
 	kproto.network_log_secret(resolved_key)
 	url := ""
-	if accessui.assignment_uses_explicit_port(host, port) {
+	if len(krunker_lobby_origin_override) > 0 {
+		url = fmt.aprintf("%s/ws?gameId=%s&clientKey=%s&at=%s", krunker_lobby_origin_override, resolved_game, resolved_key, access_encoded)
+	} else if accessui.assignment_uses_explicit_port(host, port) {
 		url = fmt.aprintf("wss://%s:%d/ws?gameId=%s&clientKey=%s&at=%s", host, port, resolved_game, resolved_key, access_encoded)
 	} else {
 		url = fmt.aprintf("wss://%s/ws?gameId=%s&clientKey=%s&at=%s", host, resolved_game, resolved_key, access_encoded)
@@ -374,48 +385,44 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 	return krunker_ws_finish_packet(message, opcode, ah_num)
 }
 
-krunker_ws_send_internal :: proc(state: ^Krunker_WS_State, opcode: string, queue_on_again: bool) -> bool {
-	state.send_blocked = false
+// Queues a control packet on the WebSocket thread, which sends packets in
+// queue order and retries E_AGAIN with the same bytes. The counter therefore
+// advances here, exactly once per packet, as it did after a complete send.
+krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
 	// A spectator never plays: Krunker's browser sends q only for an active
 	// local player (`ht && ht.active`), so the spectator build refuses it.
 	if state.spectate && opcode == "q" { return true }
-	// Advance the shared counter only after a complete successful send.
-	// Retrying an unsent packet must reuse its counter, including across wrap.
+	if state.transport == nil {
+		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s: no WebSocket connection", opcode))
+		return false
+	}
 	next_counter := state.ah_num
 	packet := krunker_ws_message(opcode, &next_counter, state.q_index, state.team, state.class_index, state.secondary_index, state.spectate, state.spectate_target)
-	defer delete(packet)
-	sent: c.size_t
-	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
-	if code == .E_AGAIN && sent == 0 {
-		state.send_blocked = true
-		if queue_on_again { append(&state.pending, strings.clone(opcode)); kproto.network_log("ws-send", fmt.tprintf("would block; queued opcode=%s pending=%d", opcode, len(state.pending))) }
-		return queue_on_again
-	}
-	if code != .E_OK || int(sent) != len(packet) {
-		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s curl=%v (%s) sent=%d expected=%d detail=%s", opcode, code, string(curl.easy_strerror(code)), sent, len(packet), string(cast(cstring)&state.error_buffer[0])))
+	bytes := len(packet)
+	trailer := [2]byte{packet[bytes-2], packet[bytes-1]}
+	if !krunker_ws_transport_send(state.transport, packet[:], opcode) {
+		kproto.network_log("ws-send", fmt.tprintf("ERROR opcode=%s: the WebSocket connection has ended", opcode))
 		return false
 	}
 	state.ah_num = next_counter
 	if opcode == "v" && state.spawned { state.heartbeat_logged += 1 }
 	if opcode != "v" || !state.spawned || state.heartbeat_logged <= 3 || state.heartbeat_logged % 120 == 0 {
-		kproto.network_log("ws-send", fmt.tprintf("opcode=%s bytes=%d counter=%d trailer=[%02x %02x] q_index=%d pending=%d", opcode, sent, state.ah_num, packet[len(packet)-2], packet[len(packet)-1], state.q_index, len(state.pending)))
+		kproto.network_log("ws-send", fmt.tprintf("opcode=%s bytes=%d counter=%d trailer=[%02x %02x] q_index=%d", opcode, bytes, state.ah_num, trailer[0], trailer[1], state.q_index))
 	}
 	if opcode == "q" { state.q_index += 1 }
 	if opcode == "en" { state.life_en_at = glfw.GetTime() }
 	return true
 }
 
-krunker_ws_send :: proc(state: ^Krunker_WS_State, opcode: string) -> bool {
-	return krunker_ws_send_internal(state, opcode, true)
-}
-
-// One complete binary frame. AGAIN means nothing was sent; retry later.
+// Queues one complete chat frame on the WebSocket thread (in order after
+// earlier packets). FAILED once the connection has ended.
 krunker_ws_send_bytes :: proc(state: ^Krunker_WS_State, packet: []byte) -> Krunker_Send_Result {
-	sent: c.size_t
-	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
-	if code == .E_AGAIN && sent == 0 { return .AGAIN }
-	if code != .E_OK || int(sent) != len(packet) {
-		kproto.network_log("chat", fmt.tprintf("ERROR ct curl=%v sent=%d expected=%d", code, sent, len(packet)))
+	// Connected always has a transport in the game; without one (tests, the
+	// moment before CONNECTED is applied) the chat stays queued.
+	if state.transport == nil { return .AGAIN }
+	owned := slice.clone(packet, state.transport.allocator)
+	if !krunker_ws_transport_send(state.transport, owned, "ct") {
+		kproto.network_log("chat", "ERROR ct: the WebSocket connection has ended")
 		return .FAILED
 	}
 	return .SENT
@@ -427,12 +434,12 @@ krunker_ws_queue_chat :: proc(state: ^Krunker_WS_State, text: string, team: bool
 	append(&state.chat_outbox, Krunker_Chat_Outgoing{strings.clone(clean), team})
 }
 
-// Sends queued chat as CHAT_MESSAGE ["ct", tab, text]. Control packets queued
-// earlier go first, and each send takes the next shared trailer counter only
-// once it is fully written. Only lengths are logged, never chat text.
+// Sends queued chat as CHAT_MESSAGE ["ct", tab, text]. The WebSocket thread
+// keeps packets in queue order, so each takes the next shared trailer counter
+// when it is queued. Only lengths are logged, never chat text.
 krunker_ws_flush_chat :: proc(state: ^Krunker_WS_State, send: proc(^Krunker_WS_State, []byte) -> Krunker_Send_Result = krunker_ws_send_bytes) -> bool {
 	for len(state.chat_outbox) > 0 {
-		if len(state.pending) > 0 || !state.connected { return true }
+		if !state.connected { return true }
 		item := state.chat_outbox[0]
 		next := kproto.krunker_msgpack_counter_next(state.ah_num, kproto.KRUNKER_CHAT_SEND_OPCODE)
 		packet, ok := kproto.krunker_chat_encode(item.text, item.team, next)
@@ -446,16 +453,6 @@ krunker_ws_flush_chat :: proc(state: ^Krunker_WS_State, send: proc(^Krunker_WS_S
 		}
 		delete(item.text)
 		ordered_remove(&state.chat_outbox, 0)
-	}
-	return true
-}
-
-krunker_ws_flush_pending :: proc(state: ^Krunker_WS_State) -> bool {
-	for len(state.pending) > 0 {
-		opcode := state.pending[0]
-		if !krunker_ws_send_internal(state, opcode, false) { return state.send_blocked }
-		delete(opcode)
-		ordered_remove(&state.pending, 0)
 	}
 	return true
 }
@@ -510,6 +507,9 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 		if state.rx_logged <= 40 || !krunker_ws_routine_packet(packet[0]) {
 			kproto.network_log("msgpack", fmt.tprintf("RECV opcode=%v args=%d trailer=%d complete_message_bytes=%d", packet[0], len(packet)-1, counter, len(payload)))
 		}
+		// A deferred replay may wait across l and remote-only k updates. Run
+		// it before anything else can read or reset the local player.
+		if !is_text || opcode != "l" && opcode != "k" { krunker_client_finish_replay(client) }
 		client.krunker_world.received_at = glfw.GetTime()
 		applied := kproto.krunker_world_apply_packet(&client.krunker_world, packet)
 		if is_text {
@@ -758,28 +758,35 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if state.spectate || client.krunker_world.spectating do return
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.input_commands) == 0 do return
+	if state.transport == nil {
+		kproto.network_log("input", "ERROR q: no WebSocket connection")
+		krunker_ws_set_status(client, "Live input send failed; see logs/krunker-network.log")
+		state.connected = false
+		return
+	}
+	// While an earlier q still waits for the socket, keep commands here: they
+	// join the next batch, as they did when a send returned E_AGAIN.
+	if krunker_ws_transport_input_backlog(state.transport) > 0 {
+		if !state.input_blocked { kproto.network_log("input", fmt.tprintf("q send would block: next_seq=%d unsent=%d", state.input_sequence, len(state.input_commands))) }
+		state.input_blocked = true
+		return
+	}
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
 	reset := state.input_reset
 	packet, ok := krunker_ws_encode_input(state)
 	if !ok { krunker_ws_set_status(client, "Could not encode live movement input."); state.connected = false; return }
-	defer delete(packet)
-	sent: c.size_t
-	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
-	if code == .E_AGAIN && sent == 0 {
-		if !state.input_blocked { kproto.network_log("input", fmt.tprintf("q send would block: next_seq=%d unsent=%d", state.input_sequence, len(state.input_commands))) }
-		state.input_blocked = true
-		return
-	}
-	if code != .E_OK || int(sent) != len(packet) {
-		kproto.network_log("input", fmt.tprintf("ERROR q curl=%v sent=%d expected=%d", code, sent, len(packet)))
+	bytes := len(packet)
+	if !krunker_ws_transport_send(state.transport, packet, "q", true) {
+		kproto.network_log("input", "ERROR q: the WebSocket connection has ended")
 		krunker_ws_set_status(client, "Live input send failed; see logs/krunker-network.log")
 		state.connected = false
 		return
 	}
-	// Keep commands intact on E_AGAIN; only successful sends consume the queue.
+	// Queued packets are sent in order or the connection ends, so the
+	// commands, reset flag and counter are consumed now.
 	sent_ms: f64
 	for command in state.input_commands[:count] { sent_ms += f64(math.round(command.delta * 1000)) }
 	krunker_ws_input_sent(state, count, counter)
@@ -788,73 +795,103 @@ krunker_ws_send_input :: proc(client: ^Client) {
 		kproto.network_log("input", fmt.tprintf("q send resumed/backlog: seq=%d remaining=%d", first_sequence, len(state.input_commands)))
 	}
 	state.input_blocked = false
-	if reset || state.input_logged <= 3 || state.input_logged % 120 == 0 { kproto.network_log("input", fmt.tprintf("SENT live q seq=%d samples=%d last_seq=%d bytes=%d counter=%d reset=%v", first_sequence, count, first_sequence+i32(count)-1, sent, counter, reset)) }
+	if reset || state.input_logged <= 3 || state.input_logged % 120 == 0 { kproto.network_log("input", fmt.tprintf("SENT live q seq=%d samples=%d last_seq=%d bytes=%d counter=%d reset=%v", first_sequence, count, first_sequence+i32(count)-1, bytes, counter, reset)) }
 }
+
+// Network work the frame thread may do per frame. Messages beyond it wait
+// for the next frame. The one coalesced replay at the end is bounded by the
+// prediction history (KRUNKER_MAX_PREDICTED_INPUTS).
+KRUNKER_WS_APPLY_BUDGET :: 2 * time.Millisecond
 
 krunker_ws_poll :: proc(client: ^Client) {
 	state := &client.krunker
-	if !state.connected do return
-	if !krunker_ws_flush_pending(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
-	if !krunker_ws_flush_chat(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
-	buffer: [4096]byte
-	// Drain bursts promptly instead of imposing an eight-chunk-per-frame lag.
-	// A time budget and chunk ceiling still leave time for prediction/rendering.
-	deadline := glfw.GetTime() + 0.004
-	for iterations := 0; iterations < 128; iterations += 1 {
-		if iterations > 0 && glfw.GetTime() >= deadline {
-			state.recv_budget_hits += 1
-			if state.recv_budget_hits <= 3 || state.recv_budget_hits % 120 == 0 { kproto.network_log("ws-recv", fmt.tprintf("receive budget reached: chunks=%d count=%d unsent=%d", iterations, state.recv_budget_hits, len(state.input_commands))) }
-			break
-		}
-		received: c.size_t
-		meta: ^curl.ws_frame
-		code := curl.ws_recv(state.handle, rawptr(&buffer[0]), c.size_t(len(buffer)), &received, &meta)
-		if code == .E_AGAIN do break
-		if code != .E_OK {
-			kproto.network_log("ws-recv", fmt.tprintf("ERROR curl=%v (%s) detail=%s got_load=%v bootstrapped=%v spawned=%v", code, string(curl.easy_strerror(code)), string(cast(cstring)&state.error_buffer[0]), state.got_load, state.bootstrapped, state.spawned))
-			krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket receive failed: %v; see logs/krunker-network.log", code))
-			state.connected = false
-			break
-		}
-		state.rx_logged += 1
-		if meta != nil && state.rx_logged <= 40 { kproto.network_log("ws-recv", fmt.tprintf("frame=%d bytes=%d flags=%d offset=%d bytesleft=%d (frame logging limited to first 40)", state.rx_logged, received, meta.flags, meta.offset, meta.bytesleft)) }
-		if meta != nil && (meta.flags & curl.WS_CLOSE) == curl.WS_CLOSE {
-			close_code := -1
-			reason := ""
-			if received >= 2 { close_code = int(buffer[0])*256 + int(buffer[1]); reason = string(buffer[2:int(received)]) }
-			code_text := received >= 2 ? fmt.tprintf("%d", close_code) : "absent"
-			kproto.network_log("ws-close", fmt.tprintf("code=%s reason=%s close_payload_bytes=%d got_load=%v bootstrapped=%v spawned=%v live_inputs_sent=%d local_snapshots=%d", code_text, reason, received, state.got_load, state.bootstrapped, state.spawned, state.input_logged, state.snapshots_received))
-			if len(state.server_error) > 0 { krunker_ws_set_status(client, fmt.tprintf("Krunker disconnected: %s; see logs/krunker-network.log", state.server_error)) }
-			else if received < 2 { krunker_ws_set_status(client, "Krunker lobby closed the WebSocket without a status or reason; see logs/krunker-network.log") }
-			else { krunker_ws_set_status(client, fmt.tprintf("Krunker lobby closed the WebSocket: %d %s; see logs/krunker-network.log", close_code, reason)) }
-			state.connected = false
-			break
-		}
-		if received == 0 do break
-		if meta == nil { krunker_ws_set_status(client, "WebSocket receive omitted frame metadata."); state.connected = false; break }
-		if (meta.flags & (curl.WS_PING | curl.WS_PONG)) != {} { continue }
-		if (meta.flags & curl.WS_TEXT) != {} { kproto.network_log("ws-recv", "ignoring unexpected text frame"); continue }
-		payload, complete, assembly_error := kproto.krunker_ws_message_feed(&state.message, buffer[:int(received)], i64(meta.offset), i64(meta.bytesleft), (meta.flags & curl.WS_CONT) != {})
-		if len(assembly_error) > 0 { krunker_ws_set_status(client, assembly_error); state.connected = false; break }
-		if !complete do continue
-		if len(payload) > len(buffer) { kproto.network_log("ws-message", fmt.tprintf("reassembled complete message bytes=%d", len(payload))) }
-		krunker_ws_apply_world(client, payload)
-		if !state.connected do break
-	}
+	if !state.connected && !state.connecting do return
+	if state.connected && !krunker_ws_flush_chat(state) { state.connected = false; krunker_ws_set_status(client, "Krunker WebSocket send failed."); return }
+	if state.transport != nil { krunker_ws_transport_receive(state.transport, &state.inbox) }
+	krunker_ws_process_inbox(client)
 	krunker_ws_bootstrap_tick(client)
 }
 
+// Applies received messages in arrival order until the budget is spent, then
+// runs at most one prediction replay, from the newest acknowledged l.
+// The browser-access retry after a rejected token; tests replace it so no
+// helper process starts.
+Krunker_WS_Access_Retry :: #type proc(client: ^Client, rejected: bool) -> bool
+krunker_ws_access_retry_default :: proc(client: ^Client, rejected: bool) -> bool { return client_access_retry(client, rejected) }
+
+krunker_ws_process_inbox :: proc(client: ^Client, send_control: proc(^Krunker_WS_State, string) -> bool = krunker_ws_send, budget := KRUNKER_WS_APPLY_BUDGET, access_retry: Krunker_WS_Access_Retry = krunker_ws_access_retry_default) {
+	state := &client.krunker
+	start := time.tick_now()
+	processed := 0
+	failure: Krunker_WS_Event
+	failed := false
+	state.batching = true
+	for processed < len(state.inbox) && (state.connected || state.connecting) {
+		if processed > 0 && time.tick_since(start) >= budget {
+			state.recv_budget_hits += 1
+			if state.recv_budget_hits <= 3 || state.recv_budget_hits % 120 == 0 { kproto.network_log("ws-recv", fmt.tprintf("apply budget reached: messages=%d waiting=%d count=%d unsent=%d", processed, len(state.inbox)-processed, state.recv_budget_hits, len(state.input_commands))) }
+			break
+		}
+		event := &state.inbox[processed]
+		processed += 1
+		switch event.kind {
+		case .MESSAGE:
+			state.rx_logged += 1
+			if len(event.payload) > 4096 { kproto.network_log("ws-message", fmt.tprintf("reassembled complete message bytes=%d", len(event.payload))) }
+			krunker_ws_apply_world(client, event.payload, send_control)
+		case .CLOSED:
+			reason := string(event.payload)
+			code_text := event.close_code >= 0 ? fmt.tprintf("%d", event.close_code) : "absent"
+			kproto.network_log("ws-close", fmt.tprintf("code=%s reason=%s close_payload_bytes=%d got_load=%v bootstrapped=%v spawned=%v live_inputs_sent=%d local_snapshots=%d", code_text, reason, event.close_code >= 0 ? len(event.payload) + 2 : 0, state.got_load, state.bootstrapped, state.spawned, state.input_logged, state.snapshots_received))
+			if len(state.server_error) > 0 { krunker_ws_set_status(client, fmt.tprintf("Krunker disconnected: %s; see logs/krunker-network.log", state.server_error)) }
+			else if event.close_code < 0 { krunker_ws_set_status(client, "Krunker lobby closed the WebSocket without a status or reason; see logs/krunker-network.log") }
+			else { krunker_ws_set_status(client, fmt.tprintf("Krunker lobby closed the WebSocket: %d %s; see logs/krunker-network.log", event.close_code, reason)) }
+			state.connected = false
+		case .FAILED:
+			kproto.network_log("ws-recv", fmt.tprintf("ERROR %s got_load=%v bootstrapped=%v spawned=%v", event.text, state.got_load, state.bootstrapped, state.spawned))
+			krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket failed: %s; see logs/krunker-network.log", event.text))
+			state.connected = false
+		case .STATUS:
+			krunker_ws_set_status(client, event.text)
+		case .CONNECTED:
+			state.connecting, state.connected = false, true
+			if state.captcha_handoff { kproto.network_log("captcha", "Native matchmaking accepted the challenge handoff; opening the existing native WebSocket transport.") }
+			client_clear_players(client)
+			client.game.is_local = false
+			client.game.server_hits_players = true
+			state.team = 0
+			state.class_index = client.selected_class
+			state.secondary_index = client_secondary_request(client, client.selected_class)
+			// The spectator build joins every lobby as a spectator (en[6] = 1).
+			state.spectate, state.spectate_target = KRODIN_SPECTATOR, -1
+			krunker_ws_set_status(client, "Krunker WebSocket connected; waiting for server load…")
+		case .CONNECT_FAILED:
+			failure, failed = event^, true
+			failure.text = strings.clone(event.text, context.temp_allocator)
+			failure.payload = nil
+			state.connecting = false
+		}
+	}
+	allocator := state.transport != nil ? state.transport.allocator : context.allocator
+	krunker_ws_events_free(state.inbox[:processed], allocator)
+	remove_range(&state.inbox, 0, processed)
+	state.batching = false
+	krunker_client_finish_replay(client)
+	if failed { krunker_ws_connect_failed(client, failure, access_retry) }
+}
+
+// Never waits: a join still in flight is aborted and its thread is freed by
+// krunker_ws_reap once it finishes.
 krunker_ws_disconnect :: proc(state: ^Krunker_WS_State) {
 	if state.connected { diag_event(.LEFT_GAME) }
-	if state.handle != nil { kproto.network_log("disconnect", fmt.tprintf("connected=%v got_load=%v bootstrapped=%v spawned=%v pending=%d", state.connected, state.got_load, state.bootstrapped, state.spawned, len(state.pending))) }
-	if state.handle != nil { curl.easy_cleanup(state.handle) }
-	if state.global_ready { curl.global_cleanup() }
-	for opcode in state.pending { delete(opcode) }
-	delete(state.pending)
-	delete(state.ws_url)
-	delete(state.upgrade_capture.body)
-	delete(state.upgrade_capture.headers)
-	delete(state.message.buffer)
+	if state.transport != nil { kproto.network_log("disconnect", fmt.tprintf("connected=%v connecting=%v got_load=%v bootstrapped=%v spawned=%v unapplied=%d", state.connected, state.connecting, state.got_load, state.bootstrapped, state.spawned, len(state.inbox))) }
+	allocator := context.allocator
+	if state.transport != nil {
+		allocator = state.transport.allocator
+		krunker_ws_transport_release(state.transport)
+	}
+	krunker_ws_events_free(state.inbox[:], allocator)
+	delete(state.inbox)
 	delete(state.player_revisions)
 	delete(state.player_loadout_revisions)
 	delete(state.input_commands)
@@ -883,16 +920,17 @@ krunker_ws_connect :: proc(client: ^Client, link: ^shared.Join_Link) -> bool {
 	return krunker_ws_connect_ready(client, link)
 }
 
+// Starts a join on the WebSocket thread and returns at once. Status updates
+// and the result arrive through krunker_ws_poll.
 krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bool {
 	krunker_ws_disconnect(&client.krunker)
 	state := &client.krunker
-	if curl.global_init(curl.GLOBAL_DEFAULT) != .E_OK { krunker_ws_set_status(client, "Could not initialize libcurl for Krunker WebSocket."); return false }
-	state.global_ready = true
 	kproto.network_log("curl", fmt.tprintf("library=%s protocol_build=%s counter_increment=%d", string(curl.version()), kproto.KRUNKER_PROTOCOL_BUILD, kproto.KRUNKER_COUNTER_INCREMENT))
 	kproto.network_log("invite", fmt.tprintf("scheme=%s host=%s port=%d path=%s game=%s team_hint=%s", link.scheme, link.host, link.port, link.path, link.game_id, link.team_hint))
-	url := ""
+	join: Krunker_WS_Join
+	status := "Connecting to the lobby…"
 	if link.scheme == "http" || link.scheme == "https" || link.scheme == "game" {
-		krunker_ws_set_status(client, "Resolving lobby through Krunker matchmaker…")
+		status = "Resolving lobby through Krunker matchmaker…"
 		guest := client.guest.active
 		token := guest ? client.guest.access_token : client.access.token
 		legacy := ""
@@ -903,106 +941,69 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 				token = legacy
 			}
 		}
-		rejected, needs_captcha: bool
 		proof := client.access.captcha_token
 		client.access.captcha_token = ""
-		defer delete(proof)
-		resolved_url := ""
-		ok := false
-		error_text := ""
 		if len(client.access.assignment_url) > 0 {
-			resolved_url, ok = strings.clone(client.access.assignment_url), true
-			delete(client.access.assignment_url); client.access.assignment_url = ""
+			join.url = client.access.assignment_url
+			client.access.assignment_url = ""
+			delete(proof)
 			kproto.network_log("captcha", "Using the exact browser-selected WebSocket URL through native libcurl; assigned browser socket was never opened.")
 		} else {
-			resolved_url, ok, error_text = krunker_ws_resolve_invite(link, token, &rejected, captcha = proof, needs_captcha = &needs_captcha)
+			join.game_id, join.token, join.captcha = strings.clone(link.game_id), strings.clone(token), proof
 		}
-		url = resolved_url
-		if !ok {
-			krunker_ws_disconnect(state)
-			when ODIN_OS == .Windows {
-				// Guests use the same verification handoff as Krunker's page.
-				if needs_captcha {
-					if !client.access.captcha_retried {
-						if client_captcha_begin(client, krunker_captcha_start) { return true }
-						if client.access.status == .ERROR {
-							if guest { krunker_ws_set_status(client, GUEST_CAPTCHA_HELPER_TEXT) }
-							return false
-						}
-					} else { error_text = accessui.status_text("CAPTCHA_REJECTED") }
-				}
-				if !guest && client_access_retry(client, rejected) { return true }
-			} else {
-				if guest && needs_captcha { error_text = GUEST_CAPTCHA_UNSUPPORTED_TEXT }
-			}
-			if guest && client_guest_retry(client, rejected) { return true }
-			krunker_ws_set_status(client, error_text); return false
-		}
-		if len(proof) > 0 { kproto.network_log("captcha", "Native matchmaking accepted the challenge handoff; opening the existing native WebSocket transport.") }
+		state.captcha_handoff = len(join.captcha) > 0
 	} else if link.scheme == "ws" || link.scheme == "wss" {
-		url = strings.clone(link.raw)
+		join.url = strings.clone(link.raw)
 	} else {
 		krunker_ws_set_status(client, "This link is not a Krunker WebSocket or browser invite.")
-		krunker_ws_disconnect(state)
 		return false
 	}
-	defer delete(url)
-	kproto.network_log("websocket", fmt.tprintf("CONNECT %s; awaiting lobby selection", url))
-	handle := curl.easy_init()
-	if handle == nil { krunker_ws_set_status(client, "Could not allocate the Krunker WebSocket handle."); krunker_ws_disconnect(state); return false }
-	state.handle = handle
-	state.ws_url = strings.clone(url)
-	url_c := strings.clone_to_cstring(url)
-	defer delete(url_c)
-	headers: ^curl.slist
-	origin := strings.clone_to_cstring("Origin: https://krunker.io")
-	referer := strings.clone_to_cstring("Referer: https://krunker.io/")
-	user_agent := strings.clone_to_cstring("User-Agent: Mozilla/5.0 (Krodin)")
-	defer delete(origin); defer delete(referer); defer delete(user_agent)
-	headers = curl.slist_append(headers, origin); headers = curl.slist_append(headers, referer); headers = curl.slist_append(headers, user_agent)
-	defer curl.slist_free_all(headers)
-	setup := []curl.code{
-		curl.easy_setopt(handle, .ERRORBUFFER, rawptr(&state.error_buffer[0])),
-		curl.easy_setopt(handle, .HEADERFUNCTION, curl.write_callback(kproto.network_http_header)),
-		curl.easy_setopt(handle, .HEADERDATA, rawptr(&state.upgrade_capture)),
-		curl.easy_setopt(handle, .WRITEFUNCTION, curl.write_callback(kproto.network_http_write)),
-		curl.easy_setopt(handle, .WRITEDATA, rawptr(&state.upgrade_capture)),
-		curl.easy_setopt(handle, .DEBUGFUNCTION, curl.debug_callback(kproto.network_http_debug)),
-		curl.easy_setopt(handle, .VERBOSE, c.long(1)),
-		curl.easy_setopt(handle, .URL, url_c),
-		curl.easy_setopt(handle, .CONNECTTIMEOUT_MS, c.long(8000)),
-		curl.easy_setopt(handle, .TIMEOUT_MS, c.long(1000)),
-		curl.easy_setopt(handle, .CONNECT_ONLY, c.long(2)),
-		curl.easy_setopt(handle, .HTTPHEADER, headers),
+	transport := krunker_ws_transport_create(nil, join)
+	if !krunker_ws_transport_start(transport) {
+		krunker_ws_transport_release(transport)
+		krunker_ws_set_status(client, "Could not start the Krunker WebSocket thread or initialize libcurl.")
+		return false
 	}
-	option_names := []string{"ERRORBUFFER", "HEADERFUNCTION", "HEADERDATA", "WRITEFUNCTION", "WRITEDATA", "DEBUGFUNCTION", "VERBOSE", "URL", "CONNECTTIMEOUT_MS", "TIMEOUT_MS", "CONNECT_ONLY", "HTTPHEADER"}
-	for code, i in setup { if code != .E_OK { kproto.network_log("websocket", fmt.tprintf("ERROR curl option=%s code=%v (%s)", option_names[i], code, string(curl.easy_strerror(code)))); krunker_ws_set_status(client, "Could not configure WebSocket; see logs/krunker-network.log"); krunker_ws_disconnect(state); return false } }
-	kproto.network_log("websocket", "upgrade connect_timeout=8000ms timeout=1000ms Origin=https://krunker.io Referer=https://krunker.io/ User-Agent=Mozilla/5.0 (Krodin)")
-	code := curl.easy_perform(handle)
-	status := kproto.network_http_info(handle, "websocket", code, string(cast(cstring)&state.error_buffer[0]))
-	kproto.network_log("websocket", fmt.tprintf("upgrade response headers=%s body=%s", string(state.upgrade_capture.headers[:]), string(state.upgrade_capture.body[:])))
-	if code != .E_OK {
-		rejected := accessui.token_rejected(status, state.upgrade_capture.body[:]) && client_access_browser_link(link)
-		if rejected && client.guest.active {
-			krunker_ws_disconnect(state)
-			if client_guest_retry(client, true) { return true }
+	state.transport, state.connecting = transport, true
+	krunker_ws_set_status(client, status)
+	return true
+}
+
+// The frame-thread half of a failed join: the same browser access, CAPTCHA
+// and status decisions the synchronous join made.
+krunker_ws_connect_failed :: proc(client: ^Client, failure: Krunker_WS_Event, access_retry: Krunker_WS_Access_Retry = krunker_ws_access_retry_default) {
+	state := &client.krunker
+	krunker_ws_disconnect(state)
+	error_text := failure.text
+	guest := client.guest.active
+	if failure.upgrade {
+		rejected := failure.rejected && client_access_browser_link(&client.join_link)
+		if rejected && guest {
+			if client_guest_retry(client, true) { return }
 		} else if rejected {
 			when ODIN_OS == .Windows {
-				krunker_ws_disconnect(state)
-				if client_access_retry(client, true) { return true }
+				if access_retry(client, true) { return }
 			}
 		}
-		krunker_ws_set_status(client, fmt.tprintf("Krunker WebSocket upgrade failed: HTTP %d curl=%v; see logs/krunker-network.log", status, code)); krunker_ws_disconnect(state); return false
+		if len(error_text) == 0 { error_text = fmt.tprintf("Krunker WebSocket upgrade failed: HTTP %d curl=%v; see logs/krunker-network.log", failure.http_status, failure.code) }
+		krunker_ws_set_status(client, error_text)
+		return
 	}
-	state.connected = true
-	client_clear_players(client)
-	client.game.is_local = false
-	client.game.server_hits_players = true
-	state.team = 0
-	state.class_index = client.selected_class
-	state.secondary_index = client_secondary_request(client, client.selected_class)
-	// The spectator build joins every lobby as a spectator (en[6] = 1).
-	state.spectate, state.spectate_target = KRODIN_SPECTATOR, -1
-	krunker_ws_set_status(client, "Krunker WebSocket connected; waiting for server load…")
-	return true
+	when ODIN_OS == .Windows {
+		// Guests use the same verification handoff as Krunker's page.
+		if failure.needs_captcha {
+			if !client.access.captcha_retried {
+				if client_captcha_begin(client, krunker_captcha_start) { return }
+				if client.access.status == .ERROR {
+					if guest { krunker_ws_set_status(client, GUEST_CAPTCHA_HELPER_TEXT) }
+					return
+				}
+			} else { error_text = accessui.status_text("CAPTCHA_REJECTED") }
+		}
+		if !guest && access_retry(client, failure.rejected) { return }
+	} else {
+		if guest && failure.needs_captcha { error_text = GUEST_CAPTCHA_UNSUPPORTED_TEXT }
+	}
+	if guest && client_guest_retry(client, failure.rejected) { return }
+	krunker_ws_set_status(client, error_text)
 }

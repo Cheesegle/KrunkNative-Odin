@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import "core:fmt"
+import "core:time"
 import shared "../shared"
 import kproto "../krunker"
 import glfw "vendor:glfw"
@@ -10,7 +11,32 @@ import glfw "vendor:glfw"
 KRUNKER_INPUT_RATE :: 360
 KRUNKER_INPUT_SECONDS :: 1.0 / KRUNKER_INPUT_RATE
 KRUNKER_SEND_SECONDS :: 1.0 / 30.0
+// Also the replay bound: the full history replays in about 0.75 ms at
+// -o:speed (krunker_ping_spike_frame_cost). Krunker replays its whole backlog.
 KRUNKER_MAX_PREDICTED_INPUTS :: 2 * KRUNKER_INPUT_RATE
+
+// A local correction in progress. The authoritative l state is applied at
+// once; the replay of unacknowledged commands runs in
+// krunker_client_finish_replay, so several l in one frame replay only once,
+// from the newest acknowledgement. The predicted view state is saved before
+// the first of them, and restored after the replay.
+Krunker_Deferred_Replay :: struct {
+	saved, pending, respawned: bool,
+	player: ^shared.Player,
+	ack: i32,
+	server_position: shared.Vec3,
+	aim, aim_time: f32,
+	direction: shared.Vec2,
+	position: shared.Vec3,
+	weapon: ^shared.Weapon,
+	reload_timer, swap_timer: f32,
+	did_shoot: bool,
+	burst_count: i32,
+}
+
+// Replay cost, kept for the [prediction] log line and the frame-cost tests.
+Krunker_Replay_Profile :: struct { ns: i64, replays, commands, coalesced, snaps: int }
+krunker_replay_profile: Krunker_Replay_Profile
 
 Krunker_Render_Sample :: struct {
 	position: shared.Vec3,
@@ -36,6 +62,10 @@ krunker_client_reset_prediction :: proc(client: ^Client) {
 	client.krunker.input_swap = 0
 	client.krunker.render_sample_ready = false
 	client.krunker.acked_has_ramp_fix = false
+	client.krunker.history_truncated = false
+	// A deferred replay has nothing left to replay, and its player may be
+	// about to be respawned or removed.
+	client.krunker.replay = {}
 }
 
 // One display frame of live input. after_scroll is the frame's command
@@ -101,6 +131,10 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		append(&state.input_commands, command)
 		// Keep client-only impulse metadata produced by prediction for replay.
 		append(&client.predicted_inputs, command)
+		if excess := len(client.predicted_inputs) - KRUNKER_MAX_PREDICTED_INPUTS; excess > 0 {
+			// The server will still process these, but replay no longer can.
+			state.truncated_through, state.history_truncated = client.predicted_inputs[excess-1].seq, true
+		}
 		client_cap_predicted_inputs(client, KRUNKER_MAX_PREDICTED_INPUTS)
 		state.command_direction = client.me.direction
 		state.render_current = {client.me.position, client.me.aim_val}
@@ -118,6 +152,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	is_you := player.is_you
 	if is_you && source.position_revision != state.local_position_revision {
 		// lm is an explicit server reset, not an ACK to replay past inputs over.
+		krunker_client_finish_replay(client)
 		krunker_client_reset_prediction(client)
 		state.input_reset = true
 		state.local_position_revision = source.position_revision
@@ -145,15 +180,21 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	fresh_sync := source.has_ack && source.sync_revision != state.local_sync_revision
 	// Roster/remote updates cannot replay an old local l snapshot.
 	if is_you && !respawned && !fresh_sync { return }
-	predicted_aim, predicted_aim_time := player.aim_val, player.aim_time
-	predicted_direction := player.direction
-	predicted_position := player.position
-	predicted_weapon := player.weapon
-	reload_timer, swap_timer := player.reload_timer, player.swap_timer
-	did_shoot, burst_count := player.did_shoot, player.burst_count
+	// Only a plain l can join a deferred replay; anything else replays first.
+	deferred := state.batching && fresh_sync && !respawned
+	if !deferred { krunker_client_finish_replay(client) }
+	replay := &state.replay
+	if !replay.saved {
+		replay^ = {saved = true, player = player, aim = player.aim_val, aim_time = player.aim_time, direction = player.direction,
+			position = player.position, weapon = player.weapon, reload_timer = player.reload_timer, swap_timer = player.swap_timer,
+			did_shoot = player.did_shoot, burst_count = player.burst_count}
+	} else {
+		krunker_replay_profile.coalesced += 1
+	}
+	replay.respawned = replay.respawned || respawned
 	player.position = source.position
 	player.velocity = source.velocity
-	if !is_you || respawned { player.direction = source.direction }
+	if respawned { player.direction = source.direction }
 	player.on_ground = source.on_ground
 	player.on_ladder = source.on_ladder
 	player.on_terrain = source.on_terrain
@@ -171,7 +212,8 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	// wrong weapon also gives prediction the wrong movement multiplier.
 	if player.loadout_index != source.weapon_slot { shared.player_swap_weapon(player, source.weapon_slot, true, true, true) }
 	shared.player_update_height(player)
-	if is_you && source.has_ack {
+	replay.server_position = source.position
+	if source.has_ack {
 		state.local_sync_revision = source.sync_revision
 		// A stale ACK (an id this life never sent) acknowledges nothing: replay
 		// every prediction from the server position instead.
@@ -190,42 +232,72 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 			client_discard_acked_inputs(client, source.ack_seq)
 		}
 		player.ramp_fix, player.has_ramp_fix = state.acked_ramp_fix, state.acked_has_ramp_fix
-		for &input in client.predicted_inputs {
-			shared.player_proc_input(player, &input, true, client.krunker_world.move_lock)
-			input.predicted_ramp_fix, input.predicted_has_ramp_fix = player.ramp_fix, player.has_ramp_fix
-		}
-		// krunker_ws_accept_ack only accepts ack < input_sequence, so an ACK
+		// The replay runs in krunker_client_finish_replay, once per frame's batch
+		// of l. krunker_ws_accept_ack only accepts ack < input_sequence, so an ACK
 		// never moves the sequence past commands still queued for q.
+		replay.pending, replay.ack = true, source.ack_seq
 	}
-	if !is_you { return }
-	if !respawned {
-		player.direction = predicted_direction
+	if !deferred { krunker_client_finish_replay(client) }
+}
+
+// Replays the commands the newest l has not acknowledged, then restores the
+// predicted view state saved before the first l of the batch.
+krunker_client_finish_replay :: proc(client: ^Client) {
+	state := &client.krunker
+	if !state.replay.saved { return }
+	saved := state.replay
+	state.replay = {}
+	player := saved.player
+	snapped := false
+	replay_ns: i64
+	if saved.pending {
+		if state.history_truncated && saved.ack < state.truncated_through {
+			// More than KRUNKER_MAX_PREDICTED_INPUTS went unacknowledged and the
+			// oldest were dropped, so no replay can reproduce the server. Keep
+			// the server state and the remaining commands; the next l replays them.
+			snapped = true
+			krunker_replay_profile.snaps += 1
+		} else {
+			state.history_truncated = false
+			start := time.tick_now()
+			for &input in client.predicted_inputs {
+				shared.player_proc_input(player, &input, true, client.krunker_world.move_lock)
+				input.predicted_ramp_fix, input.predicted_has_ramp_fix = player.ramp_fix, player.has_ramp_fix
+			}
+			replay_ns = i64(time.tick_since(start))
+			krunker_replay_profile.ns += replay_ns
+			krunker_replay_profile.replays += 1
+			krunker_replay_profile.commands += len(client.predicted_inputs)
+		}
+	}
+	if !saved.respawned {
+		player.direction = saved.direction
 		// View ADS follows current input, without restarting on a delayed ACK.
-		if player.weapon == predicted_weapon && !player.weapon.no_aim {
-			player.aim_val, player.aim_time = predicted_aim, predicted_aim_time
+		if player.weapon == saved.weapon && !player.weapon.no_aim {
+			player.aim_val, player.aim_time = saved.aim, saved.aim_time
 		}
-		if player.weapon == predicted_weapon {
-			player.reload_timer, player.swap_timer = reload_timer, swap_timer
-			player.did_shoot, player.burst_count = did_shoot, burst_count
+		if player.weapon == saved.weapon {
+			player.reload_timer, player.swap_timer = saved.reload_timer, saved.swap_timer
+			player.did_shoot, player.burst_count = saved.did_shoot, saved.burst_count
 		}
 	}
-	if respawned || !state.render_sample_ready {
+	if saved.respawned || !state.render_sample_ready {
 		state.render_previous = {player.position, player.aim_val}
 		state.render_current = state.render_previous
 		state.command_direction = player.direction
 		state.render_sample_ready = true
 	} else {
 		// Preserve interpolation within the current command after a correction.
-		correction := player.position - predicted_position
+		correction := player.position - saved.position
 		state.render_previous.position += correction
 		state.render_current.position += correction
 		state.prediction_corrections += 1
-		when KRODIN_DEV { state.last_correction, state.last_correction_ack = correction, source.ack_seq }
+		when KRODIN_DEV { state.last_correction, state.last_correction_ack = correction, saved.ack }
 		error := math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z)
-		if error >= 2 || state.prediction_corrections <= 3 || state.prediction_corrections % 30 == 0 {
+		if error >= 2 || snapped || state.prediction_corrections <= 3 || state.prediction_corrections % 30 == 0 {
 			pending_ms: f32
 			for input in client.predicted_inputs { pending_ms += input.delta * 1000 }
-			kproto.network_log("prediction", fmt.tprintf("ack=%d correction=%.3f delta=%v server_position=%v pending_commands=%d pending_ms=%.0f unsent=%d next_seq=%d", source.ack_seq, error, correction, source.position, len(client.predicted_inputs), pending_ms, len(state.input_commands), state.input_sequence))
+			kproto.network_log("prediction", fmt.tprintf("ack=%d correction=%.3f delta=%v server_position=%v pending_commands=%d pending_ms=%.0f unsent=%d next_seq=%d replay_ms=%.3f%s", saved.ack, error, correction, saved.server_position, len(client.predicted_inputs), pending_ms, len(state.input_commands), state.input_sequence, f64(replay_ns) / 1e6, snapped ? " snapped: history truncated after 2 s unacknowledged" : ""))
 		}
 	}
 }

@@ -158,6 +158,8 @@ Client :: struct {
 	map_loaded:        bool,
 	offline_custom_map: ^shared.Map,
 	net:               Net_Client_State,
+	// A native server connect still resolving or dialing on its worker.
+	net_connect:       ^Net_Connect_Job,
 	krunker:           Krunker_WS_State,
 	krunker_world:     kproto.Krunker_World_State,
 	join_link:         shared.Join_Link,
@@ -792,8 +794,9 @@ client_apply_movement_state :: proc(player: ^shared.Player, state: ^shared.Packe
 // Snaps to the server's state after the acknowledged command, drops the
 // acknowledged commands and replays the rest with the same durations. When
 // prediction agrees with the server the replay lands exactly where the player
-// already was, and the correction is zero.
-client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool) {
+// already was, and the correction is zero. replay is false for a snapshot that
+// a newer one in the same receive replaces: only the newest replays.
+client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, state: ^shared.Packet_Player_State, was_active: bool, replay := true) {
 	predicted_position, predicted_direction := player.position, player.direction
 	// Player snapshots omit the ramp snap target; take the value predicted
 	// after the acknowledged command (as the live path does).
@@ -805,6 +808,10 @@ client_reconcile_local_player :: proc(client: ^Client, player: ^shared.Player, s
 		commands.acked_slot, commands.acked_ammo, commands.has_acked_ammo = input.predicted_slot, input.predicted_ammo, true
 	}
 	client_discard_acked_inputs(client, state.ack_seq)
+	// A newer snapshot in this receive does the snap and the replay; leaving
+	// the prediction untouched keeps its correction measured against it. (A
+	// fresh life still resets here, or the newer one would not see it.)
+	if !replay && was_active { return }
 	player.interpolate = false
 	player.position = state.position
 	player.velocity = state.velocity
@@ -889,7 +896,7 @@ client_reconcile_players :: proc(client: ^Client, state: ^shared.Packet_Match_St
 	client.game.player_count = i32(len(client.game.players))
 }
 
-client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_State) {
+client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_State, replay := true) {
 	if state.class_id < 0 || state.class_id >= i32(len(client.game.classes)) || state.player_id == 0 || state.team < 0 || state.team > 2 {
 		fmt.eprintf("[Net Client] Rejected invalid player state id=%d class=%d team=%d\n", state.player_id, state.class_id, state.team)
 		return
@@ -948,7 +955,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 	player.active = state.active
 	if state.is_you {
 		if state.active {
-			client_reconcile_local_player(client, player, state, was_active)
+			client_reconcile_local_player(client, player, state, was_active, replay)
 		} else {
 			clear(&client.predicted_inputs)
 			player.interpolate = false
@@ -1373,6 +1380,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client_guest_tick(client)
 	// The ranked queue keeps running while menus are browsed or a lobby is played.
 	ranked_tick(client)
+	// Free network threads that finished after a leave or a cancelled join.
+	krunker_ws_reap()
+	net_client_connect_poll(client)
 	if client.join_queued > 0 {
 		client.join_queued -= 1
 		if client.join_queued == 0 { client_join_invite(client) }
@@ -1383,9 +1393,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		// built below report it (view_tick/view_frac).
 		native_view_clock_update(&client.net.view, glfw.GetTime(), client.net_interp)
 	}
-	if client.krunker.connected {
+	if client.krunker.connected || client.krunker.connecting {
 		krunker_ws_poll(client)
-		krunker_client_sync_match(client, f64(now))
+		if client.krunker.connected { krunker_client_sync_match(client, f64(now)) }
 	}
 	if !client.game.ready && !(client.krunker.connected && client.krunker_world.ready) {
 		return
@@ -1735,6 +1745,8 @@ main :: proc() {
 		fmt.println("[CPU] pinning off (--no-cpu-pinning)")
 	} else {
 		fmt.printfln("[CPU] %s", cpu_pinning_apply())
+		// The network log writer (package krunker) cannot see this package.
+		kproto.network_thread_start_hook = proc() { cpu_pin_current_thread_off_game_core() }
 	}
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))
@@ -2044,6 +2056,9 @@ main :: proc() {
 	client_unload_map(client)
 	net_client_disconnect(&client.net)
 	krunker_ws_disconnect(&client.krunker)
+	// Shutdown may wait: aborted requests end within curl's progress interval.
+	krunker_ws_reap(wait = true)
+	net_client_connect_cancel(client)
 	shared.join_link_free(&client.join_link)
 	kproto.network_log_clear_secrets()
 	kproto.network_log_close()
