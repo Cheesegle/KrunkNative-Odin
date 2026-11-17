@@ -53,6 +53,7 @@ Client :: struct {
 	hud_settings: menuui.HUD_Settings,
 	kill_feed: Kill_Feed,
 	kill_cam: Kill_Cam,
+	round_countdown: Round_Countdown,
 	death_screen: Death_Screen,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
@@ -114,6 +115,10 @@ Client :: struct {
 	spawn_retry_timer: f32,
 	selected_class:    i32,
 	selected_secondary: i32,
+	// Krodin's own "Remember last secondary" (Settings > Gameplay > Loadout) and
+	// the secondary last picked per class index (0 = none yet).
+	remember_secondary: bool,
+	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
 	local_practice: bool,
 	has_life: bool,
 	lobby_team: i32,
@@ -902,7 +907,11 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		player.interp_dir_start = player.direction
 		player.interp_dir_end = {state.x_dir, state.y_dir}
 		player.velocity = state.velocity
+		was_grounded := player.on_ground
 		client_apply_movement_state(player, state)
+		// Snapshots carry no landing; a remote player who comes down plays one
+		// like the live path's interpolated landing (krunker_presentation.odin).
+		if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 	} else {
 		// Fresh spawn or re-appearance: snap, then interpolate from here.
 		player.position = state.position
@@ -1158,6 +1167,12 @@ client_freecam_allowed :: proc(client: ^Client) -> bool {
 	return !client.krunker.connected && !client.net.connected
 }
 
+// The N noclip toggle is a developer tool: only dev builds (KRODIN_DEV) have
+// it, and never in a live Krunker lobby, where the server owns noclip.
+client_noclip_key_allowed :: proc(client: ^Client) -> bool {
+	return KRODIN_DEV && !client.krunker.connected
+}
+
 client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: f32) {
 	rotation := client_mouse_rotation(client, mouse_delta)
 	client.camera.rotation.x -= rotation.y
@@ -1390,7 +1405,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		after_scroll = input
 
 		if client.mouse_state.locked && !client.freecam_enabled {
-			if noclip_key && !client.last_noclip_key && !client.krunker.connected {
+			if noclip_key && !client.last_noclip_key && client_noclip_key_allowed(client) {
 				client.me.noclip = !client.me.noclip
 			}
 
@@ -1415,6 +1430,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.net_input_seq += 1
 		if client.krunker.connected {
 			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
+			krunker_ws_ghost_watchdog(client, glfw.GetTime())
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
@@ -1437,6 +1453,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	if !client.net.connected && !client.krunker.connected {
 		shared.game_tick(&client.game, now, delta)
+		client_local_new_game(client)
 	} else {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
@@ -1487,6 +1504,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_kill_cam_update(client, delta)
+	client_round_countdown_update(client, glfw.GetTime())
 	client_death_screen_update(client, glfw.GetTime())
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
@@ -1524,6 +1542,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 		death_screen_render(client, glfw.GetTime())
 	}
+	// Krunker draws it on the overlay canvas, under the menu's panels too.
+	if !end_screen_visible { round_countdown_render(client, glfw.GetTime()) }
 	fps_render(client)
 	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
@@ -1636,6 +1656,7 @@ main :: proc() {
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
 	client.ranked_prefs = preferences.ranked
+	client.remember_secondary, client.secondary_picks = preferences.remember_secondary, preferences.secondary_picks
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching

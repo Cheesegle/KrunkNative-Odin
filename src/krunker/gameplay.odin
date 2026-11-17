@@ -321,9 +321,31 @@ krunker_world_apply_leaders :: proc(state: ^Krunker_World_State, value: Krunker_
 
 krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krunker_Msgpack_Value, opcode: string) -> bool {
 	switch opcode {
+	case "bh":
+		// H4e -> updateHeadSize(player, headMlt, reset): only a value above 1
+		// or a reset (back to 1) changes the head.
+		if len(packet) < 3 { return false }
+		sid, ok := krunker_world_bounded_number(packet[1], 0, 2147483647); if !ok { return false }
+		reset := len(packet) > 3 && krunker_world_bool(packet[3])
+		mlt := krunker_world_f32(packet[2], 1)
+		if !(mlt > 1 || reset) { return true }
+		for &player in state.players {
+			if player.sid != i32(sid) { continue }
+			player.head_mlt = reset ? 1 : min(mlt, 10)
+			player.revision += 1
+		}
+		return true
 	case "gmsg":
 		message := ""
 		if len(packet) > 1 { text, ok := packet[1].(string); if !ok { return false }; message = strings.trim_space(text) }
+		// gmsg(message, time, countdown, popup): a truthy countdown is shown
+		// big in the centre with the cntd_N sound, whatever the message.
+		if len(packet) > 3 {
+			if number, ok := krunker_world_bounded_number(packet[3], 1, 99); ok && number == math.floor(number) {
+				state.countdown_number = i32(number)
+				state.countdown_number_revision += 1
+			}
+		}
 		kind: Krunker_Countdown
 		switch message {
 		case "wt": kind = .WAITING
@@ -507,10 +529,15 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		if len(packet) < 2 { return false }; return krunker_world_apply_leaders(state, packet[1])
 	case "4":
 		// Hit confirmation is presentation only. Health arrives separately in h.
-		if len(packet) < 5 { return false }
-		if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
-		// DO_DAMAGE (sid, damage, headshot, kill, ...), handled by the browser D4e.
-		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, krunker_world_bool(packet[3]), krunker_world_bool(packet[4])
+		// DO_DAMAGE (sid, damage, headshot, kill, ...), handled by the browser
+		// J4e. Every argument is optional there: the server sends a bare
+		// DO_DAMAGE for damaged objects, spawnables and nukes, and spectators of
+		// the shooter get (sid, damage, headshot). J4e still plays hit_0/crit_0
+		// and shows the hitmarker (showHit(!!kill)) for each of them.
+		if len(packet) > 2 {
+			if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
+		}
+		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, len(packet) > 3 && krunker_world_bool(packet[3]), len(packet) > 4 && krunker_world_bool(packet[4])
 		state.hit_revision += 1
 		return true
 	case "6":

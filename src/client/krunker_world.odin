@@ -37,6 +37,7 @@ krunker_client_load_world_map :: proc(client: ^Client) -> bool {
 	client.game.map_count = 1
 	if world.has_game_config { client.game.config = world.game_config }
 	shared.game_init(&client.game, 0, world.mode_index, false)
+	client.game.server_hits_players = true
 	if !client.game.ready { krunker_ws_set_status(client, "Could not initialize lobby map/mode; see logs/krunker-network.log"); return false }
 	client_load_current_map(client)
 	client.camera.position = map_inst.camera_position
