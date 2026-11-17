@@ -545,6 +545,8 @@ Game_Config :: struct {
 	team1_damage:       f32,
 	team2_damage:       f32,
 	health_mlt:         f32,
+	// Krunker's hurtboxScale lobby setting (1..2): scales every complexHitbox.
+	hurtbox_scale:      f32,
 	fire_rate:          f32,
 	reload_speed:       f32,
 	objective_rotation_time: f32,
@@ -742,6 +744,7 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	team1_damage    = 1.0,
 	team2_damage    = 1.0,
 	health_mlt      = 1.0,
+	hurtbox_scale   = 1.0,
 	fire_rate       = 1.0,
 	reload_speed    = 1.0,
 	objective_rotation_time = 60.0,

@@ -158,6 +158,168 @@ when ODIN_TEST {
 		testing.expect(t, near3(hurtbox_center(boxes[0]), {5, 12, 7}), "the rig follows the position")
 	}
 
+	// Krunker's world-space complexHitboxes for fixed pose inputs, computed
+	// independently from game.js (cH, a1e, r1e and the head/torso builders) in
+	// three.js conventions: Object3D order T * R(XYZ) * S, OBB = geometry box,
+	// halfSize + 1 while moving, then matrixWorld. Every box is checked: its
+	// centre (getGeometryCenterWorldPosition), size and x/y axes. Box order:
+	// head, torso, standing legs (right, left), crouched legs (right upper,
+	// connector, lower, then left), with the inactive set flagged.
+	@(test)
+	krunker_hurtboxes_reproduce_krunker_world_boxes :: proc(t: ^testing.T) {
+		Expected_Box :: struct { center, size, x_axis, y_axis: shared.Vec3 }
+		Case :: struct { name: string, pose: shared.Krunker_Hurtbox_Pose, boxes: [10]Expected_Box }
+		cases := [?]Case{
+			{"standing", {}, {
+				{{0.00000, 10.00000, 0.00000}, {2.00000, 2.00000, 2.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 6.60000, 0.00000}, {2.60000, 4.80000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.30000, 0.88613, 0.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.30000, 0.88613, 0.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"crouched", {crouch = 1}, {
+				{{0.00000, 7.00000, 0.00000}, {2.00000, 2.00000, 2.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 3.60000, 0.00000}, {2.60000, 4.80000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.30000, 0.88613, 0.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.30000, 0.88613, 0.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"pitch_up", {pitch = 1.5}, {
+				{{0.00000, 8.44380, 3.95350}, {2.00000, 2.00000, 2.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 0.73169, 0.68164}},
+				{{0.00000, 5.95605, 1.63593}, {2.60000, 4.80000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 0.73169, 0.68164}},
+				{{0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.30000, 0.88613, 0.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.30000, 0.88613, 0.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"pitch_down", {pitch = -1.5}, {
+				{{0.00000, 8.44380, -3.95350}, {2.00000, 2.00000, 2.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 0.73169, -0.68164}},
+				{{0.00000, 5.95605, -1.63593}, {2.60000, 4.80000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 0.73169, -0.68164}},
+				{{0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.30000, 0.88613, 0.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.30000, 0.88613, 0.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"moving", {moving = true}, {
+				{{0.00000, 10.00000, 0.00000}, {4.00000, 4.00000, 4.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 6.60000, 0.00000}, {4.60000, 6.80000, 3.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.65000, 2.10000, 0.00000}, {3.30000, 6.20000, 3.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {3.30000, 6.20000, 3.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {3.30000, 4.10000, 3.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {3.30000, 2.88613, 2.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {3.30000, 4.10000, 3.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {3.30000, 4.10000, 3.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {3.30000, 2.88613, 2.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {3.30000, 4.10000, 3.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"big_head", {head_mlt = 2}, {
+				{{0.00000, 11.00000, 0.00000}, {4.00000, 4.00000, 4.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 6.60000, 0.00000}, {2.60000, 4.80000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.30000, 4.20000, 1.30000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.30000, 0.88613, 0.95120}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.30000, 2.10000, 1.30000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.30000, 0.88613, 0.95120}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.30000, 2.10000, 1.30000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"hurtbox_scale", {hurtbox_scale = 1.5}, {
+				{{0.00000, 10.00000, 0.00000}, {3.00000, 3.00000, 3.00000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 6.60000, 0.00000}, {3.90000, 7.20000, 1.95000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{0.65000, 2.10000, 0.00000}, {1.95000, 6.30000, 1.95000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{-0.65000, 2.10000, 0.00000}, {1.95000, 6.30000, 1.95000}, {1.00000, 0.00000, 0.00000}, {0.00000, 1.00000, 0.00000}},
+				{{1.12738, 1.59376, -0.92915}, {1.95000, 3.15000, 1.95000}, {0.86603, 0.28232, 0.41267}, {-0.45465, 0.10118, 0.88491}},
+				{{1.60476, 1.48752, -1.85830}, {1.95000, 1.32920, 1.42679}, {0.86603, 0.28232, 0.41267}, {-0.47449, 0.72430, 0.50025}},
+				{{1.85646, 0.48085, -1.69781}, {1.95000, 3.15000, 1.95000}, {0.86603, 0.28232, 0.41267}, {-0.23971, 0.95874, -0.15285}},
+				{{-1.01537, 1.56257, -0.97474}, {1.95000, 3.15000, 1.95000}, {0.92388, -0.21608, -0.31584}, {0.34797, 0.13088, 0.92832}},
+				{{-1.38074, 1.42514, -1.94948}, {1.95000, 1.32920, 1.42679}, {0.92388, -0.21608, -0.31584}, {0.36316, 0.75530, 0.54557}},
+				{{-1.57339, 0.40202, -1.81303}, {1.95000, 3.15000, 1.95000}, {0.92388, -0.21608, -0.31584}, {0.18347, 0.97440, -0.12995}},
+			}},
+			{"stride_yaw", {position = {5, 2, -7}, yaw = math.PI / 2, step_val = 1}, {
+				{{5.00000, 12.37866, -7.00000}, {2.00000, 2.00000, 2.00000}, {0.12589, 0.00000, -0.99204}, {0.00000, 1.00000, 0.00000}},
+				{{5.00000, 8.97866, -7.00000}, {2.60000, 4.80000, 1.30000}, {0.12589, 0.00000, -0.99204}, {0.00000, 1.00000, 0.00000}},
+				{{6.20252, 4.80840, -7.50262}, {1.30000, 4.20000, 1.30000}, {0.12589, 0.00000, -0.99204}, {-0.53366, 0.84298, -0.06772}},
+				{{3.79748, 4.80840, -6.49738}, {1.30000, 4.20000, 1.30000}, {0.12589, 0.00000, -0.99204}, {0.53366, 0.84298, 0.06772}},
+				{{4.42159, 3.48928, -8.20982}, {1.30000, 2.10000, 1.30000}, {0.30346, 0.45998, -0.83446}, {0.62879, 0.56132, 0.53809}},
+				{{3.76136, 2.89989, -8.77481}, {1.30000, 0.88613, 0.95120}, {0.30346, 0.45998, -0.83446}, {-0.02791, 0.87968, 0.47476}},
+				{{4.46448, 2.13761, -8.93930}, {1.30000, 2.10000, 1.30000}, {0.30346, 0.45998, -0.83446}, {-0.66964, 0.72598, 0.15666}},
+				{{3.98369, 4.48716, -6.10545}, {1.30000, 2.10000, 1.30000}, {-0.26314, -0.01225, -0.96468}, {0.88999, -0.38905, -0.23783}},
+				{{3.04920, 4.89567, -5.85573}, {1.30000, 0.88613, 0.95120}, {-0.26314, -0.01225, -0.96468}, {0.90503, 0.34322, -0.25123}},
+				{{2.59306, 3.95979, -5.71943}, {1.30000, 2.10000, 1.30000}, {-0.26314, -0.01225, -0.96468}, {0.43442, 0.89131, -0.12981}},
+			}},
+			{"crouch_stride", {step_val = 1, crouch = 1}, {
+				{{0.00000, 7.37866, 0.00000}, {2.00000, 2.00000, 2.00000}, {0.99204, 0.00000, 0.12589}, {0.00000, 1.00000, 0.00000}},
+				{{0.00000, 3.97866, 0.00000}, {2.60000, 4.80000, 1.30000}, {0.99204, 0.00000, 0.12589}, {0.00000, 1.00000, 0.00000}},
+				{{0.57076, 2.56278, 0.66555}, {1.30000, 4.20000, 1.30000}, {0.99204, 0.00000, 0.12589}, {0.03527, 0.95994, -0.27797}},
+				{{-0.57076, 2.56278, -0.66555}, {1.30000, 4.20000, 1.30000}, {0.99204, 0.00000, 0.12589}, {-0.03527, 0.95994, 0.27797}},
+				{{1.22695, 1.71634, -0.71338}, {1.30000, 2.10000, 1.30000}, {0.81923, 0.38664, 0.42353}, {-0.55440, 0.34507, 0.75734}},
+				{{1.80906, 1.35401, -1.50859}, {1.30000, 0.88613, 0.95120}, {0.81923, 0.38664, 0.42353}, {-0.50562, 0.83545, 0.21533}},
+				{{2.00386, 0.43263, -1.04425}, {1.30000, 2.10000, 1.30000}, {0.81923, 0.38664, 0.42353}, {-0.18552, 0.87751, -0.44223}},
+				{{-0.88466, 2.21985, -1.09427}, {1.30000, 2.10000, 1.30000}, {0.96232, -0.11893, -0.24454}, {0.22841, -0.13447, 0.96423}},
+				{{-1.12448, 2.36105, -2.10672}, {1.30000, 0.88613, 0.95120}, {0.96232, -0.11893, -0.24454}, {0.26770, 0.57218, 0.77521}},
+				{{-1.29599, 1.34068, -2.28542}, {1.30000, 2.10000, 1.30000}, {0.96232, -0.11893, -0.24454}, {0.16334, 0.97178, 0.17019}},
+			}},
+		}
+		close :: proc(a, b: shared.Vec3) -> bool { return linalg.length(a - b) < 2e-4 }
+		for c in cases {
+			pose := c.pose
+			pose.inactive_legs = true
+			boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+			count := shared.krunker_player_hurtboxes(pose, &boxes)
+			if !testing.expectf(t, count == 10, "%s: head, torso and both leg sets, got %d", c.name, count) { continue }
+			for want, i in c.boxes {
+				box := boxes[i]
+				m := box.transform
+				size := shared.Vec3{linalg.length(m[0].xyz), linalg.length(m[1].xyz), linalg.length(m[2].xyz)}
+				center := shared.krunker_hurtbox_center(box)
+				testing.expectf(t, close(center, want.center) && close(size, want.size) && close(linalg.normalize(m[0].xyz), want.x_axis) && close(linalg.normalize(m[1].xyz), want.y_axis),
+					"%s box %d: centre %v size %v x %v y %v, want %v", c.name, i, center, size, linalg.normalize(m[0].xyz), linalg.normalize(m[1].xyz), want)
+				part := i == 0 ? shared.Krunker_Hurtbox_Part.HEAD : i == 1 ? .TORSO : .LEG
+				crouched_set := i >= 4
+				testing.expectf(t, box.part == part && box.active == (i < 2 || crouched_set == (c.pose.crouch != 0)), "%s box %d: part %v active %v", c.name, i, box.part, box.active)
+			}
+			pose.inactive_legs = false
+			testing.expect(t, shared.krunker_player_hurtboxes(pose, &boxes) == (c.pose.crouch != 0 ? 8 : 4), "the hit test only gets the active leg set")
+		}
+	}
+
+	// cH lifts the arm holder by recoilAnimY * (recoilYM || 0.3) * animMult.
+	@(test)
+	krunker_hurtbox_arms_follow_recoil :: proc(t: ^testing.T) {
+		weapon := shared.WEAPON_AK47
+		pose := shared.Krunker_Hurtbox_Pose{weapon = &weapon}
+		rest, kicked: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+		count := shared.krunker_player_hurtboxes(pose, &rest)
+		pose.recoil_anim_y = 0.5
+		shared.krunker_player_hurtboxes(pose, &kicked)
+		mlt := weapon.recoil_y_mlt != 0 ? weapon.recoil_y_mlt : 0.3
+		lift := 0.5 * mlt * shared.GAME_CONSTANTS.anim_mlt
+		for i in 0 ..< count {
+			delta := shared.krunker_hurtbox_center(kicked[i]) - shared.krunker_hurtbox_center(rest[i])
+			want := rest[i].part == .ARM ? shared.Vec3{0, lift, 0} : shared.Vec3{}
+			testing.expectf(t, linalg.length(delta - want) < 1e-4, "box %d (%v) moved %v, want %v", i, rest[i].part, delta, want)
+		}
+	}
+
 	debug_test_project :: proc(view_projection: shared.Mat4, point: shared.Vec3) -> (pixel: [2]int, ok: bool) {
 		screen, visible := player_healthbar_project(view_projection, point, HITBOX_SHOT_W, HITBOX_SHOT_H)
 		return {int(math.round(screen.x)), int(math.round(screen.y))}, visible
@@ -325,6 +487,145 @@ when ODIN_TEST {
 			debug_test_read(pixels)
 			debug_test_save(pixels, shots[i])
 		}
+	}
+
+	// The live drawing, posed the way the shot test is: two k snapshots per
+	// pose, the remote drawn between them, Krunker's boxes solid at the size
+	// the server tests, the other size dim, centre markers, and the rendered
+	// model's part bounds (magenta). The strafing case reproduces the close
+	// range video: a strafing target's server boxes are the +1 padded ones,
+	// twice the head the model shows. Previews: bin/debug_hitboxes/pose_*.png.
+	@(test)
+	debug_krunker_hurtbox_poses_render :: proc(t: ^testing.T) {
+		logger := context.logger
+		context = runtime.default_context()
+		context.logger = logger
+		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
+		defer glfw.Terminate()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+		window := glfw.CreateWindow(HITBOX_SHOT_W, HITBOX_SHOT_H, "Krunker hurtbox poses", nil, nil)
+		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
+		defer glfw.DestroyWindow(window)
+		glfw.MakeContextCurrent(window)
+		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		gl.Viewport(0, 0, HITBOX_SHOT_W, HITBOX_SHOT_H)
+
+		client := Client{window = window, scene = scene_init(), fps_scene = scene_init(), viewport_width = HITBOX_SHOT_W, viewport_height = HITBOX_SHOT_H}
+		g_client = &client
+		defer { g_client = nil }
+		config := shared.config_load_gameplay()
+		defer shared.config_destroy_gameplay(config)
+		map_inst := shared.Map{death_y = -1000}
+		maps := []^shared.Map{&map_inst}
+		shared.game_configure(&client.game, &config.game, maps, nil, config.weapons, config.classes)
+		shared.game_init(&client.game, 0, 0, false)
+		defer {
+			debug_render_fini(&client.debug_render)
+			client_clear_players(&client)
+			shared.game_destroy(&client.game)
+			kproto.krunker_world_reset(&client.krunker_world)
+			scene_fini(client.fps_scene)
+			scene_fini(client.scene)
+			resource_cache_fini()
+		}
+		me := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, me)
+		shared.player_spawn(me, 0)
+		me.uid, me.active, me.is_you, me.position = 1, true, true, {0, 0, 0}
+		client.me = me
+		remote := shared.player_init(&client.game)
+		shared.game_players_add(&client.game, remote)
+		shared.player_spawn(remote, 0)
+		remote.uid, remote.active, remote.swap_timer = 2, true, 0
+		player_generate_meshes(remote, false)
+		scene_add_player_mesh(client.scene, cast(^Player_Mesh)remote.mesh, int(remote.loadout_size))
+
+		camera := camera_init(math.PI / 2)
+		camera.position = {0, 6, 0}
+		camera_update_projection_matrix(&camera, f32(HITBOX_SHOT_W) / f32(HITBOX_SHOT_H))
+		camera_update_world_inverse_matrix(&camera)
+		view_projection := camera.projection_matrix * camera.world_inverse_matrix
+		pixels := make([]u8, HITBOX_SHOT_W * HITBOX_SHOT_H * 3)
+		defer delete(pixels)
+		lines := &client.debug_render.lines
+
+		Pose_Case :: struct {
+			name:      string,
+			crouch:    f64,
+			pitch_deg: f64,
+			head_mlt:  f32,
+			strafe:    bool, // Moves 2 units sideways between the snapshots.
+			padding:   Debug_Hurtbox_Padding,
+			file:      cstring,
+		}
+		cases := [?]Pose_Case{
+			{"standing", 0, 0, 1, false, .AUTO, "bin/debug_hitboxes/pose_standing.png"},
+			{"crouched", 1, 0, 1, false, .AUTO, "bin/debug_hitboxes/pose_crouched.png"},
+			{"pitch up", 0, 86, 1, false, .AUTO, "bin/debug_hitboxes/pose_pitch_up.png"},
+			{"pitch down", 0, -86, 1, false, .AUTO, "bin/debug_hitboxes/pose_pitch_down.png"},
+			{"big head", 0, 0, 2, false, .AUTO, "bin/debug_hitboxes/pose_big_head.png"},
+			{"strafing", 0, 0, 1, true, .AUTO, "bin/debug_hitboxes/pose_strafing_padded.png"},
+			{"strafing unpadded", 0, 0, 1, true, .UNPADDED, "bin/debug_hitboxes/pose_strafing_unpadded.png"},
+		}
+		padded_head_left, unpadded_head_left: f32
+		for c in cases {
+			kproto.krunker_world_reset(&client.krunker_world)
+			client.krunker_world.local_sid = 1
+			// Facing the camera (yaw 180 degrees) 14 units away.
+			record := []kproto.Krunker_Msgpack_Value{i64(2), f64(-1), i64(0), i64(-14), i64(180), f64(c.pitch_deg), f64(0), true, f64(c.crouch), i64(0), i64(1), kproto.Krunker_Msgpack_Nil{}, i64(20)}
+			packet := []kproto.Krunker_Msgpack_Value{"k", record, i64(10), i64(1000)}
+			client.krunker_world.received_at = 1
+			kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+			record[1], packet[3], client.krunker_world.received_at = f64(c.strafe ? 1 : -1), i64(1100), 1.1
+			kproto.krunker_world_apply_packet(&client.krunker_world, packet)
+			client.krunker_world.players[0].head_mlt = c.head_mlt
+			krunker_client_interpolate_remotes(&client, 1.15, 0)
+			// Fixed stride phase (the jump from the spawn point is not a step).
+			remote.step_val, remote.step_chase = 0, 0
+			remote.crouch_val = f32(c.crouch)
+			shared.player_update_height(remote)
+			player_update_meshes(remote, false)
+
+			gl.ClearColor(0.55, 0.62, 0.7, 1)
+			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			scene_render(client.scene, &camera, HITBOX_SHOT_W, HITBOX_SHOT_H)
+
+			pose, server_moving := debug_krunker_hurtbox_pose(&client, remote)
+			testing.expectf(t, server_moving == c.strafe, "%s: the server pads a target that moved between snapshots", c.name)
+			testing.expectf(t, pose.head_mlt == c.head_mlt && pose.crouch == f32(c.crouch), "%s: headMlt and the newest snapshot's cV feed the boxes", c.name)
+			padded := c.padding == .AUTO ? server_moving : c.padding == .PADDED
+			clear(lines)
+			debug_lines_model_bounds(lines, remote)
+			debug_lines_krunker_pose(lines, pose, padded)
+			debug_render_lines(&client.debug_render, view_projection, false)
+			err := gl.GetError()
+			testing.expectf(t, err == gl.NO_ERROR, "%s: pose preview must draw without OpenGL errors (0x%x)", c.name, err)
+			debug_test_read(pixels)
+			debug_test_save(pixels, c.file)
+
+			pose.moving = padded
+			boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+			shared.krunker_player_hurtboxes(pose, &boxes)
+			head := boxes[0]
+			centre, visible := debug_test_project(view_projection, shared.krunker_hurtbox_center(head))
+			testing.expectf(t, visible && debug_test_pixel_near(pixels, centre, 1, is_yellow), "%s: the head's centre marker is drawn at %v", c.name, centre)
+			// The head's left edge at its vertical middle, on screen.
+			left_world := (head.transform * shared.Vec4{-0.5, 0, -0.5, 1}).xyz
+			left, _ := debug_test_project(view_projection, left_world)
+			testing.expectf(t, debug_test_pixel_near(pixels, left, 2, is_yellow), "%s: the solid head box edge is drawn at %v", c.name, left)
+			if c.name == "strafing" { padded_head_left = f32(left.x) }
+			if c.name == "strafing unpadded" { unpadded_head_left = f32(left.x) }
+			if c.name == "big head" {
+				testing.expectf(t, abs(shared.krunker_hurtbox_center(head).y - 11) < 1e-3, "headMlt 2 grows the head upward from the neck, centre %v", shared.krunker_hurtbox_center(head))
+			}
+		}
+		// Padded: the head is 4 units wide instead of 2 around the same centre,
+		// so its side edge sits about one unit (~13 px here) further out.
+		testing.expectf(t, abs(unpadded_head_left - padded_head_left) > 10, "the padded head reaches further out (padded %v, unpadded %v)", padded_head_left, unpadded_head_left)
 	}
 
 	// A live remote seen side-on, mid-stride. Its stride phase now comes from
