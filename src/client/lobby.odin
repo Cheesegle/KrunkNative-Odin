@@ -40,6 +40,8 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	kproto.krunker_world_reset(&client.krunker_world)
 	client_clear_players(client)
 	kill_feed_clear(&client.kill_feed)
+	client.death_screen = {}
+	client.camera.rotation.z = 0
 	client.lobby_team = 0
 	client.requested_team = 0
 	client.team_pending = false
@@ -60,8 +62,11 @@ client_lobby_tick :: proc(client: ^Client) {
 	if client.me != nil && !client.me.active && client.in_game {
 		client.in_game = false
 		client.krunker.spawned = false
-		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-		client.mouse_state.locked = false
+		// A death keeps the pointer for the death screen, as Krunker does.
+		if !client_death_screen_begin(client, glfw.GetTime()) {
+			glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+			client.mouse_state.locked = false
+		}
 	}
 	if client.krunker.connected {
 		for player in client.krunker_world.lobby_players {
