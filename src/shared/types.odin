@@ -540,6 +540,9 @@ Game_Config :: struct {
 	// Lobby rule `config.kCams`, "Kill Cams" (Other, default on): when you are
 	// killed by another player the camera pans toward them (client kill_cam.odin).
 	kill_cams:          bool,
+	// Lobby rule `config.pColl`, "Player Collision" (Collision, default off):
+	// players block each other and can stand on each other's heads.
+	player_collision:   bool,
 	team1_name:         string,
 	team2_name:         string,
 	team1_damage:       f32,
