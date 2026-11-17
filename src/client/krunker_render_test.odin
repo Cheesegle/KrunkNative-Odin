@@ -243,8 +243,8 @@ when ODIN_TEST {
 		client.selected_class, client.spawn_pending = 3, true
 		gameplay_packet(&client.krunker_world, "start", "3:00", i64(2))
 		krunker_client_sync_world(&client)
-		testing.expect(t, !client.in_game && !client.me.active && client.spawn_pending && !client.mouse_state.locked,
-			"the lobby must remain open until this life's coordinates arrive")
+		testing.expect(t, !client.in_game && !client.me.active && client.spawn_pending && client.death_screen.active,
+			"the death screen must stay up until this life's coordinates arrive")
 		roster[1], roster[9], roster[2] = i64(7), i64(2), i64(-100)
 		gameplay_packet(&client.krunker_world, i64(0), roster[:])
 		krunker_client_sync_world(&client)

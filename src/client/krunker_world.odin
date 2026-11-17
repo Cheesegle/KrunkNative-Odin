@@ -76,8 +76,11 @@ krunker_client_sync_world :: proc(client: ^Client) {
 	if !world.in_game && (state.spawned || client.in_game) || world.has_match && world.match.phase == .ENDED && (state.spawned || client.in_game || client.spawn_pending) {
 		client.in_game, state.spawned, client.spawn_pending = false, false, false
 		krunker_client_reset_prediction(client)
-		if client.window != nil { glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL) }
-		client.mouse_state.locked = false
+		// KILL_PLAYER for you keeps the pointer for the death screen.
+		if !client_death_screen_begin(client, glfw.GetTime()) {
+			if client.window != nil { glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL) }
+			client.mouse_state.locked = false
+		}
 	}
 	if state.player_revisions == nil { state.player_revisions = make(map[i32]u64) }
 	if state.player_loadout_revisions == nil { state.player_loadout_revisions = make(map[i32]u64) }

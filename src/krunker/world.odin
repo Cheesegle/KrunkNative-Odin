@@ -146,6 +146,9 @@ Krunker_World_State :: struct {
 	// camLookAt runs before that check.
 	local_killer_sid: i32,
 	local_death_revision: u64,
+	// That KILL_PLAYER's death-screen data (weapon, killer level and stat,
+	// life stats) for the death UI.
+	local_death: Krunker_Death_Info,
 	has_leaders: bool,
 	leader_stat_count: int,
 	match: shared.Match_State,

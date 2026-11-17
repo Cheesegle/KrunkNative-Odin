@@ -54,6 +54,7 @@ Client :: struct {
 	kill_feed: Kill_Feed,
 	kill_cam: Kill_Cam,
 	round_countdown: Round_Countdown,
+	death_screen: Death_Screen,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -1366,7 +1367,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client.last_escape_key = escape_key
 
-	if client.mouse_state.locked && (client.me == nil || !client.me.active) {
+	// While the death screen runs, re-entry waits for Krunker's deathDelay
+	// or the authority's respawn timer (death_screen.odin).
+	if client.mouse_state.locked && (client.me == nil || !client.me.active) && client_death_screen_allows_respawn(client, glfw.GetTime()) {
 		client_enter_game(client)
 	}
 
@@ -1502,6 +1505,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client_kill_cam_update(client, delta)
 	client_round_countdown_update(client, glfw.GetTime())
+	client_death_screen_update(client, glfw.GetTime())
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)
@@ -1531,7 +1535,12 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	} else if !client.mouse_state.locked {
 		hud_render(client, delta, debug_pointer)
 	} else {
-		overlay_render(client, delta)
+		if !client_death_screen_hides_hud(client) { overlay_render(client, delta) }
+		else if client.scoreboard_open {
+			board := client_scoreboard(client)
+			scoreboard_render(client.ui, &board, 160*client.ui.scale)
+		}
+		death_screen_render(client, glfw.GetTime())
 	}
 	// Krunker draws it on the overlay canvas, under the menu's panels too.
 	if !end_screen_visible { round_countdown_render(client, glfw.GetTime()) }
