@@ -324,6 +324,14 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 	case "gmsg":
 		message := ""
 		if len(packet) > 1 { text, ok := packet[1].(string); if !ok { return false }; message = strings.trim_space(text) }
+		// gmsg(message, time, countdown, popup): a truthy countdown is shown
+		// big in the centre with the cntd_N sound, whatever the message.
+		if len(packet) > 3 {
+			if number, ok := krunker_world_bounded_number(packet[3], 1, 99); ok && number == math.floor(number) {
+				state.countdown_number = i32(number)
+				state.countdown_number_revision += 1
+			}
+		}
 		kind: Krunker_Countdown
 		switch message {
 		case "wt": kind = .WAITING
