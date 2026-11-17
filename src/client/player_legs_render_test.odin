@@ -57,14 +57,15 @@ when ODIN_TEST {
 		crouched := rig_crouch != 0
 		testing.expectf(t, legs_standing_visible(rig) == !crouched, "%s: standing legs visible=%v", label, !crouched)
 		testing.expectf(t, legs_crouched_visible(rig) == crouched, "%s: bent legs visible=%v", label, crouched)
+		// Krunker's genLeg(pt==1||pt==3) puts legMeshes 0 and 2 on the right (+x).
 		for leg, i in rig.legs {
-			side: f32 = i == 0 ? -1 : 1
+			side: f32 = i == 0 ? 1 : -1
 			hip := legs_mesh_point(leg.meshes[0], {0, 1, 0})
 			want := legs_world_point(rig.anchor, {side * g.leg_scale * 0.5, g.leg_height, 0})
 			testing.expectf(t, legs_near(hip, want), "%s: standing leg %d must hang from the hip %v, got %v", label, i, want, hip)
 		}
 		for leg, i in rig.crouched_legs {
-			side: f32 = i == 0 ? -1 : 1
+			side: f32 = i == 0 ? 1 : -1
 			hip := legs_mesh_point(leg.upper, {0, 1, 0})
 			want := legs_world_point(rig.anchor, {side * g.leg_scale * 0.5, body_y + 0.5, 0})
 			testing.expectf(t, legs_near(hip, want), "%s: bent leg %d must start 0.5 inside the body base %v, got %v", label, i, want, hip)
@@ -197,5 +198,28 @@ when ODIN_TEST {
 		}
 		rig := cast(^Player_Mesh)you.mesh
 		testing.expect(t, rig.legs[0].transform.rotation.x != 0, "third-person legs must stride with the walk cycle")
+
+		// Krunker's legMeshes order (genLeg(pt==1||pt==3)): 0 right (+x), 1 left,
+		// 2 crouched right, 3 crouched left. The stride signs and the hurtbox
+		// legs (LegRightHolder first) assume that order; swapping the sides
+		// mirrored the walk against the hitboxes.
+		testing.expect(t, rig.legs[0].transform.position.x > 0 && rig.legs[1].transform.position.x < 0, "leg 0 is the right leg, leg 1 the left")
+		testing.expect(t, rig.crouched_legs[0].anchor.position.x > 0 && rig.crouched_legs[1].anchor.position.x < 0, "crouched leg 0 is the right leg, 1 the left")
+		testing.expect(t, rig.legs[0].transform.rotation.x * rig.legs[1].transform.rotation.x < 0, "the legs stride in opposite directions")
+
+		// Same side and same swing as the hurtbox legs for this pose.
+		boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
+		pose := shared.krunker_hurtbox_pose(you, false)
+		pose.yaw = 0
+		count := shared.krunker_player_hurtboxes(pose, &boxes)
+		legs_seen := 0
+		for box in boxes[:count] {
+			if box.part != .LEG { continue }
+			center := (box.transform * shared.Vec4{0, 0, 0, 1}).xyz - pose.position
+			if legs_seen == 0 { testing.expectf(t, center.x > 0, "first hurtbox leg is the right leg (x=%v)", center.x) }
+			if legs_seen == 1 { testing.expectf(t, center.x < 0, "second hurtbox leg is the left leg (x=%v)", center.x) }
+			legs_seen += 1
+		}
+		testing.expect_value(t, legs_seen, 2)
 	}
 }

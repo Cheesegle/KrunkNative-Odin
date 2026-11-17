@@ -1,5 +1,6 @@
 package main
 
+import "core:strings"
 import "core:testing"
 import shared "../shared"
 import kproto "../krunker"
@@ -84,6 +85,16 @@ when ODIN_TEST {
 		// the older one. Its target must coincide with the native visible model.
 		history_x := 10 + (0-10)*command.krunker_shot_progress
 		testing.expect(t, abs(f64(peer.position.x)-history_x) < 0.001)
+		// The developer shot log names the target and the server's rewound
+		// pose; here it coincides with the drawn one.
+		diag: Krunker_Shot_Diagnostic
+		line := krunker_shot_diagnostic_line(&client, &command, 1.15, &diag)
+		testing.expectf(t, strings.contains(line, "target=8 ") && strings.contains(line, "rewound=(5.00,") && strings.contains(line, "error=0.000") &&
+			strings.contains(line, "prg=0.50 server_prg=0.50") && strings.contains(line, "previous_k=ok"), "%s", line)
+		later := command
+		later.krunker_shot_progress = 0
+		line = krunker_shot_diagnostic_line(&client, &later, 1.15, &diag)
+		testing.expectf(t, strings.contains(line, "prg=0.00 server_prg=0.50"), "a falsy progress keeps the server's previous fraction: %s", line)
 		krunker_client_predict_input(&client, &frame, 1.157)
 		testing.expect(t, !client.krunker.input_commands[1].krunker_shot_timed, "holding fire during cooldown must not create another shot timestamp")
 		encoded, ok := krunker_ws_encode_input(&client.krunker)
@@ -130,6 +141,48 @@ when ODIN_TEST {
 		testing.expect(t, !world.has_server_time && !world.has_previous_sync && world.server_time == 0, "a new map must not reuse the previous map's server clock")
 		kproto.krunker_input_stamp_shot(&world, &command, 2)
 		testing.expect(t, !command.krunker_shot_timed && command.krunker_shot_progress == 0)
+	}
+
+	// The browser's q timing: V = Q.now - 1e3/sendFrequency,
+	// D = ((V - newSync) / (lastSync - newSync)).round(2), all Date.now() ms,
+	// sent only when truthy; the server clamps D to [0, 1.2].
+	@(test)
+	krunker_shot_progress_reproduces_browser_numbers :: proc(t: ^testing.T) {
+		Case :: struct { now, rate, new_sync, last_sync, want: f64, sent: bool }
+		cases := [?]Case{
+			{1.17, 10, 1.1, 1.0, 0.3, true},
+			{1.12, 10, 1.1, 1.0, 0.8, true},
+			{1.105, 10, 1.1, 1.0, 0.95, true},
+			{1.15, 30, 1.13, 1.097, 0.4, true},   // (1116.667-1130)/(1097-1130) = 0.404
+			{1.25, 10, 1.1, 1.0, -0.5, true},     // late snapshot: server clamps to 0
+			{1.15, 10, 1.149, 1.05, 1, true},
+			{1.05, 10, 1.01, 1.0, 6, true},       // bunched k: was capped to 1, browser sends 6 (server 1.2)
+			{1.2, 10, 1.1, 1.0, 0, false},        // exactly the newest state: 0 is falsy, omitted
+			{1.05, 10, 1.0002, 1.0001, -1, true}, // same millisecond: browser -Infinity, server 0
+			{1.1, 10, 1.0, 1.0, 0, false},        // same millisecond, 0/0 = NaN: omitted
+		}
+		for c in cases {
+			got, sent := kproto.krunker_input_shot_progress(c.now, c.rate, c.new_sync, c.last_sync)
+			testing.expectf(t, sent == c.sent && abs(got-c.want) < 1e-9, "now=%v rate=%v new=%v last=%v: got %v sent=%v, want %v sent=%v", c.now, c.rate, c.new_sync, c.last_sync, got, sent, c.want, c.sent)
+		}
+		// End to end: two k packets in one millisecond still count as a
+		// previous sync (the browser's lastSync is truthy), and the stamp
+		// carries the server-equivalent value.
+		world: kproto.Krunker_World_State
+		defer kproto.krunker_world_reset(&world)
+		empty: [0]kproto.Krunker_Msgpack_Value
+		packet := []kproto.Krunker_Msgpack_Value{"k", empty[:], i64(10), i64(500)}
+		world.received_at = 1.0001
+		kproto.krunker_world_apply_packet(&world, packet)
+		world.received_at, packet[3] = 1.0002, i64(533)
+		kproto.krunker_world_apply_packet(&world, packet)
+		command: shared.Input
+		kproto.krunker_input_stamp_shot(&world, &command, 1.05)
+		testing.expect(t, world.has_previous_sync && command.krunker_shot_timed && command.krunker_shot_time == 533 && command.krunker_shot_progress == -1)
+		world.received_at, packet[3] = 1.0102, i64(566)
+		kproto.krunker_world_apply_packet(&world, packet)
+		kproto.krunker_input_stamp_shot(&world, &command, 1.05)
+		testing.expect(t, command.krunker_shot_progress == 6, "progress past the previous k is no longer capped at 1")
 	}
 
 	@(test)

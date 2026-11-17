@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:math"
 import "core:strings"
@@ -13,6 +14,11 @@ import kproto "../krunker"
 menu_portraits: map[i32]u32
 
 menu_character :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
+	if g_client != nil && g_client.chat.open {
+		context = runtime.default_context()
+		client_chat_character(g_client, codepoint)
+		return
+	}
 	if g_client == nil || g_client.mouse_state.locked || codepoint < 32 || codepoint >= 127 { return }
 	client := g_client
 	if client.menu_text_length < len(client.menu_text) {
@@ -40,6 +46,12 @@ client_leave_session :: proc(client: ^Client, reset_map: bool = true) {
 	kproto.krunker_world_reset(&client.krunker_world)
 	client_clear_players(client)
 	kill_feed_clear(&client.kill_feed)
+	client.round_countdown = {}
+	client.death_screen = {}
+	client.camera.rotation.z = 0
+	chat_clear(&client.chat)
+	chat_close(&client.chat, true)
+	client.chat.team = false
 	client.lobby_team = 0
 	client.requested_team = 0
 	client.team_pending = false
@@ -60,8 +72,11 @@ client_lobby_tick :: proc(client: ^Client) {
 	if client.me != nil && !client.me.active && client.in_game {
 		client.in_game = false
 		client.krunker.spawned = false
-		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-		client.mouse_state.locked = false
+		// A death keeps the pointer for the death screen, as Krunker does.
+		if !client_death_screen_begin(client, glfw.GetTime()) {
+			glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+			client.mouse_state.locked = false
+		}
 	}
 	if client.krunker.connected {
 		for player in client.krunker_world.lobby_players {
@@ -109,14 +124,41 @@ menu_class_name :: proc(client: ^Client, id: i32) -> string {
 	return "Choosing class"
 }
 
-client_secondary_choice :: proc(client: ^Client) -> i32 {
+// The secondary every join path spawns with: with Remember last secondary on,
+// the valid pick stored for the class (the selected class by default),
+// otherwise the current choice. Every path (Local Practice, the native server's
+// spawn and Krunker's class and entry packets) reads it through here.
+client_secondary_choice :: proc(client: ^Client, class_id: i32 = -1) -> i32 {
+	if remembered := client_remembered_secondary(client, class_id < 0 ? client.selected_class : class_id); remembered >= 0 { return remembered }
 	return shared.secondary_weapon_id(client.game.weapons, client.selected_secondary)
 }
 
+// Krodin's own "Remember last secondary": the stored pick for class_id, or -1
+// when the setting is off, nothing is stored or the stored weapon is no
+// longer a valid secondary (the loadout prompt then opens as usual).
+client_remembered_secondary :: proc(client: ^Client, class_id: i32) -> i32 {
+	if !client.remember_secondary || class_id < 0 || int(class_id) >= len(client.secondary_picks) { return -1 }
+	pick := client.secondary_picks[class_id]
+	if pick <= 0 || shared.secondary_weapon_id(client.game.weapons, pick) != pick { return -1 }
+	return pick
+}
+
+// Stores the secondary last used with a class, whether or not the setting is
+// on, so turning it on picks up recent choices. Saved on exit with the rest.
+client_record_secondary_pick :: proc(client: ^Client, class_id, weapon_id: i32) {
+	if class_id < 0 || int(class_id) >= len(client.secondary_picks) || weapon_id <= 0 || client.secondary_picks[class_id] == weapon_id { return }
+	client.secondary_picks[class_id] = weapon_id
+	client.settings_dirty = true
+}
+
+client_class_has_secondary :: proc(client: ^Client, class_id: i32) -> bool {
+	if client.game.config.no_secondaries || client.krunker.connected && client.krunker_world.has_game_config && client.krunker_world.game_config.no_secondaries { return false }
+	return class_id >= 0 && int(class_id) < len(client.game.classes) && client.game.classes[class_id].secondary
+}
+
 client_secondary_request :: proc(client: ^Client, class_id: i32) -> i32 {
-	if client.game.config.no_secondaries || client.krunker.connected && client.krunker_world.has_game_config && client.krunker_world.game_config.no_secondaries { return -1 }
-	if class_id < 0 || int(class_id) >= len(client.game.classes) || !client.game.classes[class_id].secondary { return -1 }
-	return client_secondary_choice(client)
+	if !client_class_has_secondary(client, class_id) { return -1 }
+	return client_secondary_choice(client, class_id)
 }
 
 client_secondary_reason :: proc(client: ^Client) -> string {
@@ -268,6 +310,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings,
+		remember_secondary = client.remember_secondary,
 		settings_defaults = client_settings_default_values(fullscreen_sizes, client.max_anisotropy),
 		audio_volumes = {client.audio_settings.master, client.audio_settings.effects, client.audio_settings.footsteps, client.audio_settings.ui, client.audio_settings.weapons},
 		spatial_audio = i32(client.audio_settings.spatial), distance_falloff = i32(client.audio_settings.falloff),
@@ -304,6 +347,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		}
 	}
 	view.class_pending = view.confirmed_class != view.selected_class && (view.spawn_pending || view.active && view.live_class_changes)
+	if view.presentation == .COMPETITIVE { menuui.competitive_roster_hide_enemy_classes(view.players, client.lobby_team) }
 	return view
 }
 
@@ -343,6 +387,7 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.crosshair_settings = menuui.crosshair_settings_validate(values.crosshair)
 	client.hitmarker_settings = menuui.hitmarker_settings_validate(values.hitmarker)
 	client.damage_settings = menuui.damage_settings_validate(values.damage)
+	client.remember_secondary = values.remember_secondary
 	client.aim_toggled = false
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
@@ -371,7 +416,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .SPATIAL_AUDIO, .DISTANCE_FALLOFF, .LEVELLING_TOGGLE, .LEVELLING_STRENGTH, .MENU_FPS_LIMIT, .GAME_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_IMPORT_EXCLUDE, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .NAMETAG_SIZE, .KILL_FEED_SIZE, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .REMEMBER_SECONDARY, .CHAT_MODE, .CHAT_VALUE, .CHAT_TOGGLE:
 	case .SETTINGS_SAVE, .SETTINGS_IMPORT:
 		// Import applies and saves immediately, like Krunker's importSettings.
 		client_apply_settings_draft(client)
@@ -460,6 +505,12 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		for class in view.classes {
 			if class.id != action.index { continue }
 			if !menuui.class_selectable(view, class) { client_selection_status(client, len(class.reason)>0 ? class.reason : "Class limit reached. Choose another class."); return }
+			// Remember last secondary skips the loadout prompt when the class has a
+			// valid stored pick, or no secondary to choose. Choosing the class you
+			// already have still opens it, so the secondary stays changeable.
+			reselect := action.index == client.selected_class
+			has_secondary := client_class_has_secondary(client, action.index)
+			skip_loadout := client.remember_secondary && !reselect && (!has_secondary || client_remembered_secondary(client, action.index) >= 0)
 			if client.krunker.connected {
 				previous_class := client.krunker.class_index
 				previous_secondary := client.krunker.secondary_index
@@ -474,6 +525,13 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 			}
 			client.selected_class = action.index
 			client_selection_status(client, "")
+			if skip_loadout {
+				if client.menu.page != .HOME { client.menu.page, client.menu.focus = .HOME, client.menu.return_focus }
+				return
+			}
+			// The secondary the prompt opens on is the one this class spawns with
+			// if left unchanged, so it is the class's pick from now on.
+			if has_secondary { client_record_secondary_pick(client, action.index, client_secondary_choice(client)) }
 			if client.menu.page != .LOADOUT {
 				client.menu.loadout_parent = client.menu.page
 				client.menu.loadout_return_focus = client.menu.focus
@@ -496,6 +554,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 			}
 		}
 		client.selected_secondary = action.index
+		client_record_secondary_pick(client, client.selected_class, action.index)
 		// Preserve the current life; offline automatic respawns use this preference.
 		if client.local_practice && client.me != nil { client.me.secondary_id = action.index }
 		client_selection_status(client, "")

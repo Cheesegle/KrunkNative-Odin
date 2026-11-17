@@ -8,10 +8,11 @@ Krunker_World_Pose :: struct {
 	direction: shared.Vec2,
 	crouch, aim: f32,
 	on_ground: bool,
+	step: f32,
 }
 
 krunker_world_buffer_pose :: proc(player: ^Krunker_World_Player, received_at: f64) {
-	pose := Krunker_World_Pose{received_at, player.position, player.direction, player.crouch_val, player.aim_val, player.on_ground}
+	pose := Krunker_World_Pose{received_at, player.position, player.direction, player.crouch_val, player.aim_val, player.on_ground, player.step_val}
 	if player.pose_count > 0 {
 		previous := player.poses[player.pose_count-1]
 		distance := pose.position - previous.position

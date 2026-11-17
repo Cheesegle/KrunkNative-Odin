@@ -374,6 +374,9 @@ main :: proc() {
 	if !test_frontier_objective_sites() {
 		os.exit(1)
 	}
+	if !test_spawn_selection() || !test_spawn_selection_timing() {
+		os.exit(1)
+	}
 	if !test_player_hitboxes_match_inline() || !test_shot_paths_use_player_hitboxes() {
 		os.exit(1)
 	}

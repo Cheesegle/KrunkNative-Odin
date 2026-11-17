@@ -373,10 +373,16 @@ debug_ui_rendering :: proc(client: ^Client, dbg: ^Debug_UI) {
 		if debug_hitbox_model(client) == .KRUNKER {
 			debug_ui_value(ctx, "Krunker server hurtboxes", muted)
 			debug_ui_value(ctx, "at interpolated poses", muted)
+			// Solid: the size the server tests (+1 per side while moving).
+			labels := [Debug_Hurtbox_Padding]string{.AUTO = "Padding: auto (moving +1)", .PADDED = "Padding: always +1", .UNPADDED = "Padding: never"}
+			if .SUBMIT in mu.button(ctx, labels[dr.hurtbox_padding]) {
+				dr.hurtbox_padding = Debug_Hurtbox_Padding((int(dr.hurtbox_padding) + 1) % len(Debug_Hurtbox_Padding))
+			}
 		} else {
 			debug_ui_value(ctx, debug_hitbox_kind(client) == .MELEE ? "Krodin melee boxes" : "Krodin shot boxes", muted)
 			debug_ui_value(ctx, client.net.connected ? "displayed; server re-tests" : "at simulation positions", muted)
 		}
+		mu.checkbox(ctx, "Model bounds", &dr.model_bounds)
 	}
 }
 
