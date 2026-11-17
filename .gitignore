@@ -105,3 +105,5 @@ Krodin-Linux/
 # Downloaded official WebView2 SDK (restored with a pinned SHA-256).
 tools/webview2/
 src/client/spirv/*.spv
+# Vulkan pipeline cache written by the client next to its settings.
+vk-pipeline-cache.bin

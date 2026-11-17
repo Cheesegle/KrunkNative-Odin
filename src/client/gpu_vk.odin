@@ -17,6 +17,11 @@ package main
 //   become load ops (or vkCmdClearAttachments inside a pass).
 // - Outside gpu_frame_begin/end (map loads, readbacks) commands still work:
 //   recording starts implicitly and is submitted when needed.
+// - Nothing waits for the GPU on the frame path: uploads are recorded into
+//   the frame's command buffer from a staging ring (vk_upload_begin), and
+//   destroyed objects are freed once the last frame that may use them has
+//   finished (vk_retire). Only resizes, readbacks and shutdown wait;
+//   g_vk_stats counts every wait.
 
 import "base:runtime"
 import "core:fmt"
@@ -48,6 +53,7 @@ VK_COLOR_FORMAT :: vk.Format.R8G8B8A8_UNORM
 VK_DEPTH_FORMAT :: vk.Format.D32_SFLOAT
 VK_UNIFORM_RING_PER_FRAME :: 16 << 20
 VK_TRANSIENT_RING_PER_FRAME :: 16 << 20 // gpu_transient_bind vertices and indices
+VK_STAGING_RING_PER_FRAME :: 8 << 20 // upload sources; bigger uploads get their own buffer
 VK_FRAME_SETS :: 4096
 VK_TEXTURE_SETS :: 8192
 VK_MAX_LAYERS :: 4
@@ -99,10 +105,33 @@ vk_table_destroy :: proc(table: ^Vk_Table($T)) {
 // ---------------------------------------------------------------------------
 // Resources.
 
+// Device memory comes from 64 MB blocks per memory type (vk_alloc), so
+// creating a resource is not a driver allocation; big resources get their own.
+VK_BLOCK_SIZE :: 64 << 20
+
+@(private = "file")
+Vk_Block :: struct {
+	memory: vk.DeviceMemory,
+	type:   u32,
+	images: bool, // images and buffers never share a block (bufferImageGranularity)
+	mapped: [^]u8,
+	free:   [dynamic][2]int, // offset, size; sorted, coalesced
+	used:   int,
+}
+
+@(private = "file")
+Vk_Allocation :: struct {
+	memory: vk.DeviceMemory,
+	offset: int,
+	size:   int,
+	block:  ^Vk_Block, // nil: a dedicated allocation
+	mapped: [^]u8,
+}
+
 @(private = "file")
 Vk_Buffer :: struct {
 	buffer: vk.Buffer,
-	memory: vk.DeviceMemory,
+	memory: Vk_Allocation,
 	size:   int,
 	mapped: [^]u8,
 }
@@ -110,7 +139,7 @@ Vk_Buffer :: struct {
 @(private = "file")
 Vk_Image :: struct {
 	image:   vk.Image,
-	memory:  vk.DeviceMemory,
+	memory:  Vk_Allocation,
 	view:    vk.ImageView, // every layer and mip
 	format:  vk.Format,
 	aspect:  vk.ImageAspectFlags,
@@ -160,7 +189,13 @@ Vk_Target :: struct {
 Vk_Program :: struct {
 	vert, frag: vk.ShaderModule,
 	layout:     Gpu_Vertex_Layout,
+	shadow:     bool, // a shadow-map depth variant (drawn in depth passes)
 }
+
+// Compiled pipelines survive restarts here (relative to the working folder,
+// like client-settings.json); the driver ignores data from another GPU or
+// driver version.
+VK_PIPELINE_CACHE_PATH :: "vk-pipeline-cache.bin"
 
 @(private = "file")
 Vk_Input :: struct {
@@ -183,6 +218,27 @@ Vk_Sampler_Key :: struct {
 	anisotropy: f32,
 }
 
+// An object destroyed while frames that may use it are in flight; freed once
+// the frame with `serial` has finished (only the set fields are freed).
+@(private = "file")
+Vk_Retired :: struct {
+	serial:   u64,
+	buffer:   Vk_Buffer,
+	image:    Vk_Image,
+	view:     vk.ImageView,
+	set:      vk.DescriptorSet, // from texture_pool
+	pipeline: vk.Pipeline,
+	module:   vk.ShaderModule,
+}
+
+// GPU waits, for checking that gameplay never stalls (printed at shutdown).
+g_vk_stats: struct {
+	idle_waits:   int, // vkDeviceWaitIdle: resizes, shutdown
+	sync_uploads: int, // uploads that could not join a frame (inside a shadow pass)
+	readbacks:    int, // gpu_read_* (tests, benchmark, startup self-test)
+	draw_time_pipelines: int, // pipelines compiled at a draw (not precreated)
+}
+
 @(private = "file")
 Vk_Frame :: struct {
 	cmd:       vk.CommandBuffer,
@@ -190,6 +246,7 @@ Vk_Frame :: struct {
 	pool:      vk.DescriptorPool,
 	queries:   vk.QueryPool,
 	acquired:  vk.Semaphore, // signalled by vkAcquireNextImageKHR for this frame
+	serial:    u64,          // which recording this slot holds
 	submitted: bool,
 	timed:     bool,
 }
@@ -245,7 +302,12 @@ Vk_State :: struct {
 	pipeline_cache:   vk.PipelineCache,
 	pipelines:        map[Vk_Pipeline_Key]vk.Pipeline,
 	samplers:         map[Vk_Sampler_Key]vk.Sampler,
-	retired_sets:     [dynamic]vk.DescriptorSet, // freed after the next idle wait
+	retired:          [dynamic]Vk_Retired,
+	blocks:           [dynamic]^Vk_Block,
+	serial:           u64, // of the recording in progress, or the last one
+	completed_serial: u64, // every recording up to this one has finished
+	staging:          Vk_Buffer, // per-frame upload source regions
+	staging_cursor:   int,
 
 	ring:             Vk_Buffer, // per-frame uniform regions
 	ring_cursor:      int,
@@ -552,13 +614,19 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	texture_pool_size := vk.DescriptorPoolSize{type = .COMBINED_IMAGE_SAMPLER, descriptorCount = VK_TEXTURE_SETS}
 	tp := vk.DescriptorPoolCreateInfo{sType = .DESCRIPTOR_POOL_CREATE_INFO, flags = {.FREE_DESCRIPTOR_SET}, maxSets = VK_TEXTURE_SETS, poolSizeCount = 1, pPoolSizes = &texture_pool_size}
 	vk.CreateDescriptorPool(g_vk.device, &tp, nil, &g_vk.texture_pool)
+	cache_data, cache_err := os.read_entire_file_from_path(VK_PIPELINE_CACHE_PATH, context.temp_allocator)
 	cache_info := vk.PipelineCacheCreateInfo{sType = .PIPELINE_CACHE_CREATE_INFO}
-	vk.CreatePipelineCache(g_vk.device, &cache_info, nil, &g_vk.pipeline_cache)
+	if cache_err == nil && len(cache_data) > 0 { cache_info.initialDataSize, cache_info.pInitialData = len(cache_data), raw_data(cache_data) }
+	if vk.CreatePipelineCache(g_vk.device, &cache_info, nil, &g_vk.pipeline_cache) != .SUCCESS {
+		cache_info.initialDataSize, cache_info.pInitialData = 0, nil
+		vk.CreatePipelineCache(g_vk.device, &cache_info, nil, &g_vk.pipeline_cache)
+	}
 
 	g_vk.ring_align = max(int(g_vk.props.limits.minUniformBufferOffsetAlignment), 16)
 	g_vk.ring = vk_buffer_make(VK_UNIFORM_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.UNIFORM_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.dummy_storage = vk_buffer_make(256, {.STORAGE_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.transient = vk_buffer_make(VK_TRANSIENT_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.VERTEX_BUFFER, .INDEX_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
+	g_vk.staging = vk_buffer_make(VK_STAGING_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.ready = true
 
 	far := transmute([4]u8)f32(1)
@@ -579,6 +647,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 
 gpu_vk_fini :: proc() {
 	if !g_vk.ready { return }
+	if g_vk.recording { vk_submit() }
 	vk.DeviceWaitIdle(g_vk.device)
 	device := g_vk.device
 	gpu_texture_destroy(&g_vk.placeholder_array)
@@ -596,11 +665,15 @@ gpu_vk_fini :: proc() {
 		fmt.eprintfln("[Vulkan] %d GPU objects were still alive at shutdown: %d textures, %d targets, %d vertex inputs, %d buffers, %d programs, %d samplers",
 			total, leaked[0], leaked[1], leaked[2], leaked[3], leaked[4], leaked[5])
 	}
+	vk_release_retired(all = true)
+	fmt.printfln("[Vulkan] GPU waits this run: %d device idle (resizes, shutdown), %d synchronous uploads, %d readbacks; %d pipelines compiled at a draw",
+		g_vk_stats.idle_waits, g_vk_stats.sync_uploads, g_vk_stats.readbacks, g_vk_stats.draw_time_pipelines)
 	for _, pipeline in g_vk.pipelines { vk.DestroyPipeline(device, pipeline, nil) }
 	for _, sampler in g_vk.samplers { vk.DestroySampler(device, sampler, nil) }
 	vk_buffer_free(&g_vk.ring)
 	vk_buffer_free(&g_vk.dummy_storage)
 	vk_buffer_free(&g_vk.transient)
+	vk_buffer_free(&g_vk.staging)
 	vk_buffer_free(&g_vk.readback)
 	for &frame in g_vk.frames {
 		vk.DestroyFence(device, frame.fence, nil)
@@ -611,10 +684,18 @@ gpu_vk_fini :: proc() {
 	vk.DestroyFence(device, g_vk.upload_fence, nil)
 	vk.DestroyCommandPool(device, g_vk.command_pool, nil)
 	vk.DestroyDescriptorPool(device, g_vk.texture_pool, nil)
+	cache_size: int
+	if vk.GetPipelineCacheData(device, g_vk.pipeline_cache, &cache_size, nil) == .SUCCESS && cache_size > 0 {
+		data := make([]u8, cache_size, context.temp_allocator)
+		if vk.GetPipelineCacheData(device, g_vk.pipeline_cache, &cache_size, raw_data(data)) == .SUCCESS {
+			_ = os.write_entire_file(VK_PIPELINE_CACHE_PATH, data[:cache_size])
+		}
+	}
 	vk.DestroyPipelineCache(device, g_vk.pipeline_cache, nil)
 	vk.DestroyPipelineLayout(device, g_vk.pipeline_layout, nil)
 	vk.DestroyDescriptorSetLayout(device, g_vk.set0_layout, nil)
 	vk.DestroyDescriptorSetLayout(device, g_vk.set1_layout, nil)
+	vk_blocks_fini()
 	vk.DestroyDevice(device, nil)
 	if g_vk.present.surface != 0 { vk.DestroySurfaceKHR(g_vk.instance, g_vk.present.surface, nil) }
 	delete(g_vk.present.images)
@@ -623,7 +704,7 @@ gpu_vk_fini :: proc() {
 	vk.DestroyInstance(g_vk.instance, nil)
 	delete(g_vk.pipelines)
 	delete(g_vk.samplers)
-	delete(g_vk.retired_sets)
+	delete(g_vk.retired)
 	delete(g_vk.completed)
 	delete(g_vk.device_name)
 	delete(g_vk.vendor_name)
@@ -673,21 +754,101 @@ vk_memory_type :: proc(bits: u32, flags: vk.MemoryPropertyFlags) -> u32 {
 	return 0
 }
 
+// Memory for one resource: a range of a shared block, or (a quarter block
+// and up) an allocation of its own. Host-visible memory comes mapped.
+@(private = "file")
+vk_alloc :: proc(req: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags, images: bool) -> (a: Vk_Allocation, ok: bool) {
+	type := vk_memory_type(req.memoryTypeBits, flags)
+	host := .HOST_VISIBLE in flags
+	map_memory :: proc(memory: vk.DeviceMemory) -> [^]u8 {
+		ptr: rawptr
+		vk.MapMemory(g_vk.device, memory, 0, vk.DeviceSize(VK_WHOLE_SIZE), {}, &ptr)
+		return cast([^]u8)ptr
+	}
+	size, align := int(req.size), max(int(req.alignment), 1)
+	if size > VK_BLOCK_SIZE / 4 {
+		info := vk.MemoryAllocateInfo{sType = .MEMORY_ALLOCATE_INFO, allocationSize = req.size, memoryTypeIndex = type}
+		if !vk_ok(vk.AllocateMemory(g_vk.device, &info, nil, &a.memory), "vkAllocateMemory") { return }
+		a.size = size
+		if host { a.mapped = map_memory(a.memory) }
+		return a, true
+	}
+	for block in g_vk.blocks {
+		if block.type != type || block.images != images { continue }
+		for &range, i in block.free {
+			start := (range[0] + align - 1) / align * align
+			end := range[0] + range[1]
+			if start + size > end { continue }
+			// Keep the parts before and after the allocation free.
+			before := [2]int{range[0], start - range[0]}
+			after := [2]int{start + size, end - start - size}
+			ordered_remove(&block.free, i)
+			if after[1] > 0 { inject_at(&block.free, i, after) }
+			if before[1] > 0 { inject_at(&block.free, i, before) }
+			block.used += size
+			a = {memory = block.memory, offset = start, size = size, block = block}
+			if block.mapped != nil { a.mapped = block.mapped[start:] }
+			return a, true
+		}
+	}
+	block := new(Vk_Block)
+	info := vk.MemoryAllocateInfo{sType = .MEMORY_ALLOCATE_INFO, allocationSize = VK_BLOCK_SIZE, memoryTypeIndex = type}
+	if !vk_ok(vk.AllocateMemory(g_vk.device, &info, nil, &block.memory), "vkAllocateMemory (block)") { free(block); return }
+	block.type, block.images = type, images
+	if host { block.mapped = map_memory(block.memory) }
+	append(&block.free, [2]int{0, VK_BLOCK_SIZE})
+	append(&g_vk.blocks, block)
+	return vk_alloc(req, flags, images)
+}
+
+@(private = "file")
+vk_free :: proc(a: ^Vk_Allocation) {
+	if a.memory == 0 { return }
+	block := a.block
+	if block == nil {
+		vk.FreeMemory(g_vk.device, a.memory, nil)
+		a^ = {}
+		return
+	}
+	// Insert in order, then merge with the neighbours.
+	i := 0
+	for i < len(block.free) && block.free[i][0] < a.offset { i += 1 }
+	inject_at(&block.free, i, [2]int{a.offset, a.size})
+	if i + 1 < len(block.free) && block.free[i][0] + block.free[i][1] == block.free[i + 1][0] {
+		block.free[i][1] += block.free[i + 1][1]
+		ordered_remove(&block.free, i + 1)
+	}
+	if i > 0 && block.free[i - 1][0] + block.free[i - 1][1] == block.free[i][0] {
+		block.free[i - 1][1] += block.free[i][1]
+		ordered_remove(&block.free, i)
+	}
+	block.used -= a.size
+	a^ = {}
+}
+
+@(private = "file")
+vk_blocks_fini :: proc() {
+	for block in g_vk.blocks {
+		if block.used != 0 { fmt.eprintfln("[Vulkan] a memory block still has %d bytes in use at shutdown", block.used) }
+		vk.FreeMemory(g_vk.device, block.memory, nil)
+		delete(block.free)
+		free(block)
+	}
+	delete(g_vk.blocks)
+}
+
 @(private = "file")
 vk_buffer_make :: proc(size: int, usage: vk.BufferUsageFlags, flags: vk.MemoryPropertyFlags) -> (b: Vk_Buffer) {
 	info := vk.BufferCreateInfo{sType = .BUFFER_CREATE_INFO, size = vk.DeviceSize(max(size, 4)), usage = usage, sharingMode = .EXCLUSIVE}
 	vk.CreateBuffer(g_vk.device, &info, nil, &b.buffer)
 	req: vk.MemoryRequirements
 	vk.GetBufferMemoryRequirements(g_vk.device, b.buffer, &req)
-	alloc := vk.MemoryAllocateInfo{sType = .MEMORY_ALLOCATE_INFO, allocationSize = req.size, memoryTypeIndex = vk_memory_type(req.memoryTypeBits, flags)}
-	vk_ok(vk.AllocateMemory(g_vk.device, &alloc, nil, &b.memory), "vkAllocateMemory (buffer)")
-	vk.BindBufferMemory(g_vk.device, b.buffer, b.memory, 0)
-	b.size = size
-	if .HOST_VISIBLE in flags {
-		ptr: rawptr
-		vk.MapMemory(g_vk.device, b.memory, 0, vk.DeviceSize(VK_WHOLE_SIZE), {}, &ptr)
-		b.mapped = cast([^]u8)ptr
+	if memory, ok := vk_alloc(req, flags, false); ok {
+		b.memory = memory
+		vk.BindBufferMemory(g_vk.device, b.buffer, memory.memory, vk.DeviceSize(memory.offset))
+		b.mapped = memory.mapped
 	}
+	b.size = size
 	return
 }
 
@@ -697,40 +858,108 @@ VK_WHOLE_SIZE :: ~u64(0)
 vk_buffer_free :: proc(b: ^Vk_Buffer) {
 	if b.buffer == 0 { return }
 	vk.DestroyBuffer(g_vk.device, b.buffer, nil)
-	vk.FreeMemory(g_vk.device, b.memory, nil)
+	vk_free(&b.memory)
 	b^ = {}
 }
 
+// Frees `item` once every recording up to the current one has finished.
 @(private = "file")
-vk_upload_begin :: proc() -> vk.CommandBuffer {
-	vk.ResetCommandBuffer(g_vk.upload_cmd, {})
-	begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO, flags = {.ONE_TIME_SUBMIT}}
-	vk.BeginCommandBuffer(g_vk.upload_cmd, &begin)
-	return g_vk.upload_cmd
+vk_retire :: proc(item: Vk_Retired) {
+	item := item
+	item.serial = g_vk.serial
+	append(&g_vk.retired, item)
 }
 
-// Submits the one-shot commands and waits for them. Submitted ahead of any
-// frame still being recorded, which is fine: they only touch new resources.
 @(private = "file")
-vk_upload_end :: proc() {
-	vk.EndCommandBuffer(g_vk.upload_cmd)
-	submit := vk.SubmitInfo{sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &g_vk.upload_cmd}
-	vk.ResetFences(g_vk.device, 1, &g_vk.upload_fence)
-	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, g_vk.upload_fence), "vkQueueSubmit (upload)")
-	vk_ok(vk.WaitForFences(g_vk.device, 1, &g_vk.upload_fence, true, max(u64)), "vkWaitForFences (upload)")
+vk_release_retired :: proc(all := false) {
+	kept := 0
+	for item in g_vk.retired {
+		if !all && item.serial > g_vk.completed_serial {
+			g_vk.retired[kept] = item
+			kept += 1
+			continue
+		}
+		item := item
+		vk_buffer_free(&item.buffer)
+		vk_image_free(&item.image)
+		if item.view != 0 { vk.DestroyImageView(g_vk.device, item.view, nil) }
+		if item.set != 0 { vk.FreeDescriptorSets(g_vk.device, g_vk.texture_pool, 1, &item.set) }
+		if item.pipeline != 0 { vk.DestroyPipeline(g_vk.device, item.pipeline, nil) }
+		if item.module != 0 { vk.DestroyShaderModule(g_vk.device, item.module, nil) }
+	}
+	resize(&g_vk.retired, kept)
 }
 
-// Destruction waits for the GPU (simple and always safe; nothing is
-// destroyed per frame on the paths that matter).
+// Waits until the GPU has finished everything (resizes, shutdown).
 @(private = "file")
-vk_idle_for_destroy :: proc() {
+vk_idle :: proc() {
 	if g_vk.recording { vk_submit() }
 	vk.DeviceWaitIdle(g_vk.device)
-	for set in g_vk.retired_sets {
-		s := set
-		vk.FreeDescriptorSets(g_vk.device, g_vk.texture_pool, 1, &s)
+	g_vk_stats.idle_waits += 1
+	g_vk.completed_serial = g_vk.serial
+	vk_release_retired()
+}
+
+// Where upload commands go: the frame's command buffer, between passes, so
+// they run in order with the draws around them and nothing waits. Inside a
+// shadow depth pass (which cannot be split) a one-shot submit is waited for.
+@(private = "file")
+Vk_Upload :: struct {
+	cmd:     vk.CommandBuffer,
+	sync:    bool,
+	staging: Vk_Buffer, // the one-shot path's own source buffer
+}
+
+// Starts an upload; `source` is `size` bytes of host memory to copy from at
+// `source_buffer`/`source_offset` (size 0: no source).
+@(private = "file")
+vk_upload_begin :: proc(size: int) -> (up: Vk_Upload, source_buffer: vk.Buffer, source_offset: vk.DeviceSize, source: [^]u8) {
+	if g_vk.in_pass && g_vk.pass_depth_only {
+		up.sync = true
+		up.cmd = g_vk.upload_cmd
+		vk.ResetCommandBuffer(up.cmd, {})
+		begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO, flags = {.ONE_TIME_SUBMIT}}
+		vk.BeginCommandBuffer(up.cmd, &begin)
+		if size > 0 {
+			up.staging = vk_buffer_make(size, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
+			source_buffer, source = up.staging.buffer, up.staging.mapped
+		}
+		return
 	}
-	clear(&g_vk.retired_sets)
+	up.cmd = vk_cmd()
+	vk_pass_end() // transfers cannot run inside a render pass; the next draw resumes it
+	if size <= 0 { return }
+	cursor := (g_vk.staging_cursor + 15) &~ 15
+	if size <= VK_STAGING_RING_PER_FRAME - cursor {
+		base := g_vk.slot * VK_STAGING_RING_PER_FRAME + cursor
+		g_vk.staging_cursor = cursor + size
+		return up, g_vk.staging.buffer, vk.DeviceSize(base), g_vk.staging.mapped[base:]
+	}
+	dedicated := vk_buffer_make(size, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
+	vk_retire({buffer = dedicated})
+	return up, dedicated.buffer, 0, dedicated.mapped
+}
+
+@(private = "file")
+vk_upload_end :: proc(up: ^Vk_Upload) {
+	if up.sync {
+		vk.EndCommandBuffer(up.cmd)
+		submit := vk.SubmitInfo{sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &up.cmd}
+		vk.ResetFences(g_vk.device, 1, &g_vk.upload_fence)
+		vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, g_vk.upload_fence), "vkQueueSubmit (upload)")
+		vk_ok(vk.WaitForFences(g_vk.device, 1, &g_vk.upload_fence, true, max(u64)), "vkWaitForFences (upload)")
+		vk_buffer_free(&up.staging)
+		g_vk_stats.sync_uploads += 1
+		return
+	}
+	// Transfer writes before any later use (vertex input, shaders, transfers).
+	barrier := vk.MemoryBarrier2{
+		sType = .MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
+		dstStageMask = {.ALL_COMMANDS}, dstAccessMask = {.MEMORY_READ, .MEMORY_WRITE},
+	}
+	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, memoryBarrierCount = 1, pMemoryBarriers = &barrier}
+	vk.CmdPipelineBarrier2(up.cmd, &dep)
 }
 
 // Immutable: `data` is the whole contents for the buffer's lifetime.
@@ -743,21 +972,18 @@ gpu_buffer_create :: proc(kind: Gpu_Buffer_Kind, data: []u8) -> Gpu_Buffer {
 	case .Storage: usage += {.STORAGE_BUFFER}
 	}
 	buffer := vk_buffer_make(len(data), usage, {.DEVICE_LOCAL})
-	staging := vk_buffer_make(len(data), {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
-	defer vk_buffer_free(&staging)
-	mem.copy(staging.mapped, raw_data(data), len(data))
-	cmd := vk_upload_begin()
-	region := vk.BufferCopy{size = vk.DeviceSize(len(data))}
-	vk.CmdCopyBuffer(cmd, staging.buffer, buffer.buffer, 1, &region)
-	vk_upload_end()
+	up, source_buffer, source_offset, source := vk_upload_begin(len(data))
+	mem.copy(source, raw_data(data), len(data))
+	region := vk.BufferCopy{srcOffset = source_offset, size = vk.DeviceSize(len(data))}
+	vk.CmdCopyBuffer(up.cmd, source_buffer, buffer.buffer, 1, &region)
+	vk_upload_end(&up)
 	return Gpu_Buffer(vk_table_add(&g_vk.buffers, buffer))
 }
 
 gpu_buffer_destroy :: proc(buffer: ^Gpu_Buffer) {
 	b := vk_table_get(&g_vk.buffers, u32(buffer^))
 	if b == nil { buffer^ = 0; return }
-	vk_idle_for_destroy()
-	vk_buffer_free(b)
+	vk_retire({buffer = b^})
 	if g_vk.objects == buffer^ { g_vk.objects = 0; g_vk.set0_dirty = true }
 	vk_table_remove(&g_vk.buffers, u32(buffer^))
 	buffer^ = 0
@@ -840,9 +1066,10 @@ vk_image_make :: proc(width, height, layers, mips: u32, array: bool, format: vk.
 	vk_ok(vk.CreateImage(g_vk.device, &info, nil, &img.image), "vkCreateImage")
 	req: vk.MemoryRequirements
 	vk.GetImageMemoryRequirements(g_vk.device, img.image, &req)
-	alloc := vk.MemoryAllocateInfo{sType = .MEMORY_ALLOCATE_INFO, allocationSize = req.size, memoryTypeIndex = vk_memory_type(req.memoryTypeBits, {.DEVICE_LOCAL})}
-	vk_ok(vk.AllocateMemory(g_vk.device, &alloc, nil, &img.memory), "vkAllocateMemory (image)")
-	vk.BindImageMemory(g_vk.device, img.image, img.memory, 0)
+	if memory, ok := vk_alloc(req, {.DEVICE_LOCAL}, true); ok {
+		img.memory = memory
+		vk.BindImageMemory(g_vk.device, img.image, memory.memory, vk.DeviceSize(memory.offset))
+	}
 	img.view = vk_image_view(&img, 0, img.layers, array)
 	return
 }
@@ -863,7 +1090,7 @@ vk_image_free :: proc(img: ^Vk_Image) {
 	if img.image == 0 { return }
 	vk.DestroyImageView(g_vk.device, img.view, nil)
 	vk.DestroyImage(g_vk.device, img.image, nil)
-	vk.FreeMemory(g_vk.device, img.memory, nil)
+	vk_free(&img.memory)
 	img^ = {}
 }
 
@@ -924,7 +1151,7 @@ vk_texture_set :: proc(view: vk.ImageView, sampler: vk.Sampler) -> (set: vk.Desc
 
 @(private = "file")
 vk_retire_set :: proc(set: vk.DescriptorSet) {
-	if set != 0 { append(&g_vk.retired_sets, set) }
+	if set != 0 { vk_retire({set = set}) }
 }
 
 gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
@@ -939,20 +1166,18 @@ gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Te
 	texture.image = vk_image_make(w, h, u32(max(desc.layers, 1)), mips, desc.layers > 0, vk_format(desc.format), usage)
 	img := &texture.image
 
-	cmd := vk_upload_begin()
-	staging: Vk_Buffer
 	size := int(w) * int(h) * gpu_format_bytes_per_pixel(desc.format)
-	if pixels != nil && len(pixels) >= size {
-		staging = vk_buffer_make(size, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
-		mem.copy(staging.mapped, raw_data(pixels), size)
-		vk_transition(cmd, img, 0, img.layers, .TRANSFER_DST_OPTIMAL)
-		region := vk.BufferImageCopy{imageSubresource = {aspectMask = img.aspect, mipLevel = 0, baseArrayLayer = 0, layerCount = 1}, imageExtent = {w, h, 1}}
-		vk.CmdCopyBufferToImage(cmd, staging.buffer, img.image, .TRANSFER_DST_OPTIMAL, 1, &region)
-		if mips > 1 { vk_generate_mips(cmd, img) }
+	has_pixels := pixels != nil && len(pixels) >= size
+	up, source_buffer, source_offset, source := vk_upload_begin(has_pixels ? size : 0)
+	if has_pixels {
+		mem.copy(source, raw_data(pixels), size)
+		vk_transition(up.cmd, img, 0, img.layers, .TRANSFER_DST_OPTIMAL)
+		region := vk.BufferImageCopy{bufferOffset = source_offset, imageSubresource = {aspectMask = img.aspect, mipLevel = 0, baseArrayLayer = 0, layerCount = 1}, imageExtent = {w, h, 1}}
+		vk.CmdCopyBufferToImage(up.cmd, source_buffer, img.image, .TRANSFER_DST_OPTIMAL, 1, &region)
+		if mips > 1 { vk_generate_mips(up.cmd, img) }
 	}
-	vk_transition(cmd, img, 0, img.layers, .SHADER_READ_ONLY_OPTIMAL)
-	vk_upload_end()
-	vk_buffer_free(&staging)
+	vk_transition(up.cmd, img, 0, img.layers, .SHADER_READ_ONLY_OPTIMAL)
+	vk_upload_end(&up)
 
 	texture.sampler = vk_sampler_get(desc.sampler, 1)
 	if desc.format != .Depth { texture.set = vk_texture_set(img.view, texture.sampler) }
@@ -996,17 +1221,15 @@ gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width
 	t := vk_table_get(&g_vk.textures, u32(texture))
 	size := int(width) * int(height) * gpu_format_bytes_per_pixel(format)
 	if t == nil || len(pixels) < size { return }
-	staging := vk_buffer_make(size, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
-	defer vk_buffer_free(&staging)
-	mem.copy(staging.mapped, raw_data(pixels), size)
-	// The texture may be read by recorded frames: let them finish first.
-	vk_idle_for_destroy()
-	cmd := vk_upload_begin()
-	vk_transition(cmd, &t.image, 0, 1, .TRANSFER_DST_OPTIMAL)
-	region := vk.BufferImageCopy{imageSubresource = {aspectMask = t.image.aspect, layerCount = 1}, imageOffset = {x, y, 0}, imageExtent = {u32(width), u32(height), 1}}
-	vk.CmdCopyBufferToImage(cmd, staging.buffer, t.image.image, .TRANSFER_DST_OPTIMAL, 1, &region)
-	vk_transition(cmd, &t.image, 0, 1, .SHADER_READ_ONLY_OPTIMAL)
-	vk_upload_end()
+	// Recorded in order: draws before this see the old texels, later ones the
+	// new (the transition waits for earlier reads, frames in flight included).
+	up, source_buffer, source_offset, source := vk_upload_begin(size)
+	mem.copy(source, raw_data(pixels), size)
+	vk_transition(up.cmd, &t.image, 0, 1, .TRANSFER_DST_OPTIMAL)
+	region := vk.BufferImageCopy{bufferOffset = source_offset, imageSubresource = {aspectMask = t.image.aspect, layerCount = 1}, imageOffset = {x, y, 0}, imageExtent = {u32(width), u32(height), 1}}
+	vk.CmdCopyBufferToImage(up.cmd, source_buffer, t.image.image, .TRANSFER_DST_OPTIMAL, 1, &region)
+	vk_transition(up.cmd, &t.image, 0, 1, .SHADER_READ_ONLY_OPTIMAL)
+	vk_upload_end(&up)
 }
 
 gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
@@ -1037,10 +1260,9 @@ gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 	t := vk_table_get(&g_vk.textures, u32(texture^))
 	if t == nil { texture^ = 0; return }
 	if g_active_texture == texture^ { g_active_texture = 0 }
-	vk_idle_for_destroy()
-	if t.set != 0 { s := t.set; vk.FreeDescriptorSets(g_vk.device, g_vk.texture_pool, 1, &s) }
-	if t.override_set != 0 { s := t.override_set; vk.FreeDescriptorSets(g_vk.device, g_vk.texture_pool, 1, &s) }
-	vk_image_free(&t.image)
+	vk_retire_set(t.set)
+	vk_retire_set(t.override_set)
+	vk_retire({image = t.image})
 	if g_vk.color_texture == texture^ { g_vk.color_texture = 0 }
 	if g_vk.shadow_texture == texture^ { g_vk.shadow_texture = 0; g_vk.set0_dirty = true }
 	if g_vk.player_texture == texture^ { g_vk.player_texture = 0; g_vk.set0_dirty = true }
@@ -1106,10 +1328,8 @@ vk_target_images_make :: proc(target: ^Vk_Target, width, height: u32) {
 	target.width, target.height = width, height
 	target.color = vk_image_make(width, height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC})
 	target.depth = vk_image_make(width, height, 1, 1, false, VK_DEPTH_FORMAT, {.DEPTH_STENCIL_ATTACHMENT, .TRANSFER_SRC})
-	cmd := vk_upload_begin()
-	vk_transition(cmd, &target.color, 0, 1, .COLOR_ATTACHMENT_OPTIMAL)
-	vk_transition(cmd, &target.depth, 0, 1, .DEPTH_ATTACHMENT_OPTIMAL)
-	vk_upload_end()
+	// Layouts start UNDEFINED: the first pass (or readback) moves them, with
+	// contents undefined until drawn, as with a new GL renderbuffer.
 }
 
 gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
@@ -1123,12 +1343,11 @@ gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> G
 gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 	t := vk_table_get(&g_vk.targets, u32(target^))
 	if t == nil { target^ = 0; return }
-	vk_idle_for_destroy()
 	if t.depth_only {
-		vk.DestroyImageView(g_vk.device, t.layer_view, nil)
+		vk_retire({view = t.layer_view})
 	} else {
-		vk_image_free(&t.color)
-		vk_image_free(&t.depth)
+		vk_retire({image = t.color})
+		vk_retire({image = t.depth})
 	}
 	if g_vk.target == target^ { g_vk.target = 0; g_vk.pending_color, g_vk.pending_depth = false, false }
 	vk_table_remove(&g_vk.targets, u32(target^))
@@ -1144,6 +1363,8 @@ vk_collect :: proc(slot: int) {
 	if !frame.submitted { return }
 	vk_ok(vk.WaitForFences(g_vk.device, 1, &frame.fence, true, max(u64)), "vkWaitForFences")
 	frame.submitted = false
+	g_vk.completed_serial = max(g_vk.completed_serial, frame.serial)
+	vk_release_retired()
 	if frame.timed {
 		stamps: [2]u64
 		if vk.GetQueryPoolResults(g_vk.device, frame.queries, 0, 2, size_of(stamps), &stamps[0], size_of(u64), {._64, .WAIT}) == .SUCCESS {
@@ -1167,8 +1388,11 @@ vk_begin_recording :: proc(timed: bool) {
 		vk.CmdWriteTimestamp2(frame.cmd, {.TOP_OF_PIPE}, frame.queries, 0)
 	}
 	frame.timed = timed
+	g_vk.serial += 1
+	frame.serial = g_vk.serial
 	g_vk.recording = true
 	g_vk.ring_cursor = 0
+	g_vk.staging_cursor = 0
 	g_vk.transient_cursor = 0
 	g_vk.transient_active = false
 	// A fresh command buffer has nothing bound.
@@ -1284,34 +1508,65 @@ gpu_program_create_basic :: proc(batched, shadow_depth: bool) -> Gpu_Program {
 	case batched:                 vert, frag = SPIRV_BATCHED_VERT, SPIRV_BATCHED_FRAG
 	case:                         vert, frag = SPIRV_BASIC_VERT, SPIRV_BASIC_FRAG
 	}
-	program := Vk_Program{vert = vk_shader_module(vert), frag = vk_shader_module(frag), layout = batched ? .Batched : .Basic}
-	return Gpu_Program(vk_table_add(&g_vk.programs, program))
+	program := Vk_Program{vert = vk_shader_module(vert), frag = vk_shader_module(frag), layout = batched ? .Batched : .Basic, shadow = shadow_depth}
+	return vk_program_add(program)
+}
+
+// Registers a program and compiles the pipelines its draws will use, so the
+// first draw with a new state does not stop to compile one.
+@(private = "file")
+vk_program_add :: proc(program: Vk_Program) -> Gpu_Program {
+	handle := Gpu_Program(vk_table_add(&g_vk.programs, program))
+	keys := make([dynamic]Vk_Pipeline_Key, context.temp_allocator)
+	switch {
+	case program.shadow:
+		for cull_front in ([2]bool{false, true}) {
+			for depth_write in ([2]bool{true, false}) {
+				append(&keys, Vk_Pipeline_Key{program = handle, state = {depth_write = depth_write}, depth_only = true, cull_front = cull_front})
+			}
+		}
+	case program.layout == .UI:
+		append(&keys, Vk_Pipeline_Key{program = handle, state = {blend = true, depth_test = .Off}})
+	case program.layout == .Debug_Line:
+		append(&keys, Vk_Pipeline_Key{program = handle, state = {depth_test = .Less_Equal}}, Vk_Pipeline_Key{program = handle, state = {depth_test = .Off}})
+	case:
+		// scene.odin: blend for transparent materials, depth writes off for
+		// no_depth_write ones (wireframe is a debug view, built on use).
+		for blend in ([2]bool{false, true}) {
+			for depth_write in ([2]bool{true, false}) {
+				append(&keys, Vk_Pipeline_Key{program = handle, state = {blend = blend, depth_write = depth_write}})
+			}
+		}
+	}
+	for key in keys { vk_pipeline_get(key) }
+	return handle
 }
 
 gpu_program_create_debug_lines :: proc() -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	program := Vk_Program{vert = vk_shader_module(SPIRV_DEBUG_LINE_VERT), frag = vk_shader_module(SPIRV_DEBUG_LINE_FRAG), layout = .Debug_Line}
-	return Gpu_Program(vk_table_add(&g_vk.programs, program))
+	return vk_program_add(program)
 }
 
 gpu_program_create_ui :: proc() -> Gpu_Program {
 	if !g_vk.ready { return 0 }
 	program := Vk_Program{vert = vk_shader_module(SPIRV_UI_VERT), frag = vk_shader_module(SPIRV_UI_FRAG), layout = .UI}
-	return Gpu_Program(vk_table_add(&g_vk.programs, program))
+	return vk_program_add(program)
 }
 
 gpu_program_destroy :: proc(program: ^Gpu_Program) {
 	p := vk_table_get(&g_vk.programs, u32(program^))
 	if p == nil { program^ = 0; return }
-	vk_idle_for_destroy()
+	keys := make([dynamic]Vk_Pipeline_Key, context.temp_allocator)
 	for key, pipeline in g_vk.pipelines {
 		if key.program == program^ {
-			vk.DestroyPipeline(g_vk.device, pipeline, nil)
-			delete_key(&g_vk.pipelines, key)
+			vk_retire({pipeline = pipeline})
+			append(&keys, key)
 		}
 	}
-	vk.DestroyShaderModule(g_vk.device, p.vert, nil)
-	vk.DestroyShaderModule(g_vk.device, p.frag, nil)
+	for key in keys { delete_key(&g_vk.pipelines, key) }
+	vk_retire({module = p.vert})
+	vk_retire({module = p.frag})
 	if g_vk.program == program^ { g_vk.program = 0 }
 	g_vk.bound_pipeline = 0
 	vk_table_remove(&g_vk.programs, u32(program^))
@@ -1412,6 +1667,7 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	pipeline: vk.Pipeline
 	if !vk_ok(vk.CreateGraphicsPipelines(g_vk.device, g_vk.pipeline_cache, 1, &info, nil, &pipeline), "vkCreateGraphicsPipelines") { return 0 }
 	g_vk.pipelines[key] = pipeline
+	if g_vk.recording && g_vk.in_pass { g_vk_stats.draw_time_pipelines += 1 }
 	return pipeline
 }
 
@@ -1791,7 +2047,7 @@ vk_window_sync :: proc() {
 	t := vk_table_get(&g_vk.targets, u32(sc.target))
 	resized := t != nil && (t.width != u32(width) || t.height != u32(height))
 	if !resized && !sc.dirty && sc.swapchain != 0 && sc.extent.width == u32(width) && sc.extent.height == u32(height) { return }
-	vk_idle_for_destroy()
+	vk_idle()
 	if resized {
 		vk_image_free(&t.color)
 		vk_image_free(&t.depth)
@@ -1879,8 +2135,7 @@ vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: 
 	if g_vk.target == target && g_vk.recording { vk_pass_end(); vk_flush_pending_clear() }
 	size := int(width) * int(height) * 4
 	if g_vk.readback.size < size {
-		vk_idle_for_destroy()
-		vk_buffer_free(&g_vk.readback)
+		vk_retire({buffer = g_vk.readback})
 		g_vk.readback = vk_buffer_make(size, {.TRANSFER_DST}, {.HOST_VISIBLE, .HOST_COHERENT, .HOST_CACHED})
 		if g_vk.readback.mapped == nil { g_vk.readback = vk_buffer_make(size, {.TRANSFER_DST}, {.HOST_VISIBLE, .HOST_COHERENT}) }
 	}
@@ -1895,6 +2150,7 @@ vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: 
 	slot := g_vk.slot
 	vk_submit()
 	vk_collect(slot)
+	g_vk_stats.readbacks += 1
 	return g_vk.readback.mapped, true
 }
 
