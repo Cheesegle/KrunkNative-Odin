@@ -505,7 +505,8 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		g_vk.present.vsync = true
 		width, height := glfw.GetFramebufferSize(window)
 		g_vk.present.target = gpu_render_target_create(max(width, 1), max(height, 1))
-		vk_swapchain_build()
+		// Built by the first frame, after the caller's gpu_set_vsync.
+		g_vk.present.dirty = true
 	}
 	fmt.printfln("[Vulkan] %s, API %d.%d.%d, driver %x%s", g_vk.device_name,
 		g_vk.props.apiVersion >> 22, (g_vk.props.apiVersion >> 12) & 0x3ff, g_vk.props.apiVersion & 0xfff, g_vk.props.driverVersion,
@@ -1587,8 +1588,12 @@ gpu_window_target :: proc() -> Gpu_Render_Target {
 	return g_vk.present.target
 }
 
-// FIFO when on; otherwise MAILBOX, or IMMEDIATE where MAILBOX is missing.
-// Applied by recreating the swapchain before the next frame.
+// FIFO when on. Off is IMMEDIATE, like GL's swap interval 0: frames go out as
+// soon as they are done, so the game's FPS limit (or none) sets the rate and
+// VRR displays follow it. MAILBOX only where IMMEDIATE is missing: it still
+// presents on vblank (measured: 480 FPS uncapped against ~2500 with
+// IMMEDIATE on an RTX 4070, windowed). Applied by recreating the swapchain
+// before the next frame.
 gpu_set_vsync :: proc(on: bool) {
 	if g_vk.present.vsync == on { return }
 	g_vk.present.vsync = on
@@ -1616,8 +1621,8 @@ vk_present_mode :: proc(vsync: bool) -> vk.PresentModeKHR {
 		for m in modes { if m == mode { return true } }
 		return false
 	}
-	if has(modes, .MAILBOX) { return .MAILBOX }
 	if has(modes, .IMMEDIATE) { return .IMMEDIATE }
+	if has(modes, .MAILBOX) { return .MAILBOX }
 	return .FIFO
 }
 
