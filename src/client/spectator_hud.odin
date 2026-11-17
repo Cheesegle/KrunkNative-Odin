@@ -42,7 +42,7 @@ spectator_hud_render :: proc(client: ^Client, delta: f32) {
 	s := ui.scale
 	source, target := spectator_target(client)
 	// The world pass leaves depth testing on; the HUD is flat.
-	gl.Disable(gl.DEPTH_TEST)
+	when !KRODIN_VULKAN { gl.Disable(gl.DEPTH_TEST) }
 
 	if spec.mode == .FIRST_PERSON && target != nil && target.weapon != nil && target.weapon.scope && spec.aim > 0.95 {
 		overlay_scope_render(ui, !client.hud_settings.hide_scope_borders)

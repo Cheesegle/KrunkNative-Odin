@@ -571,6 +571,20 @@ when !KRODIN_VULKAN {
 		gl.Finish()
 	}
 
+	// ---------------------------------------------------------------------------
+	// Window.
+
+	// GL draws window frames straight into the default framebuffer.
+	gpu_window_target :: proc() -> Gpu_Render_Target { return 0 }
+
+	gpu_set_vsync :: proc(on: bool) {
+		glfw.SwapInterval(on ? 1 : 0)
+	}
+
+	gpu_present :: proc(window: glfw.WindowHandle) {
+		glfw.SwapBuffers(window)
+	}
+
 	gpu_backend_name :: proc() -> string { return "OpenGL" }
 
 	gpu_device_name :: proc() -> string {

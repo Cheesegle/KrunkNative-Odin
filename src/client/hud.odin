@@ -85,6 +85,19 @@ menu_scissor :: proc(ui: ^UI, box: clay.BoundingBox) {
 	gl.Scissor(i32(clamp(x, -65536, 65536)), i32(clamp(y, -65536, 65536)), i32(min(width, 65536)), i32(min(height, 65536)))
 }
 
+// Clips later UI draws to `box` (UI pixels, top-left origin) until
+// ui_clip_clear. Not applied on Vulkan yet (port plan, Phase 2).
+ui_clip_set :: proc(ui: ^UI, box: clay.BoundingBox) {
+	when !KRODIN_VULKAN {
+		gl.Enable(gl.SCISSOR_TEST)
+		menu_scissor(ui, box)
+	}
+}
+
+ui_clip_clear :: proc(ui: ^UI) {
+	when !KRODIN_VULKAN { gl.Disable(gl.SCISSOR_TEST) }
+}
+
 menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderCommand)) {
 	clips: [32]clay.BoundingBox
 	clip_count := 0
@@ -120,12 +133,11 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 			}
 			clips[clip_count] = box
 			clip_count += 1
-			gl.Enable(gl.SCISSOR_TEST)
-			menu_scissor(ui, box)
+			ui_clip_set(ui, box)
 		case .ScissorEnd:
 			clip_count = max(0, clip_count - 1)
-			if clip_count == 0 { gl.Disable(gl.SCISSOR_TEST) }
-			else { menu_scissor(ui, clips[clip_count - 1]) }
+			if clip_count == 0 { ui_clip_clear(ui) }
+			else { ui_clip_set(ui, clips[clip_count - 1]) }
 		case .Image:
 			texture := Gpu_Texture(uintptr(command.renderData.image.imageData))
 			if texture != 0 { ui_draw_image(ui, texture, box.x, box.y, box.width, box.height) }
@@ -142,23 +154,21 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 					clip.x, clip.y = max(clip.x,parent.x), max(clip.y,parent.y)
 					clip.width, clip.height = max(0,right-clip.x), max(0,bottom-clip.y)
 				}
-				gl.Enable(gl.SCISSOR_TEST)
-				menu_scissor(ui, clip)
+				ui_clip_set(ui, clip)
 				crosshair_render(ui, preview.settings, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, menuui.crosshair_opacity(preview.settings, 1))
 				hit_marker_preview(ui, preview.hitmarker, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, glfw.GetTime())
-				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
+				if clip_count > 0 { ui_clip_set(ui, clips[clip_count-1]) } else { ui_clip_clear(ui) }
 			}
 			if command.id == clay.ID("DamagePreview").id && command.renderData.custom.customData != nil {
 				preview := cast(^menuui.Damage_Preview)command.renderData.custom.customData
-				gl.Enable(gl.SCISSOR_TEST)
-				menu_scissor(ui, box)
+				ui_clip_set(ui, box)
 				damage_preview_render(ui, preview.settings, box.x, box.y, box.width, box.height, glfw.GetTime())
-				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
+				if clip_count > 0 { ui_clip_set(ui, clips[clip_count-1]) } else { ui_clip_clear(ui) }
 			}
 		case .None, .OverlayColorStart, .OverlayColorEnd:
 		}
 	}
-	gl.Disable(gl.SCISSOR_TEST)
+	ui_clip_clear(ui)
 }
 
 // pointer_blocked is set while the pointer is over (or dragging) the debug

@@ -97,6 +97,14 @@ load_font :: proc() {
 
 ui_init :: proc() -> ^UI {
 	ui := new(UI)
+	when KRODIN_VULKAN {
+		// Not drawn yet on Vulkan (port plan, Phase 2): plain materials keep
+		// the draw procedures' state writes valid.
+		ui.material = new(Quad_Material)
+		ui.text_material = new(Text_Material)
+		ui.vignette = damage_vignette_texture()
+		return ui
+	}
 
 	ui.material = quad_material_init()
 	ui.text_material = text_material_init()
@@ -153,12 +161,14 @@ ui_update :: proc(ui: ^UI, width, height: f32) {
 
 	ui.scale = min(scale_x, scale_y)
 
+	when KRODIN_VULKAN { return }
 	gl.Disable(gl.DEPTH_TEST)
 	gl.Enable(gl.BLEND)
 	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
 }
 
 ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
+	when KRODIN_VULKAN { return } // Phase 2
 	// A minimized window (0x0) or a NaN layout box would send NaN/Inf vertex
 	// positions to the driver for every UI quad; draw nothing instead.
 	finite :: proc(value: f32) -> bool { return !math.is_nan(value) && !math.is_inf(value) }
@@ -187,6 +197,7 @@ ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
 }
 
 ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
+	when KRODIN_VULKAN { return } // Phase 2
 	ui.material.color = color
 	ui.material.texture = 0
 
@@ -213,6 +224,7 @@ ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
 // fan with the flat UI color. Used for rotated HUD shapes such as hitmarkers.
 UI_POLYGON_MAX :: 64
 ui_fill_polygon :: proc(ui: ^UI, color: shared.Vec4, points: []shared.Vec2) {
+	when KRODIN_VULKAN { return } // Phase 2
 	if len(points) < 3 || len(points) > UI_POLYGON_MAX || !(ui.width > 0 && ui.height > 0) { return }
 	vertices: [UI_POLYGON_MAX]Vertex
 	for p, i in points {
@@ -246,6 +258,7 @@ ui_fill_polygon :: proc(ui: ^UI, color: shared.Vec4, points: []shared.Vec2) {
 }
 
 ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: f32) {
+	when KRODIN_VULKAN { return } // Phase 2
 	ui.material.color = color
 	ui.material.texture = 0
 
@@ -272,6 +285,7 @@ ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: 
 }
 
 ui_fill_rect_rclip :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, r_clip: f32) {
+	when KRODIN_VULKAN { return } // Phase 2
 	ui.material.color = color
 	ui.material.texture = 0
 
@@ -305,6 +319,7 @@ ui_stroke_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, r
 
 // mirror flips the image horizontally (CSS transform: scaleX(-1)).
 ui_draw_image :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
+	when KRODIN_VULKAN { return } // Phase 2
 	ui.material.color = color
 	ui.material.texture = texture_id
 
@@ -329,6 +344,7 @@ ui_draw_image :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height: f32
 }
 
 ui_draw_image_rounded :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height, radius: f32) {
+	when KRODIN_VULKAN { return } // Phase 2
 	ui.material.color = shared.Vec4{1.0, 1.0, 1.0, 1.0}
 	ui.material.texture = texture_id
 
@@ -388,6 +404,7 @@ ui_text_kerning :: proc(previous, current: rune, size: f32) -> f32 {
 }
 
 ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32) -> f32 {
+	when KRODIN_VULKAN { return ui_measure_text(ui, text, size) } // Phase 2
 	start_x := x
 	cursor_x := x
 	previous: rune
@@ -438,14 +455,16 @@ ui_fini :: proc(ui: ^UI) {
 	g_glyph_cache = {}
 	g_kern_cached = {}
 
-	if ui.vao != 0 {
-		gl.DeleteVertexArrays(1, &ui.vao)
+	when !KRODIN_VULKAN {
+		if ui.vao != 0 {
+			gl.DeleteVertexArrays(1, &ui.vao)
+		}
+		if ui.vbo != 0 {
+			gl.DeleteBuffers(1, &ui.vbo)
+		}
+		if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
+		if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
 	}
-	if ui.vbo != 0 {
-		gl.DeleteBuffers(1, &ui.vbo)
-	}
-	if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
-	if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
 	gpu_texture_destroy(&ui.vignette)
 	material_fini(&ui.material.base)
 	material_fini(&ui.text_material.base)

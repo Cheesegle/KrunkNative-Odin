@@ -396,7 +396,7 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
 		client.vsync = values.vsync
-		if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
+		if client.window != nil { gpu_set_vsync(client.vsync) }
 	}
 	client.settings_dirty = true
 	settings := client_audio_settings_from_values(values)

@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:math"
 import "core:os"
@@ -1613,8 +1614,6 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client_tick_textures(client, now)
 
-	// GPU time covers the world, view model and HUD, not the debug window.
-	when KRODIN_DEV { perf_overlay_gpu_begin(client) }
 	phase_mark(.RENDER_WORLD)
 	client_render_world(client)
 	gl_check("render world", per_phase = true)
@@ -1651,7 +1650,6 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
 	when KRODIN_DEV {
-		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
 		if client.perf_overlay { phase_mark(.DEBUG_WINDOW); debug_ui_render(client) }
 	}
 }
@@ -1692,15 +1690,15 @@ client_render_world :: proc(client: ^Client) {
 }
 
 resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
-	if glfw.GetCurrentContext() != window {
-		return
+	if g_client == nil || g_client.window != window { return }
+	when !KRODIN_VULKAN {
+		if glfw.GetCurrentContext() != window { return }
 	}
-
-	gl.Viewport(0, 0, width, height)
-	if g_client != nil {
-		g_client.viewport_width = width
-		g_client.viewport_height = height
-	}
+	context = runtime.default_context()
+	// Vulkan resizes the window target and swapchain at the next frame start.
+	gpu_set_target(g_client.render_target, width, height)
+	g_client.viewport_width = width
+	g_client.viewport_height = height
 }
 
 main :: proc() {
@@ -1728,13 +1726,6 @@ main :: proc() {
 	g_gl_robustness_wanted = !options.no_gl_robustness
 	if len(options.bench_maps) > 0 {
 		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
-	}
-	when KRODIN_VULKAN {
-		// The world renderer runs on Vulkan; the HUD, menus and window
-		// presentation are still OpenGL-only (Vulkan port plan, Phase 2).
-		fmt.eprintln("This Vulkan build runs the renderer benchmark only: krodin_client_vk --bench <maps> <seconds>.")
-		fmt.eprintln("Play with krodin_client.exe (OpenGL) until the interface is ported.")
-		os.exit(1)
 	}
 	diagnostics_name_thread("Krodin main")
 
@@ -1791,19 +1782,26 @@ main :: proc() {
 	crash_handler_install()
 	defer crash_handler_uninstall()
 
-	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-	if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
-
-	when ODIN_OS == .Darwin {
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 1)
-		glfw.WindowHint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE) // apple silicon needs this?
+	window_title: cstring = KRODIN_SPECTATOR ? "Krodin Spectator" : "Krodin"
+	when KRODIN_VULKAN {
+		// No GL context: the window gets a Vulkan surface (gpu_vk_init).
+		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
 	} else {
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-	}
+		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+		if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
-	client.window, g_diag.gl_robust_requested = client_create_window(1280, 720, KRODIN_SPECTATOR ? "Krodin Spectator" : "Krodin", g_gl_robustness_wanted)
+		when ODIN_OS == .Darwin {
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 1)
+			glfw.WindowHint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE) // apple silicon needs this?
+		} else {
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+		}
+
+		client.window, g_diag.gl_robust_requested = client_create_window(1280, 720, window_title, g_gl_robustness_wanted)
+	}
 	if client.window == nil {
 		fmt.eprintln("Failed to create window")
 		return
@@ -1824,7 +1822,7 @@ main :: proc() {
 	glfw.SetMonitorCallback(client_monitor_changed)
 	glfw.SetWindowFocusCallback(client.window, client_window_focus_changed)
 	glfw.SetWindowIconifyCallback(client.window, client_window_iconify_changed)
-	glfw.MakeContextCurrent(client.window)
+	when !KRODIN_VULKAN { glfw.MakeContextCurrent(client.window) }
 
 	// The native Windows path owns raw mouse input (and decides whether GLFW's
 	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
@@ -1835,21 +1833,41 @@ main :: proc() {
 	}
 	defer client_mouse_fini()
 
-	gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-	diagnostics_capture_gl_info()
-	// System facts for crash and hang reports, gathered once, off the frame path.
-	diagnostics_capture_system_info()
-	if g_diag.gl_robust_requested && !g_diag.gl_reset_detection {
-		fmt.println("[GL] The driver did not grant GPU reset notification; resets cannot be detected")
-	}
-	if options.gl_debug {
-		if gl_debug_install() {
-			fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
-		} else {
-			fmt.eprintln("[GL] Debug output is not available on this context")
+	when KRODIN_VULKAN {
+		if !gpu_vk_init(client.window) {
+			fmt.eprintln("Vulkan initialization failed; play with krodin_client.exe (OpenGL)")
+			return
+		}
+		// System facts for crash and hang reports, gathered once, off the frame path.
+		diagnostics_capture_system_info()
+	} else {
+		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		diagnostics_capture_gl_info()
+		// System facts for crash and hang reports, gathered once, off the frame path.
+		diagnostics_capture_system_info()
+		if g_diag.gl_robust_requested && !g_diag.gl_reset_detection {
+			fmt.println("[GL] The driver did not grant GPU reset notification; resets cannot be detected")
+		}
+		if options.gl_debug {
+			if gl_debug_install() {
+				fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
+			} else {
+				fmt.eprintln("[GL] Debug output is not available on this context")
+			}
 		}
 	}
-	defer gl_debug_shutdown()
+	// Deferred here, so the device outlives every GPU object freed below.
+	defer {
+		when KRODIN_VULKAN { gpu_vk_fini() } else { gl_debug_shutdown() }
+	}
+	defer gpu_frames_fini()
+	// GL draws window frames into the default framebuffer (0); Vulkan into
+	// its window target, presented by gpu_present.
+	client.render_target = gpu_window_target()
+	{
+		width, height := glfw.GetFramebufferSize(client.window)
+		resize_viewport(client.window, width, height)
+	}
 	// An exe older than assets/shaders (a pull without a rebuild) is reported
 	// before any shader compiles; build_status_banner_render shows it.
 	build_status_check_assets()
@@ -1857,11 +1875,11 @@ main :: proc() {
 	client_graphics_init(client)
 	defer client_graphics_fini(client)
 
-	glfw.SwapInterval(client.vsync ? 1 : 0)
+	gpu_set_vsync(client.vsync)
 	client_apply_display_settings(client)
 	diagnostics_capture_monitors(client.window)
 	defer software_cursor_fini()
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	when !KRODIN_VULKAN { gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) }
 
 	client.scene = scene_init()
 	client.fps_scene = scene_init()
@@ -1938,6 +1956,7 @@ main :: proc() {
 		last_tick = now
 		g_draw_calls = 0
 		phase_frame_begin()
+		gpu_frame_begin()
 
 		software_cursor_update(client.window)
 		phase_mark(.TICK)
@@ -1968,7 +1987,9 @@ main :: proc() {
 		software_cursor_render(client)
 		swap_start := glfw.GetTime()
 		phase_mark(.SWAP_BUFFERS)
-		glfw.SwapBuffers(client.window)
+		gpu_present(client.window)
+		gpu_frame_end()
+		client_collect_gpu_times(client)
 		swap_end := glfw.GetTime()
 		// The game FPS limit waits before polling, so the next frame reads the
 		// freshest keyboard state; the raw input thread keeps reading the mouse.
@@ -2063,13 +2084,18 @@ print_startup_info :: proc(client: ^Client) {
 	major, minor, rev := glfw.GetVersion()
 	fmt.printf("  Platform       : GLFW %d.%d.%d\n", major, minor, rev)
 
-	vendor := cstring(gl.GetString(gl.VENDOR))
-	renderer := cstring(gl.GetString(gl.RENDERER))
-	version := cstring(gl.GetString(gl.VERSION))
+	when KRODIN_VULKAN {
+		fmt.printf("  GPU            : %s\n", gpu_device_name())
+		fmt.printf("  Graphics API   : Vulkan\n")
+	} else {
+		vendor := cstring(gl.GetString(gl.VENDOR))
+		renderer := cstring(gl.GetString(gl.RENDERER))
+		version := cstring(gl.GetString(gl.VERSION))
 
-	fmt.printf("  GPU Vendor     : %s\n", vendor)
-	fmt.printf("  GPU            : %s\n", renderer)
-	fmt.printf("  GL Version     : %s\n", version)
+		fmt.printf("  GPU Vendor     : %s\n", vendor)
+		fmt.printf("  GPU            : %s\n", renderer)
+		fmt.printf("  GL Version     : %s\n", version)
+	}
 	fmt.printf("  CPU            : %s\n", cpu_model_name())
 
 	monitor := glfw.GetPrimaryMonitor()

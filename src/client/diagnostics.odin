@@ -517,6 +517,7 @@ gl_error_name :: proc(error: u32) -> string {
 // threaded drivers may sync with their worker thread, so it stays rare. The
 // first error of each site is logged with its phase; later ones are counted.
 gl_check :: proc(site: string, per_phase := false) -> bool {
+	when KRODIN_VULKAN { return true }
 	if g_diag.gl_debug_output || per_phase && !g_diag.gl_check_detailed { return true }
 	clean := true
 	for _ in 0 ..< 8 {

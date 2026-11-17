@@ -279,8 +279,7 @@ chat_render :: proc(client: ^Client) {
 		list_height := settings.height * 100 * k
 		size := 14 * k
 		line_height, baseline := chat_font_metrics(size)
-		gl.Enable(gl.SCISSOR_TEST)
-		menu_scissor(ui, clay.BoundingBox{left, list_bottom - list_height, 280 * k, list_height})
+		ui_clip_set(ui, clay.BoundingBox{left, list_bottom - list_height, 280 * k, list_height})
 		y := list_bottom
 		for i := chat.count - 1; i >= 0 && y > list_bottom - list_height; i -= 1 {
 			line := &chat.lines[i]
@@ -296,7 +295,7 @@ chat_render :: proc(client: ^Client) {
 			}
 			y = top
 		}
-		gl.Disable(gl.SCISSOR_TEST)
+		ui_clip_clear(ui)
 	}
 	if !chat.open { return }
 	width := 280 * k

@@ -748,6 +748,14 @@ resource_print_stats :: proc(label: string) {
 resource_cache_fini :: proc() {
 	resource_trim_texture_cache(true)
 	resource_trim_geometry_cache(true)
+	// Textures still referenced (HUD icons, menu portraits, kill feed icons
+	// keep theirs for the whole session) go too: nothing draws after this.
+	for _, entry in g_texture_cache {
+		id := entry.id
+		gpu_texture_destroy(&id)
+		delete(entry.cache_key)
+		free(entry)
+	}
 	delete(g_texture_cache)
 	delete(g_texture_by_id)
 	delete(g_geometry_cache)
@@ -783,12 +791,14 @@ resource_cache_fini :: proc() {
 	g_map_batch_shader_layout_reason = ""
 	shadow_placeholders_fini()
 	gpu_uniforms_fini()
-	if quad_shader_program != 0 {
-		gl.DeleteProgram(quad_shader_program)
-		quad_shader_program = 0
-	}
-	if text_shader_program != 0 {
-		gl.DeleteProgram(text_shader_program)
-		text_shader_program = 0
+	when !KRODIN_VULKAN {
+		if quad_shader_program != 0 {
+			gl.DeleteProgram(quad_shader_program)
+			quad_shader_program = 0
+		}
+		if text_shader_program != 0 {
+			gl.DeleteProgram(text_shader_program)
+			text_shader_program = 0
+		}
 	}
 }

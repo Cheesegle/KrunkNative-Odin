@@ -346,6 +346,7 @@ void main() { frag_color = v_color; }
 
 @(private="file")
 debug_render_gl_init :: proc(dr: ^Debug_Render) -> bool {
+	when KRODIN_VULKAN { return false } // GL-only until port plan Phase 3
 	if dr.program != 0 { return true }
 	program, ok := gl.load_shaders_source(DEBUG_LINE_VS, DEBUG_LINE_FS)
 	if !ok { return false }

@@ -250,7 +250,7 @@ player_healthbars_render :: proc(client: ^Client) {
 	// geometry never cuts a plate. Whether a plate exists at all is decided by
 	// the line-of-sight gate and its fade (`nameplate_alpha`), so draw it whole, untested
 	// against the world depth buffer and on top of the view model.
-	gl.Disable(gl.DEPTH_TEST)
+	when !KRODIN_VULKAN { gl.Disable(gl.DEPTH_TEST) }
 	view_projection := client.camera.projection_matrix * client.camera.world_inverse_matrix
 	for player in client.game.players {
 		if kill_cam_killer != nil && player != kill_cam_killer { continue }

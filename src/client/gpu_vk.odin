@@ -182,8 +182,28 @@ Vk_Frame :: struct {
 	fence:     vk.Fence,
 	pool:      vk.DescriptorPool,
 	queries:   vk.QueryPool,
+	acquired:  vk.Semaphore, // signalled by vkAcquireNextImageKHR for this frame
 	submitted: bool,
 	timed:     bool,
+}
+
+// The window: a surface, its swapchain, and the offscreen target the frame is
+// drawn into (gpu_window_target). gpu_present blits that target, flipped
+// vertically (it is stored in GL's bottom-up orientation), to the image.
+@(private = "file")
+Vk_Swapchain :: struct {
+	window:      glfw.WindowHandle,
+	surface:     vk.SurfaceKHR,
+	swapchain:   vk.SwapchainKHR,
+	format:      vk.Format,
+	extent:      vk.Extent2D,
+	images:      [dynamic]vk.Image,
+	// Per image: presentation waits on it, so it is reused only once the
+	// image comes back from vkAcquireNextImageKHR.
+	rendered:    [dynamic]vk.Semaphore,
+	vsync:       bool,
+	dirty:       bool, // recreate before the next frame
+	target:      Gpu_Render_Target,
 }
 
 @(private = "file")
@@ -263,6 +283,8 @@ Vk_State :: struct {
 	bound_set1:       vk.DescriptorSet,
 	bound_input:      Gpu_Vertex_Input,
 	warned_no_target: bool,
+
+	present:          Vk_Swapchain,
 }
 
 @(private = "file")
@@ -292,9 +314,11 @@ vk_debug_callback :: proc "system" (severity: vk.DebugUtilsMessageSeverityFlagsE
 // ---------------------------------------------------------------------------
 // Device setup.
 
-// Creates the instance and device (no window: rendering is offscreen).
+// Creates the instance and device. With a window (GLFW_NO_API), also its
+// surface, a swapchain and the window target frames are drawn into; without
+// one (benchmark, tests) rendering is offscreen only.
 // Validation layers load with KRODIN_VK_VALIDATION=1.
-gpu_vk_init :: proc() -> bool {
+gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	if g_vk.ready { return true }
 	if !bool(glfw.VulkanSupported()) {
 		fmt.eprintln("[Vulkan] No Vulkan loader or driver found")
@@ -336,6 +360,10 @@ gpu_vk_init :: proc() -> bool {
 		}
 		vk.CreateDebugUtilsMessengerEXT(g_vk.instance, &messenger_info, nil, &g_vk.messenger)
 	}
+	if window != nil {
+		if !vk_ok(glfw.CreateWindowSurface(g_vk.instance, window, nil, &g_vk.present.surface), "glfwCreateWindowSurface") { return false }
+		g_vk.present.window = window
+	}
 
 	// Prefer a discrete GPU with Vulkan 1.3 and a graphics queue.
 	count: u32
@@ -353,7 +381,14 @@ gpu_vk_init :: proc() -> bool {
 		vk.GetPhysicalDeviceQueueFamilyProperties(device, &family_count, raw_data(families))
 		family := -1
 		for f, i in families {
-			if .GRAPHICS in f.queueFlags && f.timestampValidBits > 0 { family = i; break }
+			if .GRAPHICS not_in f.queueFlags || f.timestampValidBits == 0 { continue }
+			if window != nil {
+				present: b32
+				vk.GetPhysicalDeviceSurfaceSupportKHR(device, u32(i), g_vk.present.surface, &present)
+				if !present { continue }
+			}
+			family = i
+			break
 		}
 		if family < 0 { continue }
 		score := 0
@@ -368,7 +403,7 @@ gpu_vk_init :: proc() -> bool {
 		}
 	}
 	if best_score < 0 {
-		fmt.eprintln("[Vulkan] No GPU with Vulkan 1.3 and a graphics queue")
+		fmt.eprintln("[Vulkan] No GPU with Vulkan 1.3 and a graphics queue (that can present to the window)")
 		return false
 	}
 	vk.GetPhysicalDeviceMemoryProperties(g_vk.physical, &g_vk.memory)
@@ -390,7 +425,11 @@ gpu_vk_init :: proc() -> bool {
 	enable.features.fillModeNonSolid = b32(g_vk.wireframe)
 	priority: f32 = 1
 	queue_info := vk.DeviceQueueCreateInfo{sType = .DEVICE_QUEUE_CREATE_INFO, queueFamilyIndex = g_vk.queue_family, queueCount = 1, pQueuePriorities = &priority}
-	device_info := vk.DeviceCreateInfo{sType = .DEVICE_CREATE_INFO, pNext = &enable, queueCreateInfoCount = 1, pQueueCreateInfos = &queue_info}
+	device_extensions := [1]cstring{vk.KHR_SWAPCHAIN_EXTENSION_NAME}
+	device_info := vk.DeviceCreateInfo{
+		sType = .DEVICE_CREATE_INFO, pNext = &enable, queueCreateInfoCount = 1, pQueueCreateInfos = &queue_info,
+		enabledExtensionCount = window != nil ? 1 : 0, ppEnabledExtensionNames = &device_extensions[0],
+	}
 	if !vk_ok(vk.CreateDevice(g_vk.physical, &device_info, nil, &g_vk.device), "vkCreateDevice") { return false }
 	vk.load_proc_addresses_device(g_vk.device)
 	vk.GetDeviceQueue(g_vk.device, g_vk.queue_family, 0, &g_vk.queue)
@@ -411,6 +450,8 @@ gpu_vk_init :: proc() -> bool {
 	for &frame, i in g_vk.frames {
 		frame.cmd = cmds[i]
 		vk.CreateFence(g_vk.device, &fence_info, nil, &frame.fence)
+		semaphore_info := vk.SemaphoreCreateInfo{sType = .SEMAPHORE_CREATE_INFO}
+		vk.CreateSemaphore(g_vk.device, &semaphore_info, nil, &frame.acquired)
 		dp := vk.DescriptorPoolCreateInfo{sType = .DESCRIPTOR_POOL_CREATE_INFO, maxSets = VK_FRAME_SETS, poolSizeCount = len(frame_pool_sizes), pPoolSizes = &frame_pool_sizes[0]}
 		vk.CreateDescriptorPool(g_vk.device, &dp, nil, &frame.pool)
 		qp := vk.QueryPoolCreateInfo{sType = .QUERY_POOL_CREATE_INFO, queryType = .TIMESTAMP, queryCount = 2}
@@ -447,6 +488,12 @@ gpu_vk_init :: proc() -> bool {
 	placeholder := Gpu_Sampler_Desc{filter = .Nearest, wrap = .Clamp, compare = true}
 	g_vk.placeholder_array = gpu_texture_create({width = 1, height = 1, format = .Depth, layers = 1, sampler = placeholder}, far[:])
 	g_vk.placeholder_2d = gpu_texture_create({width = 1, height = 1, format = .Depth, sampler = placeholder}, far[:])
+	if window != nil {
+		g_vk.present.vsync = true
+		width, height := glfw.GetFramebufferSize(window)
+		g_vk.present.target = gpu_render_target_create(max(width, 1), max(height, 1))
+		vk_swapchain_build()
+	}
 	fmt.printfln("[Vulkan] %s, API %d.%d.%d, driver %x%s", g_vk.device_name,
 		g_vk.props.apiVersion >> 22, (g_vk.props.apiVersion >> 12) & 0x3ff, g_vk.props.apiVersion & 0xfff, g_vk.props.driverVersion,
 		validation ? ", validation on" : "")
@@ -459,14 +506,19 @@ gpu_vk_fini :: proc() {
 	device := g_vk.device
 	gpu_texture_destroy(&g_vk.placeholder_array)
 	gpu_texture_destroy(&g_vk.placeholder_2d)
-	leaked := 0
-	for live, i in g_vk.textures.live { if live { leaked += 1; h := Gpu_Texture(i + 1); gpu_texture_destroy(&h) } }
-	for live, i in g_vk.targets.live { if live { leaked += 1; h := Gpu_Render_Target(i + 1); gpu_render_target_destroy(&h) } }
-	for live, i in g_vk.inputs.live { if live { leaked += 1; h := Gpu_Vertex_Input(i + 1); gpu_vertex_input_destroy(&h) } }
-	for live, i in g_vk.buffers.live { if live { leaked += 1; h := Gpu_Buffer(i + 1); gpu_buffer_destroy(&h) } }
-	for live, i in g_vk.programs.live { if live { leaked += 1; h := Gpu_Program(i + 1); gpu_program_destroy(&h) } }
-	for live, i in g_vk.sampler_objects.live { if live { leaked += 1; h := Gpu_Sampler(i + 1); gpu_sampler_destroy(&h) } }
-	if leaked > 0 { fmt.eprintfln("[Vulkan] %d GPU objects were still alive at shutdown", leaked) }
+	gpu_render_target_destroy(&g_vk.present.target)
+	vk_swapchain_release()
+	leaked: [6]int // textures, targets, inputs, buffers, programs, samplers
+	for live, i in g_vk.textures.live { if live { leaked[0] += 1; h := Gpu_Texture(i + 1); gpu_texture_destroy(&h) } }
+	for live, i in g_vk.targets.live { if live { leaked[1] += 1; h := Gpu_Render_Target(i + 1); gpu_render_target_destroy(&h) } }
+	for live, i in g_vk.inputs.live { if live { leaked[2] += 1; h := Gpu_Vertex_Input(i + 1); gpu_vertex_input_destroy(&h) } }
+	for live, i in g_vk.buffers.live { if live { leaked[3] += 1; h := Gpu_Buffer(i + 1); gpu_buffer_destroy(&h) } }
+	for live, i in g_vk.programs.live { if live { leaked[4] += 1; h := Gpu_Program(i + 1); gpu_program_destroy(&h) } }
+	for live, i in g_vk.sampler_objects.live { if live { leaked[5] += 1; h := Gpu_Sampler(i + 1); gpu_sampler_destroy(&h) } }
+	if total := leaked[0] + leaked[1] + leaked[2] + leaked[3] + leaked[4] + leaked[5]; total > 0 {
+		fmt.eprintfln("[Vulkan] %d GPU objects were still alive at shutdown: %d textures, %d targets, %d vertex inputs, %d buffers, %d programs, %d samplers",
+			total, leaked[0], leaked[1], leaked[2], leaked[3], leaked[4], leaked[5])
+	}
 	for _, pipeline in g_vk.pipelines { vk.DestroyPipeline(device, pipeline, nil) }
 	for _, sampler in g_vk.samplers { vk.DestroySampler(device, sampler, nil) }
 	vk_buffer_free(&g_vk.ring)
@@ -474,6 +526,7 @@ gpu_vk_fini :: proc() {
 	vk_buffer_free(&g_vk.readback)
 	for &frame in g_vk.frames {
 		vk.DestroyFence(device, frame.fence, nil)
+		vk.DestroySemaphore(device, frame.acquired, nil)
 		vk.DestroyDescriptorPool(device, frame.pool, nil)
 		vk.DestroyQueryPool(device, frame.queries, nil)
 	}
@@ -485,6 +538,9 @@ gpu_vk_fini :: proc() {
 	vk.DestroyDescriptorSetLayout(device, g_vk.set0_layout, nil)
 	vk.DestroyDescriptorSetLayout(device, g_vk.set1_layout, nil)
 	vk.DestroyDevice(device, nil)
+	if g_vk.present.surface != 0 { vk.DestroySurfaceKHR(g_vk.instance, g_vk.present.surface, nil) }
+	delete(g_vk.present.images)
+	delete(g_vk.present.rendered)
 	if g_vk.messenger != 0 { vk.DestroyDebugUtilsMessengerEXT(g_vk.instance, g_vk.messenger, nil) }
 	vk.DestroyInstance(g_vk.instance, nil)
 	delete(g_vk.pipelines)
@@ -922,14 +978,20 @@ vk_color_set :: proc() -> vk.DescriptorSet {
 
 gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
 	if !g_vk.ready || width <= 0 || height <= 0 { return 0 }
-	target := Vk_Target{width = u32(width), height = u32(height)}
-	target.color = vk_image_make(target.width, target.height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC})
-	target.depth = vk_image_make(target.width, target.height, 1, 1, false, VK_DEPTH_FORMAT, {.DEPTH_STENCIL_ATTACHMENT, .TRANSFER_SRC})
+	target: Vk_Target
+	vk_target_images_make(&target, u32(width), u32(height))
+	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
+}
+
+@(private = "file")
+vk_target_images_make :: proc(target: ^Vk_Target, width, height: u32) {
+	target.width, target.height = width, height
+	target.color = vk_image_make(width, height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC})
+	target.depth = vk_image_make(width, height, 1, 1, false, VK_DEPTH_FORMAT, {.DEPTH_STENCIL_ATTACHMENT, .TRANSFER_SRC})
 	cmd := vk_upload_begin()
 	vk_transition(cmd, &target.color, 0, 1, .COLOR_ATTACHMENT_OPTIMAL)
 	vk_transition(cmd, &target.depth, 0, 1, .DEPTH_ATTACHMENT_OPTIMAL)
 	vk_upload_end()
-	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
 }
 
 gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
@@ -1001,15 +1063,23 @@ vk_cmd :: proc() -> vk.CommandBuffer {
 	return g_vk.frames[g_vk.slot].cmd
 }
 
+// `wait` (at the transfer stage) and `signal` are the swapchain semaphores of
+// a presenting frame; 0 for every other submit.
 @(private = "file")
-vk_submit :: proc() {
+vk_submit :: proc(wait: vk.Semaphore = 0, signal: vk.Semaphore = 0) {
 	if !g_vk.recording { return }
 	vk_pass_end()
 	vk_flush_pending_clear()
 	frame := &g_vk.frames[g_vk.slot]
 	if frame.timed { vk.CmdWriteTimestamp2(frame.cmd, {.BOTTOM_OF_PIPE}, frame.queries, 1) }
 	vk.EndCommandBuffer(frame.cmd)
-	submit := vk.SubmitInfo{sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &frame.cmd}
+	wait, signal := wait, signal
+	wait_stage := vk.PipelineStageFlags{.TRANSFER}
+	submit := vk.SubmitInfo{
+		sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &frame.cmd,
+		waitSemaphoreCount = wait != 0 ? 1 : 0, pWaitSemaphores = &wait, pWaitDstStageMask = &wait_stage,
+		signalSemaphoreCount = signal != 0 ? 1 : 0, pSignalSemaphores = &signal,
+	}
 	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, frame.fence), "vkQueueSubmit")
 	frame.submitted = true
 	g_vk.recording = false
@@ -1023,6 +1093,7 @@ gpu_frame_wait :: proc() {
 
 gpu_frame_begin :: proc() {
 	if g_vk.recording { vk_submit() }
+	if g_vk.present.window != nil { vk_window_sync() }
 	vk_begin_recording(true)
 }
 
@@ -1406,6 +1477,205 @@ gpu_depth_pass_end :: proc(restore: Gpu_Render_Target, viewport: [4]i32) {
 	if g_vk.recording { vk_depth_pass_finish() }
 	g_vk.target = restore
 	g_vk.viewport = {viewport[2], viewport[3]}
+}
+
+// ---------------------------------------------------------------------------
+// Window: swapchain and presentation.
+
+// The target the game draws a window frame into (its size follows the
+// framebuffer). The handle stays the same across resizes.
+gpu_window_target :: proc() -> Gpu_Render_Target {
+	return g_vk.present.target
+}
+
+// FIFO when on; otherwise MAILBOX, or IMMEDIATE where MAILBOX is missing.
+// Applied by recreating the swapchain before the next frame.
+gpu_set_vsync :: proc(on: bool) {
+	if g_vk.present.vsync == on { return }
+	g_vk.present.vsync = on
+	g_vk.present.dirty = true
+}
+
+@(private = "file")
+vk_swapchain_release :: proc() {
+	sc := &g_vk.present
+	for semaphore in sc.rendered { vk.DestroySemaphore(g_vk.device, semaphore, nil) }
+	clear(&sc.rendered)
+	clear(&sc.images)
+	if sc.swapchain != 0 { vk.DestroySwapchainKHR(g_vk.device, sc.swapchain, nil) }
+	sc.swapchain = 0
+}
+
+@(private = "file")
+vk_present_mode :: proc(vsync: bool) -> vk.PresentModeKHR {
+	if vsync { return .FIFO }
+	count: u32
+	vk.GetPhysicalDeviceSurfacePresentModesKHR(g_vk.physical, g_vk.present.surface, &count, nil)
+	modes := make([]vk.PresentModeKHR, count, context.temp_allocator)
+	vk.GetPhysicalDeviceSurfacePresentModesKHR(g_vk.physical, g_vk.present.surface, &count, raw_data(modes))
+	has :: proc(modes: []vk.PresentModeKHR, mode: vk.PresentModeKHR) -> bool {
+		for m in modes { if m == mode { return true } }
+		return false
+	}
+	if has(modes, .MAILBOX) { return .MAILBOX }
+	if has(modes, .IMMEDIATE) { return .IMMEDIATE }
+	return .FIFO
+}
+
+// The window's UNORM format: the frame is blitted unchanged, like GL's
+// default framebuffer.
+@(private = "file")
+vk_surface_format :: proc() -> vk.SurfaceFormatKHR {
+	count: u32
+	vk.GetPhysicalDeviceSurfaceFormatsKHR(g_vk.physical, g_vk.present.surface, &count, nil)
+	formats := make([]vk.SurfaceFormatKHR, count, context.temp_allocator)
+	vk.GetPhysicalDeviceSurfaceFormatsKHR(g_vk.physical, g_vk.present.surface, &count, raw_data(formats))
+	for wanted in ([2]vk.Format{.B8G8R8A8_UNORM, .R8G8B8A8_UNORM}) {
+		for f in formats { if f.format == wanted && f.colorSpace == .SRGB_NONLINEAR { return f } }
+	}
+	if count > 0 {
+		fmt.eprintfln("[Vulkan] No BGRA8/RGBA8 UNORM window format; using %v (colours may differ from OpenGL)", formats[0].format)
+		return formats[0]
+	}
+	return {format = .B8G8R8A8_UNORM, colorSpace = .SRGB_NONLINEAR}
+}
+
+// (Re)creates the swapchain for the framebuffer's current size. Returns false
+// while the window is minimised (0x0); the next frame tries again.
+@(private = "file")
+vk_swapchain_build :: proc() -> bool {
+	sc := &g_vk.present
+	width, height := glfw.GetFramebufferSize(sc.window)
+	if width <= 0 || height <= 0 { return false }
+	caps: vk.SurfaceCapabilitiesKHR
+	vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.physical, sc.surface, &caps)
+	extent := caps.currentExtent
+	if extent.width == max(u32) {
+		extent = {
+			clamp(u32(width), caps.minImageExtent.width, caps.maxImageExtent.width),
+			clamp(u32(height), caps.minImageExtent.height, caps.maxImageExtent.height),
+		}
+	}
+	if extent.width == 0 || extent.height == 0 { return false }
+	surface_format := vk_surface_format()
+	image_count := caps.minImageCount + 1
+	if caps.maxImageCount > 0 { image_count = min(image_count, caps.maxImageCount) }
+	alpha := vk.CompositeAlphaFlagsKHR{.OPAQUE}
+	for candidate in ([4]vk.CompositeAlphaFlagKHR{.OPAQUE, .INHERIT, .PRE_MULTIPLIED, .POST_MULTIPLIED}) {
+		if candidate in caps.supportedCompositeAlpha { alpha = {candidate}; break }
+	}
+	mode := vk_present_mode(sc.vsync)
+	info := vk.SwapchainCreateInfoKHR{
+		sType = .SWAPCHAIN_CREATE_INFO_KHR, surface = sc.surface,
+		minImageCount = image_count, imageFormat = surface_format.format, imageColorSpace = surface_format.colorSpace,
+		imageExtent = extent, imageArrayLayers = 1, imageUsage = {.TRANSFER_DST}, imageSharingMode = .EXCLUSIVE,
+		preTransform = caps.currentTransform, compositeAlpha = alpha, presentMode = mode, clipped = true,
+		oldSwapchain = sc.swapchain,
+	}
+	swapchain: vk.SwapchainKHR
+	if !vk_ok(vk.CreateSwapchainKHR(g_vk.device, &info, nil, &swapchain), "vkCreateSwapchainKHR") { return false }
+	vk_swapchain_release()
+	sc.swapchain, sc.format, sc.extent = swapchain, surface_format.format, extent
+	count: u32
+	vk.GetSwapchainImagesKHR(g_vk.device, swapchain, &count, nil)
+	resize(&sc.images, int(count))
+	vk.GetSwapchainImagesKHR(g_vk.device, swapchain, &count, raw_data(sc.images))
+	semaphore_info := vk.SemaphoreCreateInfo{sType = .SEMAPHORE_CREATE_INFO}
+	for _ in 0 ..< count {
+		semaphore: vk.Semaphore
+		vk.CreateSemaphore(g_vk.device, &semaphore_info, nil, &semaphore)
+		append(&sc.rendered, semaphore)
+	}
+	sc.dirty = false
+	fmt.printfln("[Vulkan] Swapchain %dx%d, %d images, %v, %v", extent.width, extent.height, count, surface_format.format, mode)
+	return true
+}
+
+// Before a window frame: follows the framebuffer size (window target and
+// swapchain) and applies vsync changes. Waits for the GPU only on a change.
+@(private = "file")
+vk_window_sync :: proc() {
+	sc := &g_vk.present
+	width, height := glfw.GetFramebufferSize(sc.window)
+	if width <= 0 || height <= 0 { return } // minimised: nothing is presented
+	t := vk_table_get(&g_vk.targets, u32(sc.target))
+	resized := t != nil && (t.width != u32(width) || t.height != u32(height))
+	if !resized && !sc.dirty && sc.swapchain != 0 && sc.extent.width == u32(width) && sc.extent.height == u32(height) { return }
+	vk_idle_for_destroy()
+	if resized {
+		vk_image_free(&t.color)
+		vk_image_free(&t.depth)
+		vk_target_images_make(t, u32(width), u32(height))
+		if g_vk.target == sc.target { g_vk.viewport = {width, height} }
+	}
+	vk_swapchain_build()
+}
+
+// Blits the window target, flipped to top-down, to the next swapchain image
+// and presents it, ending the frame's command buffer. A frame that cannot be
+// presented (minimised, swapchain out of date) is still submitted by
+// gpu_frame_end.
+gpu_present :: proc(window: glfw.WindowHandle = nil) {
+	sc := &g_vk.present
+	if sc.window == nil || sc.swapchain == 0 || sc.dirty { return }
+	t := vk_table_get(&g_vk.targets, u32(sc.target))
+	if t == nil { return }
+	cmd := vk_cmd()
+	frame := &g_vk.frames[g_vk.slot]
+	index: u32
+	acquired := vk.AcquireNextImageKHR(g_vk.device, sc.swapchain, max(u64), frame.acquired, 0, &index)
+	#partial switch acquired {
+	case .SUCCESS:
+	case .SUBOPTIMAL_KHR: sc.dirty = true // still usable for this frame
+	case .ERROR_OUT_OF_DATE_KHR: sc.dirty = true; return
+	case: vk_ok(acquired, "vkAcquireNextImageKHR"); return
+	}
+	vk_pass_end()
+	vk_flush_pending_clear()
+	vk_transition(cmd, &t.color, 0, 1, .TRANSFER_SRC_OPTIMAL)
+	image := sc.images[index]
+	range := vk.ImageSubresourceRange{aspectMask = {.COLOR}, levelCount = 1, layerCount = 1}
+	// Chained to the acquire semaphore's wait (transfer stage).
+	to_transfer := vk.ImageMemoryBarrier2{
+		sType = .IMAGE_MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, dstStageMask = {.ALL_TRANSFER}, dstAccessMask = {.TRANSFER_WRITE},
+		oldLayout = .UNDEFINED, newLayout = .TRANSFER_DST_OPTIMAL,
+		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		image = image, subresourceRange = range,
+	}
+	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, imageMemoryBarrierCount = 1, pImageMemoryBarriers = &to_transfer}
+	vk.CmdPipelineBarrier2(cmd, &dep)
+	w, h := i32(t.width), i32(t.height)
+	ew, eh := i32(sc.extent.width), i32(sc.extent.height)
+	blit := vk.ImageBlit{
+		srcSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		srcOffsets = {{0, 0, 0}, {w, h, 1}},
+		dstSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		dstOffsets = {{0, eh, 0}, {ew, 0, 1}}, // row 0 is GL's bottom row
+	}
+	filter: vk.Filter = w == ew && h == eh ? .NEAREST : .LINEAR
+	vk.CmdBlitImage(cmd, t.color.image, .TRANSFER_SRC_OPTIMAL, image, .TRANSFER_DST_OPTIMAL, 1, &blit, filter)
+	to_present := vk.ImageMemoryBarrier2{
+		sType = .IMAGE_MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
+		oldLayout = .TRANSFER_DST_OPTIMAL, newLayout = .PRESENT_SRC_KHR,
+		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		image = image, subresourceRange = range,
+	}
+	dep.pImageMemoryBarriers = &to_present
+	vk.CmdPipelineBarrier2(cmd, &dep)
+	rendered := sc.rendered[index]
+	vk_submit(frame.acquired, rendered)
+	present := vk.PresentInfoKHR{
+		sType = .PRESENT_INFO_KHR, waitSemaphoreCount = 1, pWaitSemaphores = &rendered,
+		swapchainCount = 1, pSwapchains = &sc.swapchain, pImageIndices = &index,
+	}
+	presented := vk.QueuePresentKHR(g_vk.queue, &present)
+	#partial switch presented {
+	case .SUCCESS:
+	case .SUBOPTIMAL_KHR, .ERROR_OUT_OF_DATE_KHR: sc.dirty = true
+	case: vk_ok(presented, "vkQueuePresentKHR")
+	}
 }
 
 // ---------------------------------------------------------------------------
