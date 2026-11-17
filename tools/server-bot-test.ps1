@@ -122,7 +122,7 @@ try {
         Write-Host ("--- {0:hh\:mm\:ss} ---" -f ((Get-Date) - $start))
         if (-not $NoServer) {
             if ($server.HasExited) { Write-Host "Server exited (code $($server.ExitCode)). See $serverLog"; break }
-            $stats = Last-Line $serverLog "tick"
+            $stats = Last-Line $serverLog "\[Tick\]"
             if ($stats) { Write-Host "  server: $stats" }
         }
         $alive = 0

@@ -118,7 +118,7 @@ while true; do
     printf -- '--- %02d:%02d:%02d ---\n' $((elapsed / 3600)) $((elapsed % 3600 / 60)) $((elapsed % 60))
     if [ "$NO_SERVER" = 0 ]; then
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then echo "Server exited. See $LOG_DIR/server.log"; break; fi
-        line=$(grep -a "tick" "$LOG_DIR/server.log" | tail -n 1 || true)
+        line=$(grep -aF "[Tick]" "$LOG_DIR/server.log" | tail -n 1 || true)
         [ -n "$line" ] && echo "  server: $line"
     fi
     alive=0
