@@ -99,6 +99,7 @@ Client :: struct {
 		locked:  bool,
 		last_pos: shared.Vec2,
 	},
+	cursor_focus: Cursor_Focus, // see cursor_focus.odin
 
 	windowed_rect: struct {
 		x, y, width, height: i32,
@@ -237,6 +238,7 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 
 client_window_focus_changed :: proc "c" (window: glfw.WindowHandle, focused: i32) {
 	diag_event(focused != 0 ? .FOCUS_GAINED : .FOCUS_LOST)
+	if g_client != nil && g_client.window == window { cursor_focus_event(&g_client.cursor_focus, focused != 0) }
 }
 
 client_window_iconify_changed :: proc "c" (window: glfw.WindowHandle, iconified: i32) {
@@ -1009,7 +1011,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		if state.active {
 			client.in_game = true
 			client.has_life = true
-			if client.spawn_pending && client.menu.page == .HOME {
+			if client.spawn_pending && client.menu.page == .HOME && cursor_focus_may_capture(&client.cursor_focus) {
 				glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 				client.mouse_state.locked = true
 				x, y := glfw.GetCursorPos(client.window)
@@ -1344,16 +1346,13 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client_perf_overlay_toggle_update(client) { client.settings_dirty = true }
 	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
+	// Alt-tab leaves play like Escape, as losing pointer lock does in Krunker.
+	client_cursor_focus_update(client)
 
 	escape_key := client_action_down(client, .MENU) || glfw.GetKey(client.window, glfw.KEY_ESCAPE) == glfw.PRESS
 	if client.mouse_state.locked && escape_key && !client.last_escape_key {
 		audio_play_effect(client.audio, "menu_open", .UI, 0.35)
-		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-		client.mouse_state.locked = false
-		client.menu.page = .HOME
-		client.menu.pressed = 0
-		client.menu.previous.escape = true
-		client.menu.previous.down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+		client_pause_to_menu(client)
 	}
 
 	// The end screen replaces the menu until dismissed or the next match.
