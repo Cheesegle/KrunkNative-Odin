@@ -113,6 +113,10 @@ Client :: struct {
 	spawn_retry_timer: f32,
 	selected_class:    i32,
 	selected_secondary: i32,
+	// Krodin's own "Remember last secondary" (Settings > Gameplay > Loadout) and
+	// the secondary last picked per class index (0 = none yet).
+	remember_secondary: bool,
+	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
 	local_practice: bool,
 	has_life: bool,
 	lobby_team: i32,
@@ -1627,6 +1631,7 @@ main :: proc() {
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
 	client.ranked_prefs = preferences.ranked
+	client.remember_secondary, client.secondary_picks = preferences.remember_secondary, preferences.secondary_picks
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
