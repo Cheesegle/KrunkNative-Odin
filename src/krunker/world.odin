@@ -88,6 +88,7 @@ Krunker_End_Results :: struct {
 	// END's first value: 2 when the server skips its end flow.
 	game_state: i32,
 	mode_index, local_sid, local_team: i32,
+	ranked: bool, // the lobby was ranked; INIT for the next lobby may change is_ranked
 	result, winner_team, end_index: i32,
 	team_scores: [3]u32,
 	entries: [dynamic]Krunker_End_Entry,
