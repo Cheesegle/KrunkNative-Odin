@@ -132,6 +132,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 			player.position, player.direction = source.position, source.direction
 			player.crouch_val, player.aim_val = source.crouch_val, source.aim_val
 			player.on_ground = source.on_ground
+			player.step_val = source.step_val // forcePos takes stepVal directly too.
 			shared.player_update_height(player)
 		}
 		player.interpolate = false
