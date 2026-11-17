@@ -161,37 +161,13 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 	player_update_spread(player, 0, 0, 0)
 
 	if player.game != nil && player.game.map_inst != nil && len(player.game.map_inst.spawns) > 0 {
-		eligible: [dynamic]^Spawn
-		defer delete(eligible)
-		for spawn in player.game.map_inst.spawns {
-			if player.team != 0 && spawn.team != 0 && spawn.team != player.team {
-				continue
-			}
-			occupied := false
-			if player.game.players != nil {
-				for other in player.game.players {
-					if other != nil && other != player && other.active {
-						dx := other.position.x - spawn.position.x
-						dz := other.position.z - spawn.position.z
-						if dx * dx + dz * dz < 100.0 {
-							occupied = true
-							break
-						}
-					}
-				}
-			}
-			if !occupied {
-				append(&eligible, spawn)
-			}
-		}
-		spawn := player.game.map_inst.spawns[rand.int_max(len(player.game.map_inst.spawns))]
-		if len(eligible) > 0 {
-			spawn = eligible[rand.int_max(len(eligible))]
-		}
-
-		player.position = spawn.position
+		// Krunker getSpawnPoint (spawn.odin). Mirrors of a remote server (live
+		// Krunker, Krodin's net client) take the spawn position from the
+		// server right after this, so they skip the line-of-sight work.
+		pick := game_get_spawn_point(player.game, player.team, player, force_first = !game_is_authority(player.game))
+		player.position = pick.position
 		player.direction.x = 0.0
-		player.direction.y = -math.PI / 2.0 * (1.0 + f32(spawn.direction))
+		player.direction.y = spawn_yaw(pick.direction)
 	}
 }
 
@@ -282,6 +258,49 @@ player_reset_step :: proc(player: ^Player, recon: bool) {
 
 	player.velocity.x *= slide_mlt
 	player.velocity.z *= slide_mlt
+}
+
+// Krunker's collidesP: an interpolated player is tested at its newest pose
+// (x2, y2, z2), anyone else where they stand.
+player_collides_player :: proc(player, other: ^Player) -> bool {
+	o := other.interpolate ? other.interp_pos_end : other.position
+	return player.position.x - player.scale < o.x + other.scale && player.position.x + player.scale > o.x - other.scale &&
+		player.position.z - player.scale < o.z + other.scale && player.position.z + player.scale > o.z - other.scale &&
+		player.position.y <= o.y + other.height && player.position.y + player.height >= o.y
+}
+
+// Krunker's playerCollision, run before the map collisions when the lobby
+// has Player Collision (pColl) on: a player who was above another lands on
+// their head (y = other.y.round(1) + other.height), otherwise both stop on
+// the axis they came in from. Without it the prediction let you sink into a
+// player the server holds you on top of, with your camera inside their head.
+player_collide_players :: proc(player: ^Player, recon: bool) {
+	if player.game == nil || !player.game.config.player_collision || !player.active { return }
+	round1 :: proc(v: f32) -> f32 { return math.round(v * 10) / 10 }
+	for other in player.game.players {
+		if other == nil || other == player || !other.active || !player_collides_player(player, other) { continue }
+		o := Vec3{round1(other.position.x), round1(other.position.y), round1(other.position.z)}
+		width := other.scale + player.scale
+		if player.last_position.y >= o.y + other.height {
+			player.position.y = o.y + other.height
+			player_reset_step(player, recon)
+			player.velocity.y = 0
+			player.on_ground = true
+			player.on_terrain = false
+		} else if player.last_position.x - player.scale >= o.x + other.scale - 1e-5 {
+			player.position.x = o.x + width
+			player.velocity.x, other.velocity.x = 0, 0
+		} else if player.last_position.x + player.scale <= o.x - other.scale + 1e-5 {
+			player.position.x = o.x - width
+			player.velocity.x, other.velocity.x = 0, 0
+		} else if player.last_position.z - player.scale >= o.z + other.scale - 1e-5 {
+			player.position.z = o.z + width
+			player.velocity.z, other.velocity.z = 0, 0
+		} else if player.last_position.z + player.scale <= o.z - other.scale + 1e-5 {
+			player.position.z = o.z - width
+			player.velocity.z, other.velocity.z = 0, 0
+		}
+	}
 }
 
 player_collides :: proc(player: ^Player, object: ^Object, pad: f32) -> bool {
@@ -760,6 +779,22 @@ player_update_recoil :: proc(player: ^Player, delta: f32) {
 	}
 }
 
+// Krunker's resetStep plays the landing step when a player who was not on the
+// ground comes down onto something: !(wasOnGround || oldY <= y) with a
+// non-zero falling velocity. Krodin also skips falls slower than 0.02 units/ms
+// (about 130 ms of free fall, a drop of ~1.3 units) so a single tick off the
+// ground on stairs or a ramp edge does not sound like a landing.
+PLAYER_LAND_MIN_FALL_SPEED :: 0.02
+
+player_landed :: proc(was_grounded, on_ground: bool, previous_y_velocity: f32) -> bool {
+	return !was_grounded && on_ground && previous_y_velocity < -PLAYER_LAND_MIN_FALL_SPEED
+}
+
+// Remote players arrive as poses without velocity: any return to the ground.
+player_remote_landed :: proc(was_grounded, on_ground: bool) -> bool {
+	return !was_grounded && on_ground
+}
+
 // Fresh client prediction may play movement effects. Reconciliation replays
 // leave predict_effects false so snapshots cannot restart the same animation.
 player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool, predict_effects: bool = false, predict_combat: bool = false) {
@@ -774,7 +809,7 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			if previous_weapon != player.loadout_index { player_emit_presentation(player, .SWAP) }
 			if previous_reload <= 0 && player.reload_timer > 0 { player_emit_presentation(player, .RELOAD) }
 			if was_grounded && !player.on_ground && player.velocity.y > 0 || !was_wall_jump && player.did_wall_jump { player_emit_presentation(player, .JUMP) }
-			if !was_grounded && player.on_ground && previous_y_velocity < -0.02 { player_emit_presentation(player, .LAND) }
+			if player_landed(was_grounded, player.on_ground, previous_y_velocity) { player_emit_presentation(player, .LAND) }
 			if previous_slide <= 0 && player.slide_timer > 0 { player_emit_presentation(player, .SLIDE) }
 		}
 	}
@@ -1053,6 +1088,7 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		player.on_wall = 0
 		player.on_ramp = false
 
+		player_collide_players(player, recon && !predict_effects)
 		if !player.noclip {
 			// Collision's recon flag suppresses landing effects only; physics is
 			// identical for fresh prediction and reconciliation replay.
@@ -1356,7 +1392,14 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 				continue
 			}
 
+			// Krunker's browser runs this same ray against players through
+			// fetchState, which finds no stateHistory on a client (only the
+			// server's storeState fills it), so its tracer passes through
+			// everyone. A presentation-only shot in a live lobby must not stop
+			// at (or report a hit on) Krodin's own player boxes either.
+			skip_players := presentation_only && player.game.server_hits_players
 			for target in player.game.players {
+				if skip_players { break }
 				if target == player || !target.active || target.team != 0 && target.team == player.team && !player.game.mode.config.dmg_team {
 					continue
 				}

@@ -40,12 +40,23 @@ Debug_Hitbox_Model :: enum u8 {
 	KRUNKER, // Live Krunker lobby: Krunker's server decides hits.
 }
 
+// Which of Krunker's two box sizes is drawn solid. Krunker's server grows
+// every box by 1 unit per side (OBB halfSize + 1) while the target's velocity
+// is non-zero; the other size is drawn dim.
+Debug_Hurtbox_Padding :: enum u8 {
+	AUTO,     // Follow the target's movement, as the server does.
+	PADDED,   // Always the +1 boxes.
+	UNPADDED, // Always the geometry boxes.
+}
+
 // Toggles default off and are not saved: every launch starts clean.
 Debug_Render :: struct {
 	player_hitboxes: bool,
 	map_collision:   bool,
 	shot_rays:       bool,
 	xray:            bool, // Draw through walls instead of depth-testing.
+	hurtbox_padding: Debug_Hurtbox_Padding,
+	model_bounds:    bool, // The rendered model's part boxes, to compare.
 	shots:      [DEBUG_SHOT_MAX]Debug_Shot,
 	shot_count: int,
 	shot_next:  int,
@@ -60,6 +71,15 @@ DEBUG_COLOR_BODY         :: shared.Vec4{0.2, 1.0, 0.35, 1}
 DEBUG_COLOR_HEAD         :: shared.Vec4{1.0, 0.9, 0.1, 1}
 DEBUG_COLOR_ARM          :: shared.Vec4{0.1, 0.9, 1.0, 1}
 DEBUG_COLOR_LEG          :: shared.Vec4{1.0, 0.25, 0.25, 1}
+// Krunker's own hitbox materials: head #ffff00, torso #00ff00, legs #ff0000.
+// Krunker draws arms with the torso colour; cyan keeps them distinct here.
+DEBUG_KRUNKER_COLORS :: [shared.Krunker_Hurtbox_Part]shared.Vec4{
+	.HEAD  = {1, 1, 0, 1},
+	.TORSO = {0, 1, 0, 1},
+	.ARM   = {0, 1, 1, 1},
+	.LEG   = {1, 0, 0, 1},
+}
+DEBUG_COLOR_MODEL        :: shared.Vec4{1.0, 0.2, 1.0, 1}
 DEBUG_COLOR_MAP_SOLID    :: shared.Vec4{1.0, 0.55, 0.1, 1}
 DEBUG_COLOR_MAP_PASS     :: shared.Vec4{0.35, 0.55, 1.0, 1}
 DEBUG_COLOR_SHOT_MISS    :: shared.Vec4{1, 1, 1, 1}
@@ -151,10 +171,90 @@ debug_lines_player :: proc(lines: ^[dynamic]Debug_Line_Vertex, player: ^shared.P
 		debug_lines_box(lines, body, DEBUG_COLOR_BODY)
 		debug_lines_box(lines, head, DEBUG_COLOR_HEAD)
 	case .KRUNKER:
+		debug_lines_krunker_pose(lines, shared.krunker_hurtbox_pose(player, moving), moving)
+	}
+}
+
+debug_dim :: proc(color: shared.Vec4) -> shared.Vec4 {
+	return {color.r * 0.4, color.g * 0.4, color.b * 0.4, 1}
+}
+
+// Krunker's boxes for one pose: the size the server uses (`padded`) solid,
+// with a marker at each active box's centre, its inactive leg set dim, and
+// the other size dim.
+debug_lines_krunker_pose :: proc(lines: ^[dynamic]Debug_Line_Vertex, pose: shared.Krunker_Hurtbox_Pose, padded: bool) {
+	pose := pose
+	colors := DEBUG_KRUNKER_COLORS
+	for variant in ([2]bool{!padded, padded}) {
+		pose.moving, pose.inactive_legs = variant, variant == padded
 		boxes: [shared.KRUNKER_HURTBOX_MAX]shared.Krunker_Hurtbox
-		count := shared.krunker_player_hurtboxes(shared.krunker_hurtbox_pose(player, moving), &boxes)
-		part_colors := [shared.Krunker_Hurtbox_Part]shared.Vec4{.HEAD = DEBUG_COLOR_HEAD, .TORSO = DEBUG_COLOR_BODY, .ARM = DEBUG_COLOR_ARM, .LEG = DEBUG_COLOR_LEG}
-		for box in boxes[:count] { debug_lines_cube(lines, box.transform, part_colors[box.part]) }
+		count := shared.krunker_player_hurtboxes(pose, &boxes)
+		for box in boxes[:count] {
+			solid := variant == padded && box.active
+			debug_lines_cube(lines, box.transform, solid ? colors[box.part] : debug_dim(colors[box.part]))
+			if solid { debug_lines_cross(lines, shared.krunker_hurtbox_center(box), 0.3, colors[box.part]) }
+		}
+	}
+}
+
+// The pose Krunker's server tests for `player`, as far as this client knows:
+//   - position, angles, stepVal: the displayed (interpolated) pose, which is
+//     what the shot's servTim/progress rewinds the server to;
+//   - cV: fetchState returns the NEWER history entry's cV (and weapon) without
+//     lerping them, i.e. the newest k snapshot's crouch value;
+//   - headMlt: roster/bh; hurtboxScale: the lobby setting;
+//   - padding: the server tests the target's CURRENT velocity != 0. Remote
+//     velocity is not sent, so a change between the two newest k snapshots
+//     stands in for it. (Per-frame displayed motion drew unpadded boxes on a
+//     strafing target in testing.) Your own player uses its velocity.
+debug_krunker_hurtbox_pose :: proc(client: ^Client, player: ^shared.Player) -> (pose: shared.Krunker_Hurtbox_Pose, server_moving: bool) {
+	pose = shared.krunker_hurtbox_pose(player, false)
+	if scale := client.game.config.hurtbox_scale; scale > 0 { pose.hurtbox_scale = scale }
+	if player == client.me { return pose, player.velocity != {} }
+	for &source in client.krunker_world.players {
+		if source.sid != player.uid { continue }
+		if source.head_mlt > 0 { pose.head_mlt = source.head_mlt }
+		if source.pose_count > 0 {
+			newest := source.poses[source.pose_count - 1]
+			pose.crouch = math.round(clamp(newest.crouch, 0, 1))
+			if source.pose_count > 1 {
+				previous := source.poses[source.pose_count - 2]
+				server_moving = linalg.length2(newest.position - previous.position) > 1e-6
+			}
+		}
+		break
+	}
+	return
+}
+
+// The rendered model's parts: each mesh's geometry bounds under its world
+// matrix, so model-vs-hitbox misalignment shows directly.
+debug_lines_model_bounds :: proc(lines: ^[dynamic]Debug_Line_Vertex, player: ^shared.Player) {
+	if player.mesh == nil { return }
+	pm := cast(^Player_Mesh)player.mesh
+	add :: proc(lines: ^[dynamic]Debug_Line_Vertex, mesh: ^Mesh) {
+		if mesh == nil || !mesh.visible || mesh.geometry == nil || !mesh.geometry.has_bounds { return }
+		g := mesh.geometry
+		local := linalg.matrix4_translate_f32((g.bounds_min + g.bounds_max) * 0.5) * linalg.matrix4_scale_f32(g.bounds_max - g.bounds_min)
+		debug_lines_cube(lines, mesh.transform_matrix * local, DEBUG_COLOR_MODEL)
+	}
+	cube :: proc(lines: ^[dynamic]Debug_Line_Vertex, c: ^Color_Cube) {
+		if c == nil { return }
+		for mesh in c.meshes { add(lines, mesh) }
+	}
+	cube(lines, pm.head)
+	cube(lines, pm.body)
+	for leg in pm.legs { cube(lines, leg) }
+	for leg in pm.crouched_legs {
+		if leg == nil { continue }
+		add(lines, leg.upper); add(lines, leg.joint); cube(lines, leg.lower)
+	}
+	for arms in pm.arms {
+		if arms == nil { continue }
+		for arm in ([2]^Player_Arm_Mesh{arms.left, arms.right}) {
+			if arm == nil { continue }
+			add(lines, arm.upper); add(lines, arm.joint); cube(lines, arm.lower)
+		}
 	}
 }
 
@@ -197,9 +297,14 @@ debug_render_build :: proc(client: ^Client, now: f64) {
 		kind := debug_hitbox_kind(client)
 		for player in client.game.players {
 			if !debug_hitbox_player_shown(client, player) { continue }
-			moved := player.position - player.last_position
-			moving := linalg.length2(moved) > 1e-8 || player == client.me && player.velocity != {}
-			debug_lines_player(&dr.lines, player, model, kind, moving)
+			if model == .KRUNKER {
+				pose, server_moving := debug_krunker_hurtbox_pose(client, player)
+				padded := dr.hurtbox_padding == .AUTO ? server_moving : dr.hurtbox_padding == .PADDED
+				debug_lines_krunker_pose(&dr.lines, pose, padded)
+			} else {
+				debug_lines_player(&dr.lines, player, model, kind, false)
+			}
+			if dr.model_bounds { debug_lines_model_bounds(&dr.lines, player) }
 		}
 	}
 	if dr.shot_rays {

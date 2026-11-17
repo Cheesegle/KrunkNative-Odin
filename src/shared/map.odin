@@ -249,7 +249,15 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 			spawn.direction = i32(get_json_f32(sp_arr[4]))
 		}
 		if len(sp_arr) >= 6 {
-			spawn.comp = i32(get_json_f32(sp_arr[5]))
+			spawn.comp = json_truthy(sp_arr[5]) ? 1 : 0
+		}
+		// Krunker: teamOnly:!!c.spawns[P][6], spread:wt(parseFloat(c.spawns[P][7])||0,0,50)
+		if len(sp_arr) >= 7 {
+			spawn.team_only = json_truthy(sp_arr[6])
+		}
+		if len(sp_arr) >= 8 {
+			spread := get_json_f32(sp_arr[7])
+			spawn.spread = spread != spread ? 0 : clamp(spread, 0, 50)
 		}
 
 		append(&map_inst.spawns, spawn)
@@ -674,6 +682,23 @@ get_json_f32 :: proc(val: json.Value) -> f32 {
 	}
 
 	return 0.0
+}
+
+// JavaScript `!!value` for a JSON value.
+json_truthy :: proc(val: json.Value) -> bool {
+	#partial switch v in val {
+	case json.Boolean:
+		return bool(v)
+	case json.Float:
+		return v != 0 && v == v
+	case json.Integer:
+		return v != 0
+	case json.String:
+		return len(v) > 0
+	case json.Array, json.Object:
+		return true
+	}
+	return false
 }
 
 json_is_number :: proc(val: json.Value) -> bool {

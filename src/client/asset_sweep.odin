@@ -160,6 +160,10 @@ asset_sweep_players :: proc(client: ^Client) {
 	if texture, use_source := bullet_hole_texture(); use_source { texture_release(texture) }
 	krunker_client_add_explosion(client, {}, 10)
 	krunker_client_clear_explosions(client)
+	// Kill feed icons only load when a headshot, wallbang or fists kill is
+	// shown, which never happens during a sweep. Load them through the feed's
+	// own loader so the packager includes them.
+	kill_feed_sweep_icons()
 
 	// Each class with its own loadout, as the local viewmodel and as a remote
 	// player, with the HUD drawn for the local one.

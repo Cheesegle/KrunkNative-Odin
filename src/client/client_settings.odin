@@ -30,7 +30,17 @@ Client_Settings :: struct {
 	damage: menuui.Damage_Settings,
 	// Ranked queue choices, saved when changed in the Ranked menu (not a Settings tab).
 	ranked: menuui.Ranked_Preferences,
+	// Krodin's own "Remember last secondary" (default off; Krunker has no such
+	// setting and always reuses one global secondaryInd).
+	remember_secondary: bool,
+	// The secondary weapon id last picked for each class index, 0 = none yet.
+	// Saved with the other preferences, not a Settings row; Reset keeps it.
+	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
 }
+
+// Krunker has 16 classes; spare slots keep older files loadable if more are
+// added (a longer JSON array than this would make the file invalid).
+SECONDARY_PICK_SLOTS :: 32
 
 client_settings_defaults :: proc() -> Client_Settings {
 	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), hud = {chat = menuui.DEFAULT_CHAT_SETTINGS}, visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
@@ -50,7 +60,8 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		spatial_audio = i32(audio.spatial), distance_falloff = i32(audio.falloff),
 		levelling = audio.levelling, levelling_strength = audio.levelling_strength,
 		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, game_fps_limit = d.game_fps_limit, bindings = d.bindings, hud = d.hud,
-		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
+		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage,
+		remember_secondary = d.remember_secondary}
 }
 
 client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
@@ -76,6 +87,8 @@ client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
 	result.hud.nametag_colors = menuui.nametag_colors_validate(result.hud.nametag_colors)
 	result.hud.chat = menuui.chat_settings_validate(result.hud.chat)
 	result.ranked = menuui.ranked_preferences_validate(result.ranked)
+	// Weapon ids are checked against the loaded weapons when a pick is used.
+	for &pick in result.secondary_picks { if pick < 0 { pick = 0 } }
 	defaults := menuui.default_bindings()
 	for action in menuui.Binding_Action {
 		for code, slot in result.bindings[action] {
@@ -106,7 +119,8 @@ client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
 		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, game_fps_limit = client.game_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
-		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings, ranked = client.ranked_prefs}
+		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings, ranked = client.ranked_prefs,
+		remember_secondary = client.remember_secondary, secondary_picks = client.secondary_picks}
 }
 
 client_settings_save :: proc(settings: Client_Settings, path: string = CLIENT_SETTINGS_PATH) -> bool {

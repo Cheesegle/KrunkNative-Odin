@@ -54,6 +54,8 @@ Client :: struct {
 	kill_feed: Kill_Feed,
 	chat: Chat,
 	kill_cam: Kill_Cam,
+	round_countdown: Round_Countdown,
+	death_screen: Death_Screen,
 	visual_settings: menuui.Visual_Settings,
 	quality_settings: menuui.Quality_Settings,
 	viewmodel_settings: menuui.Viewmodel_Settings,
@@ -98,6 +100,7 @@ Client :: struct {
 		locked:  bool,
 		last_pos: shared.Vec2,
 	},
+	cursor_focus: Cursor_Focus, // see cursor_focus.odin
 
 	windowed_rect: struct {
 		x, y, width, height: i32,
@@ -114,6 +117,10 @@ Client :: struct {
 	spawn_retry_timer: f32,
 	selected_class:    i32,
 	selected_secondary: i32,
+	// Krodin's own "Remember last secondary" (Settings > Gameplay > Loadout) and
+	// the secondary last picked per class index (0 = none yet).
+	remember_secondary: bool,
+	secondary_picks: [SECONDARY_PICK_SLOTS]i32,
 	local_practice: bool,
 	has_life: bool,
 	lobby_team: i32,
@@ -232,6 +239,7 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 
 client_window_focus_changed :: proc "c" (window: glfw.WindowHandle, focused: i32) {
 	diag_event(focused != 0 ? .FOCUS_GAINED : .FOCUS_LOST)
+	if g_client != nil && g_client.window == window { cursor_focus_event(&g_client.cursor_focus, focused != 0) }
 }
 
 client_window_iconify_changed :: proc "c" (window: glfw.WindowHandle, iconified: i32) {
@@ -902,7 +910,11 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		player.interp_dir_start = player.direction
 		player.interp_dir_end = {state.x_dir, state.y_dir}
 		player.velocity = state.velocity
+		was_grounded := player.on_ground
 		client_apply_movement_state(player, state)
+		// Snapshots carry no landing; a remote player who comes down plays one
+		// like the live path's interpolated landing (krunker_presentation.odin).
+		if shared.player_remote_landed(was_grounded, player.on_ground) { shared.player_emit_presentation(player, .LAND) }
 	} else {
 		// Fresh spawn or re-appearance: snap, then interpolate from here.
 		player.position = state.position
@@ -1000,7 +1012,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		if state.active {
 			client.in_game = true
 			client.has_life = true
-			if client.spawn_pending && client.menu.page == .HOME {
+			if client.spawn_pending && client.menu.page == .HOME && cursor_focus_may_capture(&client.cursor_focus) {
 				glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 				client.mouse_state.locked = true
 				x, y := glfw.GetCursorPos(client.window)
@@ -1156,6 +1168,12 @@ client_clear_impacts :: proc(client: ^Client) {
 // what the player's own view can't, so it's refused (and switched off) there.
 client_freecam_allowed :: proc(client: ^Client) -> bool {
 	return !client.krunker.connected && !client.net.connected
+}
+
+// The N noclip toggle is a developer tool: only dev builds (KRODIN_DEV) have
+// it, and never in a live Krunker lobby, where the server owns noclip.
+client_noclip_key_allowed :: proc(client: ^Client) -> bool {
+	return KRODIN_DEV && !client.krunker.connected
 }
 
 client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: f32) {
@@ -1329,6 +1347,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		if client_perf_overlay_toggle_update(client) { client.settings_dirty = true }
 	}
 	client.mouse_state.locked = glfw.GetInputMode(client.window, glfw.CURSOR) == glfw.CURSOR_DISABLED
+	// Alt-tab leaves play like Escape, as losing pointer lock does in Krunker.
+	client_cursor_focus_update(client)
 
 	// Chat runs first: while its input is open no gameplay bind reads as held,
 	// and the Escape that closes it does not also open the menu.
@@ -1338,12 +1358,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	if chat_was_open || client.chat.open { client.last_escape_key = client.last_escape_key || escape_key }
 	if client.mouse_state.locked && escape_key && !client.last_escape_key {
 		audio_play_effect(client.audio, "menu_open", .UI, 0.35)
-		glfw.SetInputMode(client.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-		client.mouse_state.locked = false
-		client.menu.page = .HOME
-		client.menu.pressed = 0
-		client.menu.previous.escape = true
-		client.menu.previous.down = glfw.GetMouseButton(client.window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+		client_pause_to_menu(client)
 	}
 
 	// The end screen replaces the menu until dismissed or the next match.
@@ -1357,7 +1372,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client.last_escape_key = escape_key
 
-	if client.mouse_state.locked && (client.me == nil || !client.me.active) {
+	// While the death screen runs, re-entry waits for Krunker's deathDelay
+	// or the authority's respawn timer (death_screen.odin).
+	if client.mouse_state.locked && (client.me == nil || !client.me.active) && client_death_screen_allows_respawn(client, glfw.GetTime()) {
 		client_enter_game(client)
 	}
 
@@ -1393,7 +1410,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		after_scroll = input
 
 		if client.mouse_state.locked && !client.freecam_enabled {
-			if noclip_key && !client.last_noclip_key && !client.krunker.connected {
+			if noclip_key && !client.last_noclip_key && client_noclip_key_allowed(client) {
 				client.me.noclip = !client.me.noclip
 			}
 
@@ -1418,6 +1435,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		client.net_input_seq += 1
 		if client.krunker.connected {
 			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
+			krunker_ws_ghost_watchdog(client, glfw.GetTime())
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
@@ -1440,6 +1458,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	if !client.net.connected && !client.krunker.connected {
 		shared.game_tick(&client.game, now, delta)
+		client_local_new_game(client)
 	} else {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
@@ -1490,6 +1509,8 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 	client_kill_cam_update(client, delta)
+	client_round_countdown_update(client, glfw.GetTime())
+	client_death_screen_update(client, glfw.GetTime())
 	client_audio_update_listener(client)
 	client_tick_impacts(client, delta)
 	client_tick_kill_feed(client, delta)
@@ -1520,9 +1541,16 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	} else if !client.mouse_state.locked {
 		hud_render(client, delta, debug_pointer)
 	} else {
-		overlay_render(client, delta)
+		if !client_death_screen_hides_hud(client) { overlay_render(client, delta) }
+		else if client.scoreboard_open {
+			board := client_scoreboard(client)
+			scoreboard_render(client.ui, &board, 160*client.ui.scale)
+		}
+		death_screen_render(client, glfw.GetTime())
 		chat_render(client)
 	}
+	// Krunker draws it on the overlay canvas, under the menu's panels too.
+	if !end_screen_visible { round_countdown_render(client, glfw.GetTime()) }
 	fps_render(client)
 	build_status_banner_render(client.ui)
 	gl_check("hud", per_phase = true)
@@ -1635,6 +1663,7 @@ main :: proc() {
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
 	client.ranked_prefs = preferences.ranked
+	client.remember_secondary, client.secondary_picks = preferences.remember_secondary, preferences.secondary_picks
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
