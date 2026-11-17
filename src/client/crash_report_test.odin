@@ -29,8 +29,8 @@ when ODIN_TEST {
 		defer { g_diag, g_client, kproto.network_log_recent = old_diag, old_client, old_recent }
 		defer kproto.network_log_clear_secrets()
 		g_diag = {}
-		g_diag.gl_renderer_len = copy(g_diag.gl_renderer[:], "Intel(R) UHD Graphics")
-		g_diag.gl_vendor_len = copy(g_diag.gl_vendor[:], "Intel")
+		g_diag.gpu_renderer_len = copy(g_diag.gpu_renderer[:], "Intel(R) UHD Graphics")
+		g_diag.gpu_vendor_len = copy(g_diag.gpu_vendor[:], "Intel")
 		g_diag.gl_reset_detection = true
 		g_diag.gl_reset_last_check = time.tick_now()
 		guest_secret := "GuestSecretValue1234567890"
@@ -74,7 +74,7 @@ when ODIN_TEST {
 			"Krodin hang report", "GPU reset: none detected",
 			"== What happened ==", "== System ==", "== Settings ==", "== Recent frames ==", "== Recent events ==",
 			"== Frame phases ==", "== GL messages ==", "== Network log",
-			"Windows: 11", "OpenGL is on: Intel(R) UHD Graphics", "GL context: reset notification on", "Test Monitor, 1920x1080 @ 144 Hz",
+			"Windows: 11", "GPU: Intel(R) UHD Graphics", "GL context: reset notification on", "Test Monitor, 1920x1080 @ 144 Hz",
 			"RAM free:", "Display mode: Fullscreen (exclusive)", "Fullscreen size: 1920x1080", "V-Sync: on", "Game FPS limit: 240",
 			"Menu FPS limit: monitor refresh rate", "Shadows: on", "Shadow quality: Sharp", "Lighting: High", "Night mode: on",
 			"Spatial audio: Surround", "Settings menu open: yes",
@@ -117,6 +117,9 @@ when ODIN_TEST {
 		testing.expect(t, strings.has_prefix(gpu_reset_line(buffer[:], GL_INNOCENT_CONTEXT_RESET), "GPU reset detected: innocent"))
 		testing.expect(t, strings.has_prefix(gpu_reset_line(buffer[:], GL_UNKNOWN_CONTEXT_RESET), "GPU reset detected: unknown"))
 		testing.expect(t, strings.has_prefix(gpu_reset_line(buffer[:], 0x1234), "GPU reset detected: unknown"))
+		// Vulkan reports a lost device through the same flow.
+		testing.expect(t, strings.contains(gpu_reset_line(buffer[:], GPU_RESET_DEVICE_LOST), "VK_ERROR_DEVICE_LOST"))
+		testing.expect_value(t, gpu_reset_status_name(GPU_RESET_DEVICE_LOST), "device lost")
 
 		testing.expect_value(t, gpu_reset_poll(0), u32(0))
 		testing.expect_value(t, gpu_reset_poll(GL_INNOCENT_CONTEXT_RESET), u32(GL_INNOCENT_CONTEXT_RESET))

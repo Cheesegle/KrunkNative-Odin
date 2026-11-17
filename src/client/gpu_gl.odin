@@ -705,6 +705,17 @@ when !KRODIN_VULKAN {
 
 	gpu_backend_name :: proc() -> string { return "OpenGL" }
 
+	gpu_device_info :: proc() -> Gpu_Device_Info {
+		gl_string :: proc(name: u32) -> string {
+			value := cstring(gl.GetString(name))
+			return value == nil ? "" : string(value)
+		}
+		return {api = "OpenGL", vendor = gl_string(gl.VENDOR), renderer = gl_string(gl.RENDERER), version = gl_string(gl.VERSION)}
+	}
+
+	// GL reports resets through glGetGraphicsResetStatus (gpu_reset.odin).
+	gpu_device_lost :: proc() -> bool { return false }
+
 	gpu_device_name :: proc() -> string {
 		renderer := cstring(gl.GetString(gl.RENDERER))
 		return renderer == nil ? "unknown GL renderer" : string(renderer)

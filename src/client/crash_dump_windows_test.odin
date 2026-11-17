@@ -101,7 +101,7 @@ when ODIN_TEST {
 			if window != nil {
 				glfw.MakeContextCurrent(window)
 				gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-				diagnostics_capture_gl_info()
+				diagnostics_capture_gpu_info()
 				g_diag.gl_robust_requested = robust
 				glfw.DestroyWindow(window)
 			}

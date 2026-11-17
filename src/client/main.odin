@@ -448,7 +448,7 @@ Client_Options :: struct {
 	bench_seconds: f32,
 	bench_sizes: string, // Comma-separated WxH or "native".
 	no_batching: bool,
-	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
+	gpu_debug: bool, // GL: debug context + KHR_debug log (logs/gl-debug.log); Vulkan: validation (logs/gpu-debug.log).
 	no_gl_robustness: bool, // Create the context without GPU reset notification.
 	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
 }
@@ -476,8 +476,9 @@ print_client_help :: proc() {
 	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
 	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
 	fmt.println("      --no-batching     Draw every map object individually, without culling")
-	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
-	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
+	fmt.println("      --gpu-debug       Log driver messages: a debug OpenGL context to")
+	fmt.println("                        logs/gl-debug.log, or Vulkan validation to")
+	fmt.println("                        logs/gpu-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
 	fmt.println("      --no-cpu-pinning  Let the OS place threads instead of giving the game")
 	fmt.println("                        thread its own core (never core 0) and keeping")
@@ -543,8 +544,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.offline = true
 		case "--no-batching":
 			options.no_batching = true
-		case "--gl-debug":
-			options.gl_debug = true
+		case "--gpu-debug", "--gl-debug":
+			options.gpu_debug = true
 		case "--no-gl-robustness":
 			options.no_gl_robustness = true
 		case "--no-cpu-pinning":
@@ -1789,7 +1790,7 @@ main :: proc() {
 		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
 	} else {
 		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
+		if options.gpu_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
 		when ODIN_OS == .Darwin {
 			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
@@ -1834,21 +1835,24 @@ main :: proc() {
 	defer client_mouse_fini()
 
 	when KRODIN_VULKAN {
+		g_vk_debug.wanted = options.gpu_debug
 		if !gpu_vk_init(client.window) {
 			fmt.eprintln("Vulkan initialization failed; play with krodin_client.exe (OpenGL)")
 			return
 		}
+		if g_vk_debug.log != nil { fmt.printfln("[Vulkan] Validation on; logging to %s", GPU_DEBUG_LOG_PATH) }
+		diagnostics_capture_gpu_info()
 		// System facts for crash and hang reports, gathered once, off the frame path.
 		diagnostics_capture_system_info()
 	} else {
 		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		diagnostics_capture_gl_info()
+		diagnostics_capture_gpu_info()
 		// System facts for crash and hang reports, gathered once, off the frame path.
 		diagnostics_capture_system_info()
 		if g_diag.gl_robust_requested && !g_diag.gl_reset_detection {
 			fmt.println("[GL] The driver did not grant GPU reset notification; resets cannot be detected")
 		}
-		if options.gl_debug {
+		if options.gpu_debug {
 			if gl_debug_install() {
 				fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
 			} else {
@@ -1976,7 +1980,7 @@ main :: proc() {
 		last_frame_start = frame_start
 		// About once a second (and right after a hang): GPU reset status and
 		// a monitor list refresh after display changes.
-		if frame_start >= next_diagnostics_check || sync.atomic_load(&g_diag.gl_reset_check_requested) {
+		if frame_start >= next_diagnostics_check || sync.atomic_load(&g_diag.gl_reset_check_requested) || gpu_device_lost() {
 			next_diagnostics_check = frame_start + DIAGNOSTICS_CHECK_INTERVAL
 			client_diagnostics_check(client)
 		}

@@ -139,6 +139,19 @@ GPU_SAMPLER_WORLD :: Gpu_Sampler_Desc{filter = .Nearest, mip_filter = true, wrap
 GPU_SAMPLER_UI_LINEAR :: Gpu_Sampler_Desc{filter = .Linear, wrap = .Clamp}
 GPU_SAMPLER_UI_NEAREST :: Gpu_Sampler_Desc{filter = .Nearest, wrap = .Clamp}
 
+// What reports name the GPU by (gpu_device_info). The strings stay valid
+// until the backend shuts down.
+Gpu_Device_Info :: struct {
+	api:      string, // "OpenGL", "Vulkan"
+	vendor:   string,
+	renderer: string,
+	version:  string, // API and driver version
+}
+
+// A GPU reset status (gpu_reset_poll) that is not glGetGraphicsResetStatus's:
+// the Vulkan device was lost (VK_ERROR_DEVICE_LOST).
+GPU_RESET_DEVICE_LOST :: 0x1_0000
+
 gpu_format_bytes_per_pixel :: proc(format: Gpu_Format) -> int {
 	switch format {
 	case .RGBA8: return 4

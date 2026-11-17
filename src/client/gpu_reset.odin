@@ -57,7 +57,7 @@ gpu_reset_message :: proc(buffer: []u8, status: u32) -> string {
 gpu_reset_handle :: proc(status: u32, report_path: string, message_buffer: []u8) -> string {
 	line_buffer: [160]u8
 	line := gpu_reset_line(line_buffer[:], status)
-	fmt.eprintln("[GL]", line)
+	fmt.eprintln("[GPU]", line)
 	info := Crash_Info{title = "GPU reset report", detail = line, live = true}
 	crash_log_write(report_path, info)
 	if crash_hang_was_reported() {
@@ -76,7 +76,9 @@ client_diagnostics_check :: proc(client: ^Client) {
 		if after_hang { crash_log_append(crash_hang_log_path(), "GPU reset check after the hang: not possible (the GL context has no reset notification).\n") }
 		return
 	}
-	reset := gpu_reset_poll(u32(gl.GetGraphicsResetStatus()))
+	status: u32
+	when KRODIN_VULKAN { status = gpu_device_lost() ? GPU_RESET_DEVICE_LOST : 0 } else { status = u32(gl.GetGraphicsResetStatus()) }
+	reset := gpu_reset_poll(status)
 	if after_hang && reset == 0 {
 		crash_log_append(crash_hang_log_path(), g_diag.gl_reset_status == 0 ? "GPU reset check after the hang: none detected.\n" : "GPU reset check after the hang: a reset was reported earlier (see above).\n")
 	}

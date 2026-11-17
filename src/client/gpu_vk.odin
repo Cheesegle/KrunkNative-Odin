@@ -23,6 +23,8 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:os"
+import "core:strconv"
+import "core:strings"
 import "core:sync"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
@@ -225,6 +227,8 @@ Vk_State :: struct {
 	anisotropy:       bool,
 	wireframe:        bool,
 	device_name:      string,
+	vendor_name:      string,
+	version_text:     string, // "Vulkan 1.4.357, NVIDIA 581.57"
 
 	command_pool:     vk.CommandPool,
 	upload_cmd:       vk.CommandBuffer,
@@ -306,9 +310,30 @@ g_vk: Vk_State
 
 g_vk_validation_errors: int
 
+// Set before gpu_vk_init: --gpu-debug turns validation on (as does
+// KRODIN_VK_VALIDATION=1) and logs its messages to GPU_DEBUG_LOG_PATH.
+g_vk_debug: struct {
+	wanted:     bool,
+	validation: bool, // validation layers are loaded
+	log:        ^os.File,
+	lock:       sync.Mutex,
+}
+GPU_DEBUG_LOG_PATH :: "logs/gpu-debug.log"
+
+// VK_ERROR_DEVICE_LOST was returned; the main loop reports it as a GPU reset
+// (gpu_reset.odin) and closes.
+@(private = "file")
+g_vk_device_lost: bool
+
+gpu_device_lost :: proc() -> bool { return sync.atomic_load(&g_vk_device_lost) }
+
 @(private = "file")
 vk_ok :: proc(result: vk.Result, what: string, loc := #caller_location) -> bool {
 	if result == .SUCCESS { return true }
+	if result == .ERROR_DEVICE_LOST {
+		if !sync.atomic_exchange(&g_vk_device_lost, true) { fmt.eprintfln("[Vulkan] Device lost (%s)", what) }
+		return false
+	}
 	fmt.eprintfln("[Vulkan] %s failed: %v (%v)", what, result, loc)
 	return false
 }
@@ -316,11 +341,18 @@ vk_ok :: proc(result: vk.Result, what: string, loc := #caller_location) -> bool 
 @(private = "file")
 vk_debug_callback :: proc "system" (severity: vk.DebugUtilsMessageSeverityFlagsEXT, types: vk.DebugUtilsMessageTypeFlagsEXT, data: ^vk.DebugUtilsMessengerCallbackDataEXT, user: rawptr) -> b32 {
 	context = runtime.default_context()
+	kind := "info"
 	if .ERROR in severity {
 		sync.atomic_add(&g_vk_validation_errors, 1)
-		fmt.eprintfln("[Vulkan validation] %s", data.pMessage)
+		kind = "validation"
 	} else if .WARNING in severity {
-		fmt.eprintfln("[Vulkan warning] %s", data.pMessage)
+		kind = "warning"
+	}
+	fmt.eprintfln("[Vulkan %s] %s", kind, data.pMessage)
+	if g_vk_debug.log != nil {
+		sync.mutex_lock(&g_vk_debug.lock)
+		fmt.fprintfln(g_vk_debug.log, "[%s] %s", kind, data.pMessage)
+		sync.mutex_unlock(&g_vk_debug.lock)
 	}
 	return false
 }
@@ -340,7 +372,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	}
 	vk.load_proc_addresses_global(rawptr(glfw.GetInstanceProcAddress))
 
-	validation := os.get_env("KRODIN_VK_VALIDATION", context.temp_allocator) == "1"
+	validation := g_vk_debug.wanted || os.get_env("KRODIN_VK_VALIDATION", context.temp_allocator) == "1"
 	layers := make([dynamic]cstring, context.temp_allocator)
 	if validation {
 		count: u32
@@ -374,20 +406,34 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		}
 		vk.CreateDebugUtilsMessengerEXT(g_vk.instance, &messenger_info, nil, &g_vk.messenger)
 	}
+	g_vk_debug.validation = validation
+	if validation && g_vk_debug.wanted {
+		diagnostics_make_log_dir()
+		if file, err := os.open(GPU_DEBUG_LOG_PATH, {.Write, .Create, .Trunc}); err == nil {
+			g_vk_debug.log = file
+			fmt.fprintln(file, "Krodin GPU debug log (Vulkan validation)")
+		}
+	}
 	if window != nil {
 		if !vk_ok(glfw.CreateWindowSurface(g_vk.instance, window, nil, &g_vk.present.surface), "glfwCreateWindowSurface") { return false }
 		g_vk.present.window = window
 	}
 
-	// Prefer a discrete GPU with Vulkan 1.3 and a graphics queue.
+	// Prefer a discrete GPU with Vulkan 1.3 and a graphics queue (the
+	// NvOptimus/AmdPowerXpress exports steer only OpenGL). KRODIN_GPU picks one
+	// by index or by part of its name instead.
 	count: u32
 	vk.EnumeratePhysicalDevices(g_vk.instance, &count, nil)
 	devices := make([]vk.PhysicalDevice, count, context.temp_allocator)
 	vk.EnumeratePhysicalDevices(g_vk.instance, &count, raw_data(devices))
+	choice := os.get_env("KRODIN_GPU", context.temp_allocator)
+	choice_index, choice_is_index := strconv.parse_int(choice)
 	best_score := -1
-	for device in devices {
+	for device, index in devices {
 		props: vk.PhysicalDeviceProperties
 		vk.GetPhysicalDeviceProperties(device, &props)
+		name := string(cstring(&props.deviceName[0]))
+		fmt.printfln("[Vulkan] GPU %d: %s (%v, API %d.%d)", index, name, props.deviceType, props.apiVersion >> 22, (props.apiVersion >> 12) & 0x3ff)
 		if props.apiVersion < vk.API_VERSION_1_3 { continue }
 		family_count: u32
 		vk.GetPhysicalDeviceQueueFamilyProperties(device, &family_count, nil)
@@ -411,6 +457,9 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		case .INTEGRATED_GPU: score = 2
 		case .VIRTUAL_GPU:    score = 1
 		}
+		if len(choice) > 0 && (choice_is_index ? choice_index == index : strings.contains(strings.to_lower(name, context.temp_allocator), strings.to_lower(choice, context.temp_allocator))) {
+			score = 100
+		}
 		if score > best_score {
 			best_score = score
 			g_vk.physical, g_vk.queue_family, g_vk.props = device, u32(family), props
@@ -422,6 +471,19 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	}
 	vk.GetPhysicalDeviceMemoryProperties(g_vk.physical, &g_vk.memory)
 	g_vk.device_name = fmt.aprintf("%s", cstring(&g_vk.props.deviceName[0]))
+	if len(choice) > 0 && best_score < 100 { fmt.eprintfln("[Vulkan] KRODIN_GPU=%s matches no usable GPU; using %s", choice, g_vk.device_name) }
+	switch g_vk.props.vendorID {
+	case 0x10DE: g_vk.vendor_name = fmt.aprintf("NVIDIA")
+	case 0x1002: g_vk.vendor_name = fmt.aprintf("AMD")
+	case 0x8086: g_vk.vendor_name = fmt.aprintf("Intel")
+	case:        g_vk.vendor_name = fmt.aprintf("vendor 0x%04X", g_vk.props.vendorID)
+	}
+	driver := vk.PhysicalDeviceDriverProperties{sType = .PHYSICAL_DEVICE_DRIVER_PROPERTIES}
+	props2 := vk.PhysicalDeviceProperties2{sType = .PHYSICAL_DEVICE_PROPERTIES_2, pNext = &driver}
+	vk.GetPhysicalDeviceProperties2(g_vk.physical, &props2)
+	api := g_vk.props.apiVersion
+	g_vk.version_text = fmt.aprintf("%d.%d.%d, %s %s", api >> 22, (api >> 12) & 0x3ff, api & 0xfff,
+		cstring(&driver.driverName[0]), cstring(&driver.driverInfo[0]))
 
 	features13 := vk.PhysicalDeviceVulkan13Features{sType = .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}
 	features := vk.PhysicalDeviceFeatures2{sType = .PHYSICAL_DEVICE_FEATURES_2, pNext = &features13}
@@ -510,8 +572,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		// Built by the first frame, after the caller's gpu_set_vsync.
 		g_vk.present.dirty = true
 	}
-	fmt.printfln("[Vulkan] %s, API %d.%d.%d, driver %x%s", g_vk.device_name,
-		g_vk.props.apiVersion >> 22, (g_vk.props.apiVersion >> 12) & 0x3ff, g_vk.props.apiVersion & 0xfff, g_vk.props.driverVersion,
+	fmt.printfln("[Vulkan] Using %s (%s), Vulkan %s%s", g_vk.device_name, g_vk.vendor_name, g_vk.version_text,
 		validation ? ", validation on" : "")
 	return true
 }
@@ -565,6 +626,13 @@ gpu_vk_fini :: proc() {
 	delete(g_vk.retired_sets)
 	delete(g_vk.completed)
 	delete(g_vk.device_name)
+	delete(g_vk.vendor_name)
+	delete(g_vk.version_text)
+	if g_vk_debug.log != nil {
+		fmt.fprintfln(g_vk_debug.log, "\nSummary: %d validation errors.", g_vk_validation_errors)
+		os.close(g_vk_debug.log)
+		g_vk_debug.log = nil
+	}
 	vk_table_destroy(&g_vk.buffers)
 	vk_table_destroy(&g_vk.textures)
 	vk_table_destroy(&g_vk.sampler_objects)
@@ -575,6 +643,10 @@ gpu_vk_fini :: proc() {
 }
 
 gpu_backend_name :: proc() -> string { return "Vulkan" }
+
+gpu_device_info :: proc() -> Gpu_Device_Info {
+	return {api = "Vulkan", vendor = g_vk.vendor_name, renderer = g_vk.device_name, version = g_vk.version_text}
+}
 gpu_device_name :: proc() -> string { return g_vk.device_name }
 gpu_context_token :: proc() -> rawptr { return rawptr(g_vk.device) }
 
@@ -645,7 +717,7 @@ vk_upload_end :: proc() {
 	submit := vk.SubmitInfo{sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &g_vk.upload_cmd}
 	vk.ResetFences(g_vk.device, 1, &g_vk.upload_fence)
 	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, g_vk.upload_fence), "vkQueueSubmit (upload)")
-	vk.WaitForFences(g_vk.device, 1, &g_vk.upload_fence, true, max(u64))
+	vk_ok(vk.WaitForFences(g_vk.device, 1, &g_vk.upload_fence, true, max(u64)), "vkWaitForFences (upload)")
 }
 
 // Destruction waits for the GPU (simple and always safe; nothing is
@@ -1070,7 +1142,7 @@ gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 vk_collect :: proc(slot: int) {
 	frame := &g_vk.frames[slot]
 	if !frame.submitted { return }
-	vk.WaitForFences(g_vk.device, 1, &frame.fence, true, max(u64))
+	vk_ok(vk.WaitForFences(g_vk.device, 1, &frame.fence, true, max(u64)), "vkWaitForFences")
 	frame.submitted = false
 	if frame.timed {
 		stamps: [2]u64

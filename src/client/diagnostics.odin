@@ -118,8 +118,8 @@ Diagnostics :: struct {
 	phase_head: u32,
 	phases:     [PHASE_RING_SIZE]Phase_Entry,
 	// Copied once at startup so the crash handler never calls into GL.
-	gl_vendor, gl_renderer, gl_version: [128]u8,
-	gl_vendor_len, gl_renderer_len, gl_version_len: int,
+	gpu_api, gpu_vendor, gpu_renderer, gpu_version: [128]u8,
+	gpu_api_len, gpu_vendor_len, gpu_renderer_len, gpu_version_len: int,
 	gl_debug_context: bool, // The context reports CONTEXT_FLAG_DEBUG_BIT.
 	gl_debug_output: bool,  // The KHR_debug callback is installed.
 	gl_debug_log: ^os.File,
@@ -286,19 +286,22 @@ diagnostics_make_log_dir :: proc() {
 	if !os.exists(DIAGNOSTICS_LOG_DIR) { os.make_directory(DIAGNOSTICS_LOG_DIR) }
 }
 
-// Records the GL strings for crash reports. Call once after the context exists.
-diagnostics_capture_gl_info :: proc() {
-	copy_gl_string :: proc(name: u32, dst: ^[128]u8, length: ^int) {
-		value := cstring(gl.GetString(name))
-		length^ = value == nil ? 0 : copy(dst[:], string(value))
+// Records the GPU strings for crash reports. Call once after the device or
+// context exists.
+diagnostics_capture_gpu_info :: proc() {
+	info := gpu_device_info()
+	g_diag.gpu_api_len = copy(g_diag.gpu_api[:], info.api)
+	g_diag.gpu_vendor_len = copy(g_diag.gpu_vendor[:], info.vendor)
+	g_diag.gpu_renderer_len = copy(g_diag.gpu_renderer[:], info.renderer)
+	g_diag.gpu_version_len = copy(g_diag.gpu_version[:], info.version)
+	when KRODIN_VULKAN {
+		g_diag.gl_reset_detection = true // Vulkan always reports a lost device.
+	} else {
+		flags: i32
+		gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
+		g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
+		g_diag.gl_reset_detection = gl_context_loses_on_reset()
 	}
-	copy_gl_string(gl.VENDOR, &g_diag.gl_vendor, &g_diag.gl_vendor_len)
-	copy_gl_string(gl.RENDERER, &g_diag.gl_renderer, &g_diag.gl_renderer_len)
-	copy_gl_string(gl.VERSION, &g_diag.gl_version, &g_diag.gl_version_len)
-	flags: i32
-	gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
-	g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
-	g_diag.gl_reset_detection = gl_context_loses_on_reset()
 	g_diag.gl_reset_status = 0
 	g_diag.gl_reset_last_check = time.tick_now()
 }
@@ -320,6 +323,7 @@ gl_context_loses_on_reset :: proc() -> bool {
 gpu_reset_status_name :: proc "contextless" (status: u32) -> string {
 	switch status {
 	case 0: return "none"
+	case GPU_RESET_DEVICE_LOST: return "device lost"
 	case GL_GUILTY_CONTEXT_RESET: return "guilty"
 	case GL_INNOCENT_CONTEXT_RESET: return "innocent"
 	case GL_UNKNOWN_CONTEXT_RESET: return "unknown"
@@ -333,6 +337,7 @@ gpu_reset_line :: proc(buffer: []u8, status: u32) -> string {
 	case 0: return ""
 	case GL_GUILTY_CONTEXT_RESET: return fmt.bprintf(buffer, "GPU reset detected: guilty (Krodin's own GL commands caused the reset)")
 	case GL_INNOCENT_CONTEXT_RESET: return fmt.bprintf(buffer, "GPU reset detected: innocent (another program or the driver caused the reset)")
+	case GPU_RESET_DEVICE_LOST: return fmt.bprintf(buffer, "GPU reset detected: the Vulkan device was lost (VK_ERROR_DEVICE_LOST)")
 	}
 	return fmt.bprintf(buffer, "GPU reset detected: unknown (the driver could not say what caused the reset; status 0x%X)", status)
 }
@@ -349,8 +354,8 @@ gpu_reset_poll :: proc(status: u32) -> u32 {
 	return status
 }
 
-diagnostics_gl_renderer :: proc() -> string {
-	return string(g_diag.gl_renderer[:g_diag.gl_renderer_len])
+diagnostics_gpu_renderer :: proc() -> string {
+	return string(g_diag.gpu_renderer[:g_diag.gpu_renderer_len])
 }
 
 // --- KHR_debug ---------------------------------------------------------------
@@ -459,7 +464,7 @@ gl_debug_install :: proc(log_path := GL_DEBUG_LOG_PATH) -> bool {
 		if err == nil {
 			g_diag.gl_debug_log = file
 			fmt.fprintf(file, "Krodin GL debug log\nGL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\nDebug context: %v\n\n",
-				string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]), g_diag.gl_debug_context)
+				string(g_diag.gpu_vendor[:g_diag.gpu_vendor_len]), diagnostics_gpu_renderer(), string(g_diag.gpu_version[:g_diag.gpu_version_len]), g_diag.gl_debug_context)
 		}
 	}
 	gl.Enable(gl.DEBUG_OUTPUT)
@@ -541,7 +546,7 @@ gl_check :: proc(site: string, per_phase := false) -> bool {
 			file, err := os.open(GL_ERROR_LOG_PATH, {.Write, .Create, .Trunc})
 			if err == nil {
 				g_diag.gl_error_log = file
-				fmt.fprintf(file, "GL_RENDERER: %s\nGL_VERSION: %s\n", diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]))
+				fmt.fprintf(file, "GL_RENDERER: %s\nGL_VERSION: %s\n", diagnostics_gpu_renderer(), string(g_diag.gpu_version[:g_diag.gpu_version_len]))
 			}
 		}
 		if g_diag.gl_error_log != nil { os.write_string(g_diag.gl_error_log, line) }
@@ -609,7 +614,7 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 		fmt.sbprintf(&b, "\n*** %s ***\n", gpu_reset_line(reset_buffer[:], g_diag.gl_reset_status))
 	} else if g_diag.gl_reset_detection {
 		fmt.sbprintf(&b, "GPU reset: none detected (%d checks, the last %.1f s before this report)\n", g_diag.gl_reset_checks, tick_seconds_before(now, g_diag.gl_reset_last_check))
-	} else if g_diag.gl_vendor_len > 0 {
+	} else if g_diag.gpu_vendor_len > 0 && !KRODIN_VULKAN {
 		fmt.sbprintf(&b, "GPU reset: cannot be detected (the GL context has no reset notification)\n")
 	}
 
@@ -641,10 +646,16 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 	report_section(&b, "System")
 	if g_diag.system_len > 0 { strings.write_string(&b, string(g_diag.system_text[:g_diag.system_len])) }
 	diagnostics_write_live_system(&b, info.live)
-	fmt.sbprintf(&b, "OpenGL is on: %s (GL_VENDOR %s)\nGL_VERSION: %s\n", diagnostics_gl_renderer(), string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), string(g_diag.gl_version[:g_diag.gl_version_len]))
-	fmt.sbprintf(&b, "GL context: reset notification %s%s, debug context %s, GL debug output %s\n",
-		g_diag.gl_reset_detection ? "on" : "off", g_diag.gl_robust_requested && !g_diag.gl_reset_detection ? " (requested, not granted)" : "",
-		g_diag.gl_debug_context ? "yes" : "no", g_diag.gl_debug_output ? "on" : "off")
+	fmt.sbprintf(&b, "GPU: %s (vendor %s)\nGraphics API: %s %s\n", diagnostics_gpu_renderer(), string(g_diag.gpu_vendor[:g_diag.gpu_vendor_len]),
+		string(g_diag.gpu_api[:g_diag.gpu_api_len]), string(g_diag.gpu_version[:g_diag.gpu_version_len]))
+	when KRODIN_VULKAN {
+		fmt.sbprintf(&b, "Vulkan: validation %s (%d errors), --gpu-debug log %s\n",
+			g_vk_debug.validation ? "on" : "off", g_vk_validation_errors, g_vk_debug.log != nil ? "on" : "off")
+	} else {
+		fmt.sbprintf(&b, "GL context: reset notification %s%s, debug context %s, GL debug output %s\n",
+			g_diag.gl_reset_detection ? "on" : "off", g_diag.gl_robust_requested && !g_diag.gl_reset_detection ? " (requested, not granted)" : "",
+			g_diag.gl_debug_context ? "yes" : "no", g_diag.gl_debug_output ? "on" : "off")
+	}
 	if g_diag.monitor_len > 0 {
 		strings.write_string(&b, "Monitors:\n")
 		strings.write_string(&b, string(g_diag.monitor_text[:g_diag.monitor_len]))
