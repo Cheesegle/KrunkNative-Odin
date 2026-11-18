@@ -1540,11 +1540,15 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	// Camera and view-model transforms must use the state produced by this
 	// frame's input, otherwise fast mouse movement makes the gun trail and jump.
 	if client.me != nil && client.me.active && !client.freecam_enabled {
+		// Krunker physics runs at KRUNKER_INPUT_RATE: render the pose blended
+		// between the last two commands (position, crouch height, ADS, recoil,
+		// view-model bob/lean/step, swap/reload), then put the simulated state back.
+		blended := client.krunker.connected
+		simulated := krunker_render_capture(client.me)
+		if blended { krunker_render_apply(client.me, krunker_client_render_sample(client)) }
+		defer if blended { krunker_render_apply(client.me, simulated) }
 		view_position, view_aim := client.me.position, client.me.aim_val
-		if client.krunker.connected {
-			sample := krunker_client_render_sample(client)
-			view_position, view_aim = sample.position, sample.aim
-		} else if client.net.connected {
+		if !blended && client.net.connected {
 			view_position = native_client_render_position(client)
 		}
 		third_person := player_uses_third_person_camera(client.me)

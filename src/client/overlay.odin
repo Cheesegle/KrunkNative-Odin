@@ -224,8 +224,9 @@ overlay_ammo_render :: proc(client: ^Client) {
 	gold := shared.hex_to_vec(0xffd447)
 
 	ui_round_rect(client.ui, shared.Vec4{0.04, 0.035, 0.025, 0.65}, left, top, width, height, 6.0 * s)
-	if weapon.reload_time > 0 && client.game.config.reload_speed > 0 && client.me.reload_timer > 0 {
-		progress := clamp(1.0 - client.me.reload_timer / (weapon.reload_time * client.game.config.reload_speed), 0.0, 1.0)
+	reload_timer := client.krunker.connected ? krunker_client_render_sample(client).reload_timer : client.me.reload_timer
+	if weapon.reload_time > 0 && client.game.config.reload_speed > 0 && reload_timer > 0 {
+		progress := clamp(1.0 - reload_timer / (weapon.reload_time * client.game.config.reload_speed), 0.0, 1.0)
 		ui_fill_rect_rclip(client.ui, shared.Vec4{1, 0.83, 0.28, 0.14}, left, top, width, height, 6.0 * s, 1.0 - progress)
 	}
 	ui_stroke_round_rect(client.ui, gold, left, top, width, height, 6.0 * s, 2.0 * s)

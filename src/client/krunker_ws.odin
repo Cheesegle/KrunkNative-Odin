@@ -54,7 +54,14 @@ Krunker_WS_State :: struct {
 	input_commands: [dynamic]shared.Input,
 	input_reset: bool,
 	input_swap: u8,
+	// Presses seen on display frames since the last physics tick, so a tap
+	// shorter than a physics tick still reaches the next command.
+	latched_jump, latched_shoot, latched_reload, latched_crouch, latched_scope: bool,
+	latched_move: bool, latched_move_dir: i32, // last pressed direction this tick
 	command_direction: shared.Vec2,
+	// Aim the queued commands carry (wire-rounded pitch, yaw); see
+	// KRUNKER_AIM_PER_PACKET.
+	aim_anchor: shared.Vec2,
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
@@ -693,7 +700,10 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8)
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	// At the input rate, each tick's command goes out the frame it is built:
+	// the tolerance matches the input loop's, so equal rates never slip a
+	// frame on f32 rounding.
+	if state.send_elapsed + 1e-7 < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")

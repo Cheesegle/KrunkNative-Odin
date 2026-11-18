@@ -7,24 +7,94 @@ import kproto "../krunker"
 import glfw "vendor:glfw"
 
 // Sample independently of rendering and sending; wire durations use whole ms.
-KRUNKER_INPUT_RATE :: 360
+KRUNKER_INPUT_RATE :: 30
 KRUNKER_INPUT_SECONDS :: 1.0 / KRUNKER_INPUT_RATE
 KRUNKER_SEND_SECONDS :: 1.0 / 30.0
 KRUNKER_MAX_PREDICTED_INPUTS :: 2 * KRUNKER_INPUT_RATE
+// Aim samples per q packet. Movement commands stay at KRUNKER_INPUT_RATE, but
+// every command holds the aim latched at the latest sample, so the packet's
+// angle deltas are zero and only the absolute [pitch, yaw] anchor changes.
+// Prediction simulates the held aim too, so local and server physics match.
+// 1: one anchor per packet (send rate aim). 0: every command (input rate aim).
+KRUNKER_AIM_PER_PACKET :: 1
 
+// The local player's state that advances once per physics command and that
+// rendering reads: camera position and height, ADS, recoil, the view model's
+// bob, lean and step, and the swap/reload timers. Rendering blends the last
+// two commands.
 Krunker_Render_Sample :: struct {
 	position: shared.Vec3,
 	aim: f32,
+	crouch_val, height: f32,
+	recoil: shared.Vec3,
+	recoil_anim, recoil_anim_y: f32,
+	bob_anim, lean_anim: shared.Vec3,
+	step_val, step_chase: f32,
+	swap_timer, reload_timer: f32,
+}
+
+krunker_render_capture :: proc(player: ^shared.Player) -> Krunker_Render_Sample {
+	return {
+		position = player.position, aim = player.aim_val,
+		crouch_val = player.crouch_val, height = player.height,
+		recoil = player.recoil, recoil_anim = player.recoil_anim, recoil_anim_y = player.recoil_anim_y,
+		bob_anim = player.bob_anim, lean_anim = player.lean_anim,
+		step_val = player.step_val, step_chase = player.step_chase,
+		swap_timer = player.swap_timer, reload_timer = player.reload_timer,
+	}
+}
+
+// Writes a sample's pose onto the player. Use only for rendering, between a
+// capture of the real state and its restore.
+krunker_render_apply :: proc(player: ^shared.Player, sample: Krunker_Render_Sample) {
+	player.position, player.aim_val = sample.position, sample.aim
+	player.crouch_val, player.height = sample.crouch_val, sample.height
+	player.recoil, player.recoil_anim, player.recoil_anim_y = sample.recoil, sample.recoil_anim, sample.recoil_anim_y
+	player.bob_anim, player.lean_anim = sample.bob_anim, sample.lean_anim
+	player.step_val, player.step_chase = sample.step_val, sample.step_chase
+	player.swap_timer, player.reload_timer = sample.swap_timer, sample.reload_timer
+}
+
+// A swap or reload that started during this command set its timer to the full
+// duration and then counted it down by the command's delta. Blending from the
+// previous command's value (0, or another weapon's timer) would play the
+// animation backwards, so begin the blend from the timer's starting value.
+krunker_render_restart_timers :: proc(previous: ^Krunker_Render_Sample, current: Krunker_Render_Sample, player: ^shared.Player, delta: f32) {
+	if current.swap_timer > previous.swap_timer {
+		previous.swap_timer = min(current.swap_timer + delta, max(player.weapon.swap_time, current.swap_timer))
+		// The swap cancelled any reload; never show the old one on the new gun.
+		previous.reload_timer = current.reload_timer
+	} else if current.reload_timer > previous.reload_timer {
+		full := player.weapon.reload_time * player.game.config.reload_speed
+		previous.reload_timer = min(current.reload_timer + delta, max(full, current.reload_timer))
+	}
 }
 
 krunker_client_render_sample :: proc(client: ^Client) -> Krunker_Render_Sample {
 	state := &client.krunker
-	if !state.render_sample_ready { return {client.me.position, client.me.aim_val} }
-	alpha := clamp(f32(state.input_elapsed / KRUNKER_INPUT_SECONDS), 0, 1)
+	if !state.render_sample_ready { return krunker_render_capture(client.me) }
+	t := clamp(f32(state.input_elapsed / KRUNKER_INPUT_SECONDS), 0, 1)
+	a, b := state.render_previous, state.render_current
 	return {
-		state.render_previous.position + (state.render_current.position - state.render_previous.position) * alpha,
-		state.render_previous.aim + (state.render_current.aim - state.render_previous.aim) * alpha,
+		position = a.position + (b.position - a.position) * t,
+		aim = a.aim + (b.aim - a.aim) * t,
+		crouch_val = a.crouch_val + (b.crouch_val - a.crouch_val) * t,
+		height = a.height + (b.height - a.height) * t,
+		recoil = a.recoil + (b.recoil - a.recoil) * t,
+		recoil_anim = a.recoil_anim + (b.recoil_anim - a.recoil_anim) * t,
+		recoil_anim_y = a.recoil_anim_y + (b.recoil_anim_y - a.recoil_anim_y) * t,
+		bob_anim = a.bob_anim + (b.bob_anim - a.bob_anim) * t,
+		lean_anim = a.lean_anim + (b.lean_anim - a.lean_anim) * t,
+		step_val = a.step_val + (b.step_val - a.step_val) * t,
+		step_chase = a.step_chase + (b.step_chase - a.step_chase) * t,
+		swap_timer = a.swap_timer + (b.swap_timer - a.swap_timer) * t,
+		reload_timer = a.reload_timer + (b.reload_timer - a.reload_timer) * t,
 	}
+}
+
+krunker_client_clear_latched :: proc(state: ^Krunker_WS_State) {
+	state.latched_jump, state.latched_shoot, state.latched_reload, state.latched_crouch, state.latched_scope = false, false, false, false, false
+	state.latched_move = false
 }
 
 krunker_client_reset_prediction :: proc(client: ^Client) {
@@ -34,6 +104,7 @@ krunker_client_reset_prediction :: proc(client: ^Client) {
 	client.krunker.input_duration_remainder_ms = 0
 	client.krunker.send_elapsed = 0
 	client.krunker.input_swap = 0
+	krunker_client_clear_latched(&client.krunker)
 	client.krunker.render_sample_ready = false
 	client.krunker.acked_has_ramp_fix = false
 }
@@ -63,7 +134,7 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		return
 	}
 	if !state.render_sample_ready {
-		state.render_previous = {client.me.position, client.me.aim_val}
+		state.render_previous = krunker_render_capture(client.me)
 		state.render_current = state.render_previous
 		state.command_direction = client.me.direction
 		state.render_sample_ready = true
@@ -71,25 +142,53 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 	// Bound catch-up after a paused/stalled window, as the browser bounds delta.
 	state.input_elapsed += f64(clamp(frame.delta, 0, 0.1))
 	state.send_elapsed += f64(clamp(frame.delta, 0, 0.1))
+	// Queue this frame's presses for the next physics tick.
+	state.latched_jump ||= frame.jump
+	state.latched_shoot ||= frame.shoot
+	state.latched_reload ||= frame.reload
+	state.latched_crouch ||= frame.crouch
+	state.latched_scope ||= frame.scope
+	if frame.move_dir >= 0 { state.latched_move, state.latched_move_dir = true, frame.move_dir }
 	// Frame delta originates as f32; tolerate its sub-microsecond rounding at
 	// an exact command boundary without losing an entire input command.
 	for state.input_elapsed + 1e-7 >= KRUNKER_INPUT_SECONDS {
 		command := commands > 0 && after_scroll != nil ? after_scroll^ : frame^
+		if commands == 0 {
+			// The tick's first command carries every press queued since the last.
+			command.jump ||= state.latched_jump
+			command.shoot ||= state.latched_shoot
+			command.reload ||= state.latched_reload
+			command.crouch ||= state.latched_crouch
+			command.scope ||= state.latched_scope
+			if command.move_dir < 0 && state.latched_move { command.move_dir = state.latched_move_dir }
+			krunker_client_clear_latched(state)
+		}
 		command.seq = state.input_sequence
-		// Carry fractional milliseconds so 360 commands advance one second,
-		// rather than 1.08 seconds from rounding every command to 3 ms.
-		duration_ms := clamp(KRUNKER_INPUT_SECONDS * 1000 * f64(client.game.config.delta_mlt), 1, 33) + state.input_duration_remainder_ms
+		// Carry fractional milliseconds so each second of commands advances
+		// exactly one second (e.g. 33.33 ms ticks go out as 33/33/34 ms).
+		// 100 ms is the wire's own duration ceiling.
+		duration_ms := clamp(KRUNKER_INPUT_SECONDS * 1000 * f64(client.game.config.delta_mlt), 1, 100) + state.input_duration_remainder_ms
 		rounded_ms := math.round(duration_ms)
 		state.input_duration_remainder_ms = duration_ms - rounded_ms
 		command.delta = f32(rounded_ms) / 1000
-		command.x_dir = math.round(look.x * 1000) / 1000
-		command.y_dir = math.round(shared.normalize_angle(look.y) * 1000) / 1000
+		// The queue's first command starts the next q packet: latch a new anchor.
+		queued := len(state.input_commands)
+		when KRUNKER_AIM_PER_PACKET > 1 {
+			hold := max(1, int(math.round(KRUNKER_SEND_SECONDS / KRUNKER_INPUT_SECONDS / KRUNKER_AIM_PER_PACKET)))
+			relatch := queued % hold == 0
+		} else {
+			relatch := KRUNKER_AIM_PER_PACKET == 0 || queued == 0
+		}
+		if relatch {
+			state.aim_anchor = {math.round(look.x * 1000) / 1000, math.round(shared.normalize_angle(look.y) * 1000) / 1000}
+		}
+		command.x_dir, command.y_dir = state.aim_anchor.x, state.aim_anchor.y
 		command.swap = state.input_swap
 		state.input_swap = 0
 		if client.krunker_world.move_lock { command.move_dir = -1; command.jump = false }
 		command.krunker_shot_timed = false
 		command.krunker_shot_time, command.krunker_shot_progress = 0, 0
-		state.render_previous = {client.me.position, client.me.aim_val}
+		state.render_previous = krunker_render_capture(client.me)
 		client.me.direction = state.command_direction
 		shot_seq := client.me.shot_seq
 		shared.player_proc_input(client.me, &command, true, client.krunker_world.move_lock, true, true)
@@ -103,7 +202,8 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		append(&client.predicted_inputs, command)
 		client_cap_predicted_inputs(client, KRUNKER_MAX_PREDICTED_INPUTS)
 		state.command_direction = client.me.direction
-		state.render_current = {client.me.position, client.me.aim_val}
+		state.render_current = krunker_render_capture(client.me)
+		krunker_render_restart_timers(&state.render_previous, state.render_current, client.me, command.delta)
 		state.input_sequence += 1
 		state.input_elapsed = max(0, state.input_elapsed - KRUNKER_INPUT_SECONDS)
 		commands += 1
@@ -148,6 +248,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	predicted_aim, predicted_aim_time := player.aim_val, player.aim_time
 	predicted_direction := player.direction
 	predicted_position := player.position
+	predicted_crouch := player.crouch_val
 	predicted_weapon := player.weapon
 	reload_timer, swap_timer := player.reload_timer, player.swap_timer
 	did_shoot, burst_count := player.did_shoot, player.burst_count
@@ -209,7 +310,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 		}
 	}
 	if respawned || !state.render_sample_ready {
-		state.render_previous = {player.position, player.aim_val}
+		state.render_previous = krunker_render_capture(player)
 		state.render_current = state.render_previous
 		state.command_direction = player.direction
 		state.render_sample_ready = true
@@ -218,6 +319,11 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 		correction := player.position - predicted_position
 		state.render_previous.position += correction
 		state.render_current.position += correction
+		// Replay can also move crouch; shift it the same way, inside 0..1.
+		previous := &state.render_previous
+		previous.crouch_val = clamp(previous.crouch_val + player.crouch_val - predicted_crouch, 0, 1)
+		previous.height = shared.GAME_CONSTANTS.player_height - previous.crouch_val * shared.GAME_CONSTANTS.crouch_distance
+		state.render_current.crouch_val, state.render_current.height = player.crouch_val, player.height
 		state.prediction_corrections += 1
 		when KRODIN_DEV { state.last_correction, state.last_correction_ack = correction, source.ack_seq }
 		error := math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z)
